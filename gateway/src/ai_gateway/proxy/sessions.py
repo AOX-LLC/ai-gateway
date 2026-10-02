@@ -45,6 +45,10 @@ _CONNECTION_ERRORS = (
 )
 
 
+class SessionOwnershipError(Exception):
+    """A session id arrived with a different client's credential."""
+
+
 class UpstreamCallError(Exception):
     def __init__(self, status: UpstreamStatus, namespace: str) -> None:
         super().__init__(f"call to upstream {namespace} failed: {status.value}")
@@ -129,8 +133,7 @@ class UpstreamSessionPool:
             self._sessions[session_id] = session
         elif session.client_id != client_id:
             # The SDK already binds a session to its credential; this is a second wall.
-            logger.error("session %s used by a second client; refusing", session_id[:8])
-            raise UpstreamCallError(UpstreamStatus.UNAVAILABLE, "session")
+            raise SessionOwnershipError(f"session {session_id[:8]} belongs to another client")
         return session
 
     async def _connection(

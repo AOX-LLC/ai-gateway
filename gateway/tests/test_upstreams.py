@@ -15,7 +15,11 @@ from mcp.types import INVALID_PARAMS, CallToolResult, ListToolsResult, TextConte
 
 from ai_gateway.pipeline.runner import UpstreamStatus
 from ai_gateway.proxy.catalog import Catalog
-from ai_gateway.proxy.sessions import UpstreamCallError, UpstreamSessionPool
+from ai_gateway.proxy.sessions import (
+    SessionOwnershipError,
+    UpstreamCallError,
+    UpstreamSessionPool,
+)
 from ai_gateway.registry.models import UpstreamServer
 
 ECHO = UpstreamServer(
@@ -214,7 +218,7 @@ async def test_a_session_id_cannot_be_used_by_a_second_client() -> None:
     async with running_pool(FakeUpstream()) as pool:
         await pool.call_tool("session-a", uuid4(), ECHO, "say", {"text": "hi"})
 
-        with pytest.raises(UpstreamCallError):
+        with pytest.raises(SessionOwnershipError):
             await pool.call_tool("session-a", uuid4(), ECHO, "say", {"text": "hi"})
 
 
