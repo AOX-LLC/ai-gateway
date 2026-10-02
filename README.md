@@ -17,3 +17,7 @@ refuse to start with a service credential shorter than 32 characters or a `chang
 placeholder, so this step is not optional. The first build downloads the 30 MB embedding
 model of the handbook server (checked against pinned hashes); after that nothing needs the
 network. See `docs/architecture.md` for the rest.
+
+## Licence
+
+MIT, copyright AOX LLC. See `LICENSE`. Harborline Supply Co. and all its data are fictional.
