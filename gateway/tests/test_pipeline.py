@@ -379,6 +379,52 @@ async def test_a_failing_filter_hides_every_tool_in_enforce_mode() -> None:
     assert _layer_decisions(events)[0]["verdict"] == "error"
 
 
+# What a record carries for the telemetry store
+
+
+@pytest.mark.anyio
+async def test_a_tool_call_record_names_the_client_namespace_hooks_and_upstream_time() -> None:
+    calls: list[str] = []
+    events = MemoryEventSink()
+    pipeline, _, _ = _pipeline({}, calls, events)
+
+    await pipeline.call_tool(_context({"echo__say"}), _call(), _forwarder(calls))
+
+    payload = events.events[-1].payload
+    assert payload["client_name"] == "harborline-support-bot"
+    assert payload["namespace"] == "echo"
+    assert isinstance(payload["upstream_duration_ms"], float)
+    assert [(d["layer"], d["hook"]) for d in _layer_decisions(events)] == [
+        ("first", "before_call"),
+        ("second", "before_call"),
+        ("first", "after_call"),
+        ("second", "after_call"),
+    ]
+    assert "trace_id" not in payload, "no tracer is recording in this test"
+
+
+@pytest.mark.anyio
+async def test_a_listing_record_marks_its_verdicts_as_filters_and_names_the_client() -> None:
+    events = MemoryEventSink()
+    pipeline, _, _ = _pipeline({}, [], events)
+
+    await pipeline.list_tools(_context({"echo__say"}), [_catalog_tool("echo__say")])
+
+    assert events.events[-1].payload["client_name"] == "harborline-support-bot"
+    assert {d["hook"] for d in _layer_decisions(events)} == {"filter"}
+
+
+@pytest.mark.anyio
+async def test_a_blocked_call_has_no_upstream_time() -> None:
+    events = MemoryEventSink()
+    pipeline, first, _ = _pipeline({}, [], events)
+    first.deny_before = True
+
+    await pipeline.call_tool(_context(set()), _call(), _forwarder([]))
+
+    assert "upstream_duration_ms" not in events.events[-1].payload
+
+
 # A sink that fails or stalls must never change what the client gets
 
 

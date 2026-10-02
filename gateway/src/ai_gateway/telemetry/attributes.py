@@ -11,3 +11,5 @@ SPAN_UPSTREAM_CALL = "gateway.upstream.call"
 SPAN_LAYER_PREFIX = "gateway.layer."
 
 GATEWAY_TOOL = "gateway.tool"
+GATEWAY_REQUEST_ID = "gateway.request_id"
+GATEWAY_CLIENT = "gateway.client"
