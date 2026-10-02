@@ -262,10 +262,14 @@ Each server owns one Postgres schema and one role, and no role can see another's
 | Role | Schema | Rights |
 | --- | --- | --- |
 | `gateway_app` | `public` (the registry) | read, and update `client_tokens.last_used_at` |
-| `ticketing_app` | `ticketing` | read all tables; insert tickets and comments; update only `tickets.status`, `assignee` and `updated_at`; use the two sequences. No delete, truncate or create. |
+| `ticketing_app` | `ticketing` | read all tables; insert only the columns `create_ticket` and `add_comment` set (not `internal_notes`, not a comment's `visibility`, which defaults to `public`); update only `tickets.status`, `assignee` and `updated_at`; use the two sequences. No delete, truncate, create or temporary tables. |
 
-`REVOKE ALL ON SCHEMA ticketing FROM PUBLIC` keeps every other role out, and `ticketing_app`
-has nothing in `public`. Tests assert each of these, including the column-level updates.
+`REVOKE ALL ON SCHEMA ticketing FROM PUBLIC` keeps every other role out. `harborline-setup`
+also revokes `CONNECT` and `TEMPORARY` on the database and `USAGE` on `public` from `PUBLIC`,
+then grants `CONNECT` to `gateway_app` and `ticketing_app` and `USAGE` on `public` to
+`gateway_app` by name, so `ticketing_app` has nothing in `public`. (Other databases of the
+cluster keep their own defaults; this stack uses one.) Tests assert each of these, including
+the column-level grants.
 
 The `harborline-setup` one-shot (the `servers-setup` Compose service) runs as the database
 owner and is safe to repeat. It creates the role if missing, then `ALTER ROLE ... PASSWORD`

@@ -13,11 +13,12 @@ from ai_gateway.auth.tokens import IssuedToken, generate_token
 from ai_gateway.registry import MIGRATIONS_PACKAGE
 from ai_gateway.registry.repo import AdminRegistry
 from echo_server.server import build_app
-from harborline_setup.ticketing import grant_ticketing_access
+from harborline_setup.ticketing import grant_ticketing_access, restrict_database_access
 from mcp_common.migrate import apply_migrations
 from tests.helpers import serve_in_thread
 from ticketing_server import CONNECTION_KWARGS as TICKETING_CONNECTION_KWARGS
 from ticketing_server import MIGRATIONS_PACKAGE as TICKETING_MIGRATIONS_PACKAGE
+from ticketing_server import ROLE as TICKETING_ROLE
 from ticketing_server import SCHEMA as TICKETING_SCHEMA
 from ticketing_server.seed import Dataset, build_dataset, insert_dataset
 
@@ -37,8 +38,9 @@ async def test_database_url(anyio_backend: str) -> str:
     async with await psycopg.AsyncConnection.connect(url, autocommit=True) as connection:
         await connection.execute("DROP SCHEMA public CASCADE")
         await connection.execute("CREATE SCHEMA public")
-        # A recreated schema loses the default grant; the gateway's role needs it.
-        await connection.execute("GRANT USAGE ON SCHEMA public TO PUBLIC")
+        # The same model as harborline-setup: PUBLIC gets nothing, and the roles that need
+        # the database and its public schema (the gateway's) are granted it by name.
+        await restrict_database_access(connection, [TICKETING_ROLE])
     await apply_migrations(url, MIGRATIONS_PACKAGE)
     return url
 

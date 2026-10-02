@@ -71,7 +71,9 @@ async def _privileges(url: str, role: str) -> dict[str, bool]:
         cursor = await connection.execute(
             "SELECT has_schema_privilege(%(r)s, 'ticketing', 'USAGE'),"
             " has_table_privilege(%(r)s, 'ticketing.tickets', 'SELECT'),"
-            " has_table_privilege(%(r)s, 'ticketing.comments', 'INSERT'),"
+            " has_column_privilege(%(r)s, 'ticketing.comments', 'body', 'INSERT'),"
+            " has_column_privilege(%(r)s, 'ticketing.comments', 'visibility', 'INSERT'),"
+            " has_column_privilege(%(r)s, 'ticketing.tickets', 'internal_notes', 'INSERT'),"
             " has_column_privilege(%(r)s, 'ticketing.tickets', 'status', 'UPDATE'),"
             " has_table_privilege(%(r)s, 'ticketing.tickets', 'DELETE'),"
             " has_sequence_privilege(%(r)s, 'ticketing.ticket_number', 'USAGE')",
@@ -79,7 +81,16 @@ async def _privileges(url: str, role: str) -> dict[str, bool]:
         )
         row = await cursor.fetchone()
     assert row is not None
-    names = ["usage", "select", "insert_comments", "update_status", "delete", "sequence"]
+    names = [
+        "usage",
+        "select",
+        "insert_comment_body",
+        "insert_visibility",
+        "insert_internal_notes",
+        "update_status",
+        "delete",
+        "sequence",
+    ]
     return dict(zip(names, row, strict=True))
 
 
@@ -97,7 +108,9 @@ async def test_setup_builds_everything_from_a_database_without_the_role_or_schem
     expected = {
         "usage": True,
         "select": True,
-        "insert_comments": True,
+        "insert_comment_body": True,
+        "insert_visibility": False,
+        "insert_internal_notes": False,
         "update_status": True,
         "delete": False,
         "sequence": True,
@@ -150,3 +163,22 @@ async def test_setup_stores_a_scram_verifier_and_the_role_can_log_in(
         await psycopg.AsyncConnection.connect(
             make_conninfo(url, user=role, password=f"not-{password}")
         )
+
+
+async def test_setup_takes_the_default_database_access_away_from_public(
+    scratch_database: tuple[str, str],
+) -> None:
+    url, role = scratch_database
+
+    await setup_ticketing(url, f"scratch-{uuid4().hex}", None, role)
+
+    async with await psycopg.AsyncConnection.connect(url) as connection:
+        cursor = await connection.execute(
+            "SELECT has_database_privilege(0::oid, current_database(), 'CONNECT'),"
+            " has_database_privilege(0::oid, current_database(), 'TEMPORARY'),"
+            " has_schema_privilege(0::oid, 'public', 'USAGE'),"
+            " has_database_privilege(%(r)s, current_database(), 'CONNECT'),"
+            " has_schema_privilege(%(r)s, 'public', 'USAGE')",
+            {"r": role},
+        )
+        assert await cursor.fetchone() == (False, False, False, True, False)

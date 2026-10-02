@@ -106,12 +106,13 @@ class TicketRepo:
         return TicketRef(ticket_id=row[0])
 
     async def add_comment(self, ticket_id: str, body: str, requested_by: str) -> CommentRef:
-        """Add a public comment. A comment made through a tool is always public."""
+        """Add a public comment. The server never sets visibility: its database role cannot,
+        and the column defaults to public."""
         async with self._pool.connection() as connection, connection.transaction():
             try:
                 cursor = await connection.execute(
-                    "INSERT INTO comments (ticket_id, author, visibility, body, requested_by)"
-                    " VALUES (%s, %s, 'public', %s, %s) RETURNING id",
+                    "INSERT INTO comments (ticket_id, author, body, requested_by)"
+                    " VALUES (%s, %s, %s, %s) RETURNING id",
                     (ticket_id, requested_by, body, requested_by),
                 )
             except errors.ForeignKeyViolation:

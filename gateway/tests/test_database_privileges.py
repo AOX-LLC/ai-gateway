@@ -126,6 +126,27 @@ TICKETING_FORBIDDEN = {
     "create table in ticketing": "CREATE TABLE ticketing.intruder (id integer)",
     "create table in public": "CREATE TABLE public.intruder (id integer)",
     "drop table": "DROP TABLE ticketing.comments",
+    "insert ticket internal notes": (
+        "INSERT INTO ticketing.tickets (account_id, subject, description, requested_by,"
+        " internal_notes) VALUES ('ACC-00001', 'abc', 'x', 'y', 'planted note')"
+    ),
+    "insert ticket with a chosen id": (
+        "INSERT INTO ticketing.tickets (id, account_id, subject, description, requested_by)"
+        " VALUES ('TKT-999999', 'ACC-00001', 'abc', 'x', 'y')"
+    ),
+    "insert ticket with a chosen status": (
+        "INSERT INTO ticketing.tickets (account_id, subject, description, requested_by, status)"
+        " VALUES ('ACC-00001', 'abc', 'x', 'y', 'closed')"
+    ),
+    "insert an internal comment": (
+        "INSERT INTO ticketing.comments (ticket_id, author, body, requested_by, visibility)"
+        " VALUES ('TKT-000001', 'a.b', 'x', 'y', 'internal')"
+    ),
+    "insert a comment with a chosen visibility": (
+        "INSERT INTO ticketing.comments (ticket_id, author, body, requested_by, visibility)"
+        " VALUES ('TKT-000001', 'a.b', 'x', 'y', 'public')"
+    ),
+    "create a temporary table": "CREATE TEMPORARY TABLE scratch (id integer)",
     "write migrations": "INSERT INTO ticketing.schema_migrations (version) VALUES (999)",
     "update migrations": "UPDATE ticketing.schema_migrations SET version = version",
     "delete migrations": "DELETE FROM ticketing.schema_migrations",
@@ -193,3 +214,40 @@ async def test_the_gateway_role_cannot_write_the_ticketing_schema(
             b"INSERT INTO ticketing.tickets (account_id, subject, description, requested_by)"
             b" VALUES ('ACC-00001', 'abc', 'x', 'y')"
         )
+
+
+async def test_the_ticketing_role_cannot_use_the_public_schema(
+    as_ticketing: AsyncConnection,
+) -> None:
+    cursor = await as_ticketing.execute(
+        "SELECT has_schema_privilege('public', 'USAGE'), has_schema_privilege('public', 'CREATE'),"
+        " has_database_privilege(current_database(), 'TEMPORARY')"
+    )
+
+    assert await cursor.fetchone() == (False, False, False)
+
+
+async def test_a_comment_inserted_without_a_visibility_is_public(
+    as_ticketing: AsyncConnection,
+) -> None:
+    cursor = await as_ticketing.execute(
+        "INSERT INTO ticketing.comments (ticket_id, author, body, requested_by)"
+        " VALUES ('TKT-000001', 'a.b', 'x', 'y') RETURNING visibility"
+    )
+
+    assert await cursor.fetchone() == ("public",)
+
+
+async def test_only_the_named_roles_may_connect_and_use_the_public_schema(
+    as_gateway: AsyncConnection,
+) -> None:
+    cursor = await as_gateway.execute(
+        "SELECT has_database_privilege('gateway_app', current_database(), 'CONNECT'),"
+        " has_schema_privilege('gateway_app', 'public', 'USAGE'),"
+        " has_database_privilege('ticketing_app', current_database(), 'CONNECT'),"
+        " has_database_privilege('gateway_app', current_database(), 'TEMPORARY'),"
+        " has_database_privilege(0::oid, current_database(), 'CONNECT'),"
+        " has_schema_privilege(0::oid, 'public', 'USAGE')"
+    )
+
+    assert await cursor.fetchone() == (True, True, True, False, False, False)
