@@ -73,6 +73,10 @@ jobs:
       TICKETING_TEST_APP_DATABASE_URL: postgresql://ticketing_app:ci-only-ticketing-password@localhost:5432/ai_gateway_test
       CRM_TEST_APP_DATABASE_URL: postgresql://crm_app:ci-only-crm-password@localhost:5432/ai_gateway_test
       HANDBOOK_TEST_APP_DATABASE_URL: postgresql://handbook_app:ci-only-handbook-password@localhost:5432/ai_gateway_test
+      # The telemetry roles are created by the telemetry tests' own setup, with these passwords.
+      TELEMETRY_WRITER_TEST_DATABASE_URL: postgresql://telemetry_writer:ci-only-telemetry-writer-password@localhost:5432/ai_gateway_test
+      TELEMETRY_READER_TEST_DATABASE_URL: postgresql://telemetry_reader:ci-only-telemetry-reader-password@localhost:5432/ai_gateway_test
+      TELEMETRY_PURGER_TEST_DATABASE_URL: postgresql://telemetry_purger:ci-only-telemetry-purger-password@localhost:5432/ai_gateway_test
       # Where the tests find the embedding model (they fetch it there if it is missing).
       HANDBOOK_MODEL_PATH: ${{ github.workspace }}/.model-cache/potion-base-8M
     steps:
