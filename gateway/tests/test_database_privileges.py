@@ -45,7 +45,8 @@ FORBIDDEN_WRITES = {
     "delete scope": "DELETE FROM client_scopes",
     "delete upstream": "DELETE FROM upstream_servers",
     "delete migration": "DELETE FROM schema_migrations",
-    "truncate clients": "TRUNCATE clients CASCADE",
+    **{f"truncate {table}": f"TRUNCATE {table} CASCADE" for table in READABLE_TABLES},
+    "create table": "CREATE TABLE intruder (id integer)",
 }
 
 
