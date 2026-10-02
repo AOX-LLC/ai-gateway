@@ -13,12 +13,14 @@ import psycopg
 import pytest
 from mcp.shared.exceptions import MCPError
 from mcp.types import INVALID_PARAMS
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from pydantic import SecretStr
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from ai_gateway.auth.tokens import IssuedToken
 from ai_gateway.registry.repo import AdminRegistry
 from ai_gateway.registry.tool_policies import load_tool_policies
+from ai_gateway.telemetry import attributes
 from mcp_common.attribution import CLIENT_META_KEY
 from mcp_common.migrate import load_migrations
 from mcp_common.schema_contract import check_input_schema
@@ -174,6 +176,66 @@ async def test_nothing_of_the_clients_own_meta_reaches_the_ticketing_server(
     assert len(calls) == 1
     assert calls[0]["params"]["_meta"] == {CLIENT_META_KEY: "harborline-support-bot"}
     assert "client-chosen-token" not in json.dumps(calls)
+
+
+async def test_a_client_supplied_traceparent_never_reaches_the_upstream(
+    gateway: RunningGateway,
+    tokens: dict[str, IssuedToken],
+    upstream_requests: list[dict[str, Any]],
+    spans: InMemorySpanExporter,
+) -> None:
+    """The gateway starts a new trace; the client's trace id, tracestate and baggage are not
+    passed on, and no span the gateway records belongs to the client's trace."""
+    hostile = cast(
+        Any,
+        {
+            "traceparent": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+            "tracestate": "vendor=client-state",
+            "baggage": "tenant=other",
+        },
+    )
+
+    async with connect(gateway.url, tokens["support"].plaintext) as client:
+        await client.call_tool("tickets__list_tickets", {"limit": 1}, meta=hostile)
+
+    finished = spans.get_finished_spans()
+    client_trace = next(
+        (
+            format(s.context.trace_id, "032x")
+            for s in finished
+            if s.name.startswith("MCP send tools/call tickets__list_tickets")
+        ),
+        "0af7651916cd43dd8448eb211c80319c",
+    )
+    gateway_spans = [
+        s
+        for s in finished
+        if s.instrumentation_scope is not None and s.instrumentation_scope.name == "ai_gateway"
+    ]
+    roots = [s for s in gateway_spans if s.name == attributes.SPAN_TOOL_CALL]
+    assert len(roots) == 1
+    gateway_trace = format(roots[0].context.trace_id, "032x")
+    assert roots[0].parent is None
+    assert gateway_trace != client_trace
+    # Listing tools is a request of its own, with a trace of its own; everything else the
+    # gateway recorded belongs to the call.
+    listing_traces = {
+        format(s.context.trace_id, "032x")
+        for s in gateway_spans
+        if s.name == attributes.SPAN_TOOLS_LIST
+    }
+    call_traces = {format(s.context.trace_id, "032x") for s in gateway_spans} - listing_traces
+    assert call_traces == {gateway_trace}
+    assert client_trace not in call_traces | listing_traces
+
+    call = next(r for r in upstream_requests if r.get("method") == "tools/call")
+    forwarded = call["params"]["_meta"]
+    assert forwarded["traceparent"].split("-")[1] == gateway_trace
+    assert set(forwarded) <= {CLIENT_META_KEY, "traceparent"}
+    sent = json.dumps(upstream_requests)
+    assert client_trace not in sent
+    assert "client-state" not in sent
+    assert "tenant=other" not in sent
 
 
 async def test_a_client_cannot_reach_a_tool_outside_its_scope_even_for_a_write(

@@ -17,6 +17,7 @@ from typing import Literal
 import anyio
 from mcp.types import CallToolResult
 from opentelemetry import trace
+from opentelemetry.context import Context
 from opentelemetry.trace import Span
 from pydantic import JsonValue
 
@@ -39,6 +40,10 @@ from ai_gateway.telemetry import attributes
 
 logger = logging.getLogger(__name__)
 _tracer = trace.get_tracer("ai_gateway")
+# Every request starts a trace of its own. The MCP SDK parents its server span under a
+# `traceparent` the client sent in `_meta`, and the call to the upstream carries the trace
+# context that is current when it is made; starting the gateway's spans in an empty context,
+# not under the SDK's, means a client cannot choose which trace an upstream call joins.
 
 POLICY_BLOCK_MESSAGE = "Request blocked by gateway policy."
 
@@ -140,7 +145,7 @@ class Pipeline:
         visible = list(tools)
         decisions = []
         details: dict[str, JsonValue] = {}
-        with _tracer.start_as_current_span(attributes.SPAN_TOOLS_LIST) as span:
+        with _tracer.start_as_current_span(attributes.SPAN_TOOLS_LIST, context=Context()) as span:
             _describe_request(span, ctx, details)
             for layer, mode in self._layers:
                 decision, visible = await self._filter_with(layer, mode, ctx, visible)
@@ -166,7 +171,7 @@ class Pipeline:
             "effect_source": call.effect_source,
         }
 
-        with _tracer.start_as_current_span(attributes.SPAN_TOOL_CALL) as span:
+        with _tracer.start_as_current_span(attributes.SPAN_TOOL_CALL, context=Context()) as span:
             span.set_attribute(attributes.GATEWAY_TOOL, call.exposed_name)
             _describe_request(span, ctx, details)
 

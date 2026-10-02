@@ -9,6 +9,10 @@ from uuid import UUID, uuid4
 
 import psycopg
 import pytest
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from psycopg import sql
 from psycopg.conninfo import make_conninfo
 from psycopg_pool import AsyncConnectionPool
@@ -303,3 +307,22 @@ async def scratch_database(test_database_url: str) -> AsyncIterator[tuple[str, s
                 sql.SQL("DROP DATABASE {} WITH (FORCE)").format(sql.Identifier(database))
             )
             await conn.execute(sql.SQL("DROP ROLE IF EXISTS {}").format(sql.Identifier(role)))
+
+
+@pytest.fixture(scope="session")
+def _recording_tracer() -> InMemorySpanExporter:
+    """Install a real tracer provider once for the test run (OpenTelemetry allows it once),
+    exporting every finished span to memory."""
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    trace.set_tracer_provider(provider)
+    return exporter
+
+
+@pytest.fixture
+def spans(_recording_tracer: InMemorySpanExporter) -> Iterator[InMemorySpanExporter]:
+    """The spans finished during one test."""
+    _recording_tracer.clear()
+    yield _recording_tracer
+    _recording_tracer.clear()

@@ -1,7 +1,8 @@
 """The request pipeline: configuration, ordering, modes, failing closed, and records."""
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import replace
 from typing import Any
 from uuid import uuid4
@@ -9,6 +10,8 @@ from uuid import uuid4
 import anyio
 import pytest
 from mcp.types import CallToolResult, TextContent, Tool
+from opentelemetry import trace
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from ai_gateway.pipeline.config import PipelineConfigError, parse_pipeline_config
 from ai_gateway.pipeline.layers.scope import ScopeLayer
@@ -382,6 +385,13 @@ async def test_a_failing_filter_hides_every_tool_in_enforce_mode() -> None:
 # What a record carries for the telemetry store
 
 
+@contextmanager
+def tracer_provider_span(name: str) -> Iterator[None]:
+    """Run the body inside an ambient span, as if a client's trace were already current."""
+    with trace.get_tracer("test").start_as_current_span(name):
+        yield
+
+
 @pytest.mark.anyio
 async def test_a_tool_call_record_names_the_client_namespace_hooks_and_upstream_time() -> None:
     calls: list[str] = []
@@ -400,7 +410,26 @@ async def test_a_tool_call_record_names_the_client_namespace_hooks_and_upstream_
         ("first", "after_call"),
         ("second", "after_call"),
     ]
-    assert "trace_id" not in payload, "no tracer is recording in this test"
+
+
+@pytest.mark.anyio
+async def test_a_record_carries_the_trace_id_of_its_own_root_span(
+    spans: InMemorySpanExporter,
+) -> None:
+    calls: list[str] = []
+    events = MemoryEventSink()
+    pipeline, _, _ = _pipeline({}, calls, events)
+    ctx = _context({"echo__say"})
+
+    with tracer_provider_span("client-trace"):
+        await pipeline.call_tool(ctx, _call(), _forwarder(calls))
+
+    root = next(s for s in spans.get_finished_spans() if s.name == "gateway.tool_call")
+    assert events.events[-1].payload["trace_id"] == format(root.context.trace_id, "032x")
+    assert root.parent is None
+    assert root.attributes is not None
+    assert root.attributes["gateway.request_id"] == str(ctx.request_id)
+    assert root.attributes["gateway.client"] == "harborline-support-bot"
 
 
 @pytest.mark.anyio
