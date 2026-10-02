@@ -38,16 +38,17 @@ jobs:
         with:
           version: "0.12.10"
           enable-cache: true
+      - run: uv sync --frozen
       - name: Audit the locked Python dependencies
-        # Every package in uv.lock, development tools included, against the PyPI advisory
-        # database. The advisories are live, so a new one can fail a build that changed
-        # nothing: upgrade the package, or, if no fix exists and the code is not affected,
-        # pass --ignore-vuln <id> here with a comment that says why and when to revisit.
-        # The workspace's own packages are not on PyPI, so they are left out.
+        # Every package in uv.lock, development tools included (pip-audit itself too), against
+        # the PyPI advisory database. The advisories are live, so a new one can fail a build
+        # that changed nothing: upgrade the package, or, if no fix exists and the code is not
+        # affected, pass --ignore-vuln <id> here with a comment that says why and when to
+        # revisit. The workspace's own packages are not on PyPI, so they are left out.
         run: |
           uv export --frozen --all-packages --all-groups --no-hashes --no-emit-workspace \
             -o "$RUNNER_TEMP/requirements-audit.txt"
-          uvx pip-audit==2.10.1 -r "$RUNNER_TEMP/requirements-audit.txt" \
+          uv run --frozen pip-audit -r "$RUNNER_TEMP/requirements-audit.txt" \
             --no-deps --disable-pip --progress-spinner off
 
   test:
