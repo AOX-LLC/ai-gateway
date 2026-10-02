@@ -21,10 +21,11 @@ from pydantic import SecretStr
 
 from ai_gateway.app import create_app
 from ai_gateway.auth.tokens import IssuedToken
-from ai_gateway.registry.migrate import load_migrations
+from ai_gateway.registry import MIGRATIONS_PACKAGE
 from ai_gateway.registry.repo import AdminRegistry
 from ai_gateway.seams.events import MemoryEventSink
 from ai_gateway.settings import GatewaySettings
+from mcp_common.migrate import load_migrations
 
 pytestmark = [pytest.mark.integration, pytest.mark.anyio]
 
@@ -244,7 +245,7 @@ async def test_healthz_reports_the_running_build(gateway: RunningGateway) -> Non
         response = await http_client.get(gateway.url.removesuffix("/mcp") + "/healthz")
 
     health = response.json()
-    newest_migration = max(migration.version for migration in load_migrations())
+    newest_migration = max(migration.version for migration in load_migrations(MIGRATIONS_PACKAGE))
     assert response.status_code == 200
     assert health["status"] == "ok"
     assert (health["commit"], health["branch"]) == (None, None)

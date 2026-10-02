@@ -13,9 +13,10 @@ import uvicorn
 from psycopg_pool import AsyncConnectionPool
 
 from ai_gateway.auth.tokens import IssuedToken, generate_token
-from ai_gateway.registry.migrate import apply_migrations
+from ai_gateway.registry import MIGRATIONS_PACKAGE
 from ai_gateway.registry.repo import AdminRegistry
 from echo_server.server import build_app
+from mcp_common.migrate import apply_migrations
 
 MakeClient = Callable[..., Awaitable[tuple[UUID, IssuedToken]]]
 
@@ -37,7 +38,7 @@ async def test_database_url(anyio_backend: str) -> str:
         await connection.execute("CREATE SCHEMA public")
         # A recreated schema loses the default grant; the gateway's role needs it.
         await connection.execute("GRANT USAGE ON SCHEMA public TO PUBLIC")
-    await apply_migrations(url)
+    await apply_migrations(url, MIGRATIONS_PACKAGE)
     return url
 
 

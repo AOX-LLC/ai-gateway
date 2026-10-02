@@ -16,9 +16,10 @@ import anyio
 from psycopg import AsyncConnection
 
 from ai_gateway.auth.tokens import IssuedToken, generate_token
-from ai_gateway.registry.migrate import apply_migrations
+from ai_gateway.registry import MIGRATIONS_PACKAGE
 from ai_gateway.registry.models import ClientStatus
 from ai_gateway.registry.repo import AdminRegistry, ClientNotFoundError
+from mcp_common.migrate import apply_migrations
 
 _DATABASE_URL_ENV = "GATEWAY_MIGRATE_DATABASE_URL"
 MAX_LIVE_TOKENS_PER_CLIENT = 2
@@ -121,7 +122,7 @@ def _verb(status: ClientStatus) -> str:
 
 
 async def _migrate(database_url: str, _: argparse.Namespace) -> None:
-    applied = await apply_migrations(database_url)
+    applied = await apply_migrations(database_url, MIGRATIONS_PACKAGE)
     print(f"applied migrations: {applied}" if applied else "database is up to date")
 
 

@@ -9,6 +9,7 @@ description = "Zero-trust gateway between AI clients and MCP tools."
 authors = [{ name = "AOX LLC" }]
 requires-python = ">=3.12"
 dependencies = [
+    "mcp-common",
     "mcp==2.2.0",
     "httpx2>=2.13,<3",
     "fastapi>=0.142,<1",
@@ -26,3 +27,6 @@ gateway-admin = "ai_gateway.admin.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/ai_gateway"]
+
+[tool.uv.sources]
+mcp-common = { workspace = true }
