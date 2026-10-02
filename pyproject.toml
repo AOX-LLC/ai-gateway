@@ -57,7 +57,7 @@ ban-relative-imports = "all"
 [tool.mypy]
 strict = true
 python_version = "3.12"
-files = ["gateway/src", "gateway/tests", "servers/echo/src"]
+files = ["gateway/src", "gateway/tests", "servers/echo/src", "scripts"]
 plugins = ["pydantic.mypy"]
 mypy_path = "gateway/src:servers/echo/src"
 explicit_package_bases = true
