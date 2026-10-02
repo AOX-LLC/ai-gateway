@@ -44,6 +44,7 @@ class ProtocolVersionGuard:
             await self._app(scope, receive, send)
             return
 
+        logger.info("refused a request declaring MCP protocol version %r", declared[:40])
         body = {
             "jsonrpc": "2.0",
             "id": None,
