@@ -921,7 +921,9 @@ dependencies = [
     { name = "psycopg", extra = ["binary"] },
     { name = "psycopg-pool" },
     { name = "pydantic" },
+    { name = "pydantic-settings" },
     { name = "starlette" },
+    { name = "uvicorn" },
 ]
 
 [package.metadata]
@@ -931,7 +933,9 @@ requires-dist = [
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2,<4" },
     { name = "psycopg-pool", specifier = ">=3.2,<4" },
     { name = "pydantic", specifier = ">=2.13,<3" },
+    { name = "pydantic-settings", specifier = ">=2.13,<3" },
     { name = "starlette", specifier = ">=0.40" },
+    { name = "uvicorn", specifier = ">=0.54,<1" },
 ]
 
 [[package]]
