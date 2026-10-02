@@ -29,6 +29,7 @@ from ai_gateway.pipeline.types import (
     LayerMode,
     ToolCall,
     Verdict,
+    displayable_tool_name,
     tool_unavailable_message,
 )
 from ai_gateway.seams.events import EventSink, GatewayEvent
@@ -172,7 +173,7 @@ class Pipeline:
         await self._emit(
             "gateway.tool_call",
             ctx,
-            exposed_name,
+            displayable_tool_name(exposed_name),
             decisions=[],
             started=time.perf_counter(),
             details={"outcome": "blocked", "blocked_by": "catalog", "deny_code": deny.code.value},

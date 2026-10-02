@@ -42,10 +42,23 @@ Verdict = Allow | Deny
 ALLOW = Allow()
 
 
+_MAX_ECHOED_NAME_LENGTH = 64
+
+
+def displayable_tool_name(requested_name: str) -> str:
+    """A client-supplied tool name, cut to a length that is safe to echo and record.
+
+    The SDK accepts names of any length; no real tool name is longer than 64 characters.
+    """
+    if len(requested_name) <= _MAX_ECHOED_NAME_LENGTH:
+        return requested_name
+    return requested_name[: _MAX_ECHOED_NAME_LENGTH - 3] + "..."
+
+
 def tool_unavailable_message(exposed_name: str) -> str:
     """One message for both unknown and out-of-scope tools, so a client cannot use
     the difference to discover tools it was not granted."""
-    return f"Tool '{exposed_name}' is not available to this client."
+    return f"Tool '{displayable_tool_name(exposed_name)}' is not available to this client."
 
 
 @dataclass(frozen=True)
