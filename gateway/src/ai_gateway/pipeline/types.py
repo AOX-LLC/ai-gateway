@@ -6,10 +6,17 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from functools import cached_property
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 from uuid import UUID
 
 from mcp.types import CallToolResult, Tool
+
+Effect = Literal["read", "write"]
+"""Whether a tool only reads or may change something. Decided by the gateway's reviewed
+policy, never by the upstream's own annotations."""
+
+EffectSource = Literal["policy", "default"]
+"""Where an effect came from. "default" means no policy covers the tool, so it is a write."""
 
 
 class LayerMode(StrEnum):
@@ -87,6 +94,9 @@ class CatalogTool:
     namespace: str
     upstream_name: str
     tool: Tool
+    effect: Effect = "write"
+    """Fail closed: a tool nobody has classified is treated as a write."""
+    effect_source: EffectSource = "default"
 
     @property
     def exposed_name(self) -> str:
@@ -102,13 +112,21 @@ class ToolCall:
     namespace: str
     upstream_tool: str
     arguments_json: str = field(repr=False)
+    effect: Effect = "write"
+    effect_source: EffectSource = "default"
 
     @classmethod
     def create(
-        cls, exposed_name: str, namespace: str, upstream_tool: str, arguments: dict[str, Any]
+        cls,
+        exposed_name: str,
+        namespace: str,
+        upstream_tool: str,
+        arguments: dict[str, Any],
+        effect: Effect = "write",
+        effect_source: EffectSource = "default",
     ) -> "ToolCall":
         canonical = json.dumps(arguments, sort_keys=True, separators=(",", ":"))
-        return cls(exposed_name, namespace, upstream_tool, canonical)
+        return cls(exposed_name, namespace, upstream_tool, canonical, effect, effect_source)
 
     @property
     def arguments(self) -> dict[str, Any]:

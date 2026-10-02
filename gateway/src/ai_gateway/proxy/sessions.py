@@ -9,6 +9,11 @@ has been idle for the idle timeout, or when the gateway shuts down.
 A connection is owned by a dedicated task, because an MCP client must be entered and
 exited in the same task. Request handlers only send calls through it.
 
+Identity: every forwarded call carries the gateway's own `_meta`, holding only the
+authenticated client's name. A `_meta` the client sent is never forwarded, so a client
+cannot claim to be another one. Servers record the name for attribution, never for
+authorization.
+
 Retry rule: a broken connection is replaced on the next call, but a call that may have
 reached the upstream is never retried; Phase 2 adds tools that write.
 """
@@ -17,7 +22,7 @@ import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
 import anyio
@@ -25,11 +30,12 @@ import httpx2
 from anyio.abc import TaskGroup, TaskStatus
 from mcp.client import Client
 from mcp.shared.exceptions import MCPError
-from mcp.types import REQUEST_TIMEOUT, CallToolResult
+from mcp.types import REQUEST_TIMEOUT, CallToolResult, RequestParamsMeta
 
 from ai_gateway.pipeline.runner import UpstreamStatus
 from ai_gateway.proxy.upstream_client import UpstreamClientFactory, open_upstream_client
 from ai_gateway.registry.models import UpstreamServer
+from mcp_common.attribution import CLIENT_META_KEY
 
 logger = logging.getLogger(__name__)
 
@@ -102,11 +108,12 @@ class UpstreamSessionPool:
         upstream: UpstreamServer,
         tool: str,
         arguments: dict[str, Any],
+        client_name: str,
     ) -> CallToolResult:
         if session_id is None:
             # No downstream session to attach to: use a connection for this call only.
             async with self.open_client(upstream) as client:
-                return await self._send(client, upstream, tool, arguments)
+                return await self._send(client, upstream, tool, arguments, client_name)
 
         session = self._session(session_id, client_id)
         connection = await self._connection(session, upstream)
@@ -114,7 +121,9 @@ class UpstreamSessionPool:
         try:
             if connection.client is None:
                 raise UpstreamCallError(UpstreamStatus.UNAVAILABLE, upstream.namespace)
-            return await self._send(connection.client, upstream, tool, arguments, connection)
+            return await self._send(
+                connection.client, upstream, tool, arguments, client_name, connection
+            )
         finally:
             session.calls_in_flight -= 1
             session.last_used = self.clock()
@@ -183,6 +192,7 @@ class UpstreamSessionPool:
         upstream: UpstreamServer,
         tool: str,
         arguments: dict[str, Any],
+        client_name: str,
         connection: _Connection | None = None,
     ) -> CallToolResult:
         namespace = upstream.namespace
@@ -190,7 +200,10 @@ class UpstreamSessionPool:
             # The SDK's own timeout cancels the upstream request; fail_after is a backstop.
             with anyio.fail_after(upstream.call_timeout_s + 1):
                 return await client.call_tool(
-                    tool, arguments, read_timeout_seconds=upstream.call_timeout_s
+                    tool,
+                    arguments,
+                    read_timeout_seconds=upstream.call_timeout_s,
+                    meta=cast(RequestParamsMeta, {CLIENT_META_KEY: client_name}),
                 )
         except TimeoutError:
             raise UpstreamCallError(UpstreamStatus.TIMEOUT, namespace) from None

@@ -139,7 +139,11 @@ class Pipeline:
     async def call_tool(self, ctx: CallContext, call: ToolCall, forward: Forwarder) -> CallOutcome:
         started = time.perf_counter()
         decisions: list[LayerDecision] = []
-        details: dict[str, JsonValue] = {"arguments_sha256": call.arguments_sha256}
+        details: dict[str, JsonValue] = {
+            "arguments_sha256": call.arguments_sha256,
+            "effect": call.effect,
+            "effect_source": call.effect_source,
+        }
 
         with _tracer.start_as_current_span(attributes.SPAN_TOOL_CALL) as span:
             span.set_attribute(attributes.GATEWAY_TOOL, call.exposed_name)

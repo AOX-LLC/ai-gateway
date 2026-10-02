@@ -1,8 +1,6 @@
 """The whole gateway over HTTP: real database, real echo upstream, the SDK's own client."""
 
 import logging
-import threading
-import time
 from collections.abc import AsyncGenerator, Awaitable, Callable, Iterator
 from contextlib import asynccontextmanager
 from importlib.metadata import version
@@ -10,21 +8,21 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
+import anyio
 import httpx2
 import pytest
-import uvicorn
 from mcp.client import Client
 from mcp.client.streamable_http import streamable_http_client
 from mcp.shared.exceptions import MCPError
 from mcp.types import INVALID_PARAMS, TextContent
-from pydantic import SecretStr
 
-from ai_gateway.app import create_app
 from ai_gateway.auth.tokens import IssuedToken
-from ai_gateway.registry.migrate import load_migrations
+from ai_gateway.registry import MIGRATIONS_PACKAGE
 from ai_gateway.registry.repo import AdminRegistry
-from ai_gateway.seams.events import MemoryEventSink
-from ai_gateway.settings import GatewaySettings
+from echo_server.server import cancellations
+from mcp_common.migrate import load_migrations
+from tests.helpers import RunningGateway, run_gateway
+from tests.test_upstreams import eventually
 
 pytestmark = [pytest.mark.integration, pytest.mark.anyio]
 
@@ -43,17 +41,12 @@ _INITIALIZE = {
 _MCP_HEADERS = {"Accept": "application/json, text/event-stream"}
 
 
-class RunningGateway:
-    def __init__(self, url: str, events: MemoryEventSink) -> None:
-        self.url = url
-        self.events = events
-
-
 @pytest.fixture
 async def tokens(
     admin_registry: AdminRegistry, make_client: MakeClient, echo_url: str
 ) -> dict[str, IssuedToken]:
     await admin_registry.upsert_upstream("echo", echo_url, 2000, 5000)
+    await admin_registry.upsert_tool_policy("echo", "say", "read", "test policy")
     _, support = await make_client("harborline-support-bot", ["echo__say"])
     _, ops = await make_client("harborline-ops-bot", ["echo__say", "echo__shout"])
     return {"support": support, "ops": ops}
@@ -63,29 +56,8 @@ async def tokens(
 def gateway(
     test_database_url: str, tokens: dict[str, IssuedToken], tmp_path: Path
 ) -> Iterator[RunningGateway]:
-    pipeline_file = tmp_path / "pipeline.toml"
-    pipeline_file.write_text('[layers]\nscope = "enforce"\n')
-    events = MemoryEventSink()
-    settings = GatewaySettings(
-        database_url=SecretStr(test_database_url), pipeline_file=pipeline_file
-    )
-    server = uvicorn.Server(
-        uvicorn.Config(create_app(settings, events), host="127.0.0.1", port=0, log_level="info")
-    )
-    thread = threading.Thread(target=server.run, daemon=True)
-    thread.start()
-    deadline = time.monotonic() + 15
-    while not server.started:
-        if time.monotonic() > deadline or not thread.is_alive():
-            server.should_exit = True
-            raise RuntimeError("gateway did not start")
-        time.sleep(0.02)
-    port = server.servers[0].sockets[0].getsockname()[1]
-    try:
-        yield RunningGateway(f"http://127.0.0.1:{port}/mcp", events)
-    finally:
-        server.should_exit = True
-        thread.join(timeout=15)
+    with run_gateway(test_database_url, tmp_path) as running:
+        yield running
 
 
 def _tampered(token: str) -> str:
@@ -215,6 +187,20 @@ async def test_every_decision_is_recorded_with_the_negotiated_version(
     assert (blocked["outcome"], blocked["blocked_by"]) == ("blocked", "scope")
 
 
+async def test_decision_records_carry_the_tool_effect_and_where_it_came_from(
+    gateway: RunningGateway, tokens: dict[str, IssuedToken]
+) -> None:
+    async with connect(gateway.url, tokens["ops"].plaintext) as client:
+        await client.call_tool("echo__say", {"text": "x"})
+        await client.call_tool("echo__shout", {"text": "x"})
+
+    calls = [e.payload for e in gateway.events.events if e.action == "gateway.tool_call"]
+    assert [(c["effect"], c["effect_source"]) for c in calls] == [
+        ("read", "policy"),
+        ("write", "default"),
+    ]
+
+
 async def test_raw_tokens_never_appear_in_logs(
     gateway: RunningGateway,
     tokens: dict[str, IssuedToken],
@@ -244,7 +230,7 @@ async def test_healthz_reports_the_running_build(gateway: RunningGateway) -> Non
         response = await http_client.get(gateway.url.removesuffix("/mcp") + "/healthz")
 
     health = response.json()
-    newest_migration = max(migration.version for migration in load_migrations())
+    newest_migration = max(migration.version for migration in load_migrations(MIGRATIONS_PACKAGE))
     assert response.status_code == 200
     assert health["status"] == "ok"
     assert (health["commit"], health["branch"]) == (None, None)
@@ -252,3 +238,22 @@ async def test_healthz_reports_the_running_build(gateway: RunningGateway) -> Non
     assert health["version"] == version("ai-gateway")
     assert health["schema_version"] == f"{newest_migration:04d}"
     assert health["uptime_s"] >= 0
+
+
+async def test_a_client_that_cancels_mid_call_cancels_the_upstream_call(
+    gateway: RunningGateway, make_client: MakeClient
+) -> None:
+    """Cancellation travels client -> gateway -> upstream over real HTTP at both hops."""
+    _, token = await make_client("cancel-bot", ["echo__wait"])
+    cancelled_before = cancellations.count
+    started_before = cancellations.started
+
+    async with connect(gateway.url, token.plaintext) as client:
+        with anyio.move_on_after(1.0) as client_scope:
+            await client.call_tool("echo__wait", {"seconds": 30})
+        assert client_scope.cancelled_caught
+        # The upstream call timeout is 5 s, so a prompt cancel can only be propagation.
+        await eventually(lambda: cancellations.count > cancelled_before, timeout_s=2.0)
+
+    assert cancellations.started == started_before + 1
+    assert cancellations.count == cancelled_before + 1

@@ -13,7 +13,7 @@ async def test_echo_server_lists_and_calls_tools(echo_url: str) -> None:
         transport = streamable_http_client(echo_url, http_client=http_client)
         async with Client(transport, mode="legacy") as client:
             listing = await client.list_tools()
-            assert {tool.name for tool in listing.tools} == {"say", "shout"}
+            assert {tool.name for tool in listing.tools} == {"say", "shout", "wait"}
 
             result = await client.call_tool("shout", {"text": "harbor"})
 

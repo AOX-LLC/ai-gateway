@@ -10,15 +10,19 @@ import os
 import sys
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from uuid import UUID
 
 import anyio
 from psycopg import AsyncConnection
 
 from ai_gateway.auth.tokens import IssuedToken, generate_token
-from ai_gateway.registry.migrate import apply_migrations
-from ai_gateway.registry.models import ClientStatus
+from ai_gateway.proxy.naming import split_exposed
+from ai_gateway.registry import MIGRATIONS_PACKAGE
+from ai_gateway.registry.models import CREDENTIAL_ENV_SUFFIX, ClientStatus
 from ai_gateway.registry.repo import AdminRegistry, ClientNotFoundError
+from ai_gateway.registry.tool_policies import ToolPolicyFileError, load_tool_policies
+from mcp_common.migrate import apply_migrations
 
 _DATABASE_URL_ENV = "GATEWAY_MIGRATE_DATABASE_URL"
 MAX_LIVE_TOKENS_PER_CLIENT = 2
@@ -26,13 +30,34 @@ MAX_LIVE_TOKENS_PER_CLIENT = 2
 # Fictional demo data for the test profile. Harborline Supply Co. does not exist.
 TEST_ECHO_NAMESPACE = "echo"
 TEST_CLIENTS = {
+    "echo-test-narrow": ("Test client that may only call echo__say (test data)", ["echo__say"]),
+    "echo-test-wide": (
+        "Test client that may call both echo tools (test data)",
+        ["echo__say", "echo__shout"],
+    ),
+}
+
+# Fictional demo data: the ticketing server's tools and the two clients that use them.
+DEMO_TICKETS_NAMESPACE = "tickets"
+DEMO_TICKETS_SCOPES_SUPPORT = [
+    "tickets__get_ticket",
+    "tickets__list_tickets",
+    "tickets__create_ticket",
+    "tickets__add_comment",
+]
+DEMO_TICKETS_SCOPES_OPS = [
+    *DEMO_TICKETS_SCOPES_SUPPORT,
+    "tickets__change_status",
+    "tickets__assign",
+]
+DEMO_CLIENTS = {
     "harborline-support-bot": (
-        "Support assistant for the fictional Harborline Supply Co. (test data)",
-        ["echo__say"],
+        "Support assistant for the fictional Harborline Supply Co. (demo data)",
+        DEMO_TICKETS_SCOPES_SUPPORT,
     ),
     "harborline-ops-bot": (
-        "Operations assistant for the fictional Harborline Supply Co. (test data)",
-        ["echo__say", "echo__shout"],
+        "Operations assistant for the fictional Harborline Supply Co. (demo data)",
+        DEMO_TICKETS_SCOPES_OPS,
     ),
 }
 
@@ -99,10 +124,35 @@ def _parser() -> argparse.ArgumentParser:
     upstream.add_argument("url")
     upstream.add_argument("--connect-timeout-ms", type=int, default=5000)
     upstream.add_argument("--call-timeout-ms", type=int, default=30000)
+    upstream.add_argument(
+        "--credential-env",
+        metavar="NAME",
+        help="name of the environment variable holding the service credential to send;"
+        " it must end in _SERVICE_TOKEN",
+    )
     upstream.set_defaults(handler=_upstream_add)
 
+    policy = commands.add_parser(
+        "tool-policy-set",
+        help="record whether an upstream tool reads or writes, e.g. tickets__get_ticket read",
+    )
+    policy.add_argument("tool", help="exposed tool name, <namespace>__<tool>")
+    policy.add_argument("effect", choices=["read", "write"])
+    policy.add_argument("--notes", default="")
+    policy.set_defaults(handler=_tool_policy_set)
+
+    demo = commands.add_parser(
+        "seed-demo",
+        help="register the ticketing upstream, load tool policies (replacing each namespace's"
+        " set exactly), create the demo clients",
+    )
+    demo.add_argument("--tickets-url", default="http://ticketing:4412/mcp")
+    demo.add_argument("--credential-env", default="TICKETING_SERVICE_TOKEN", metavar="NAME")
+    demo.add_argument("--policies", type=Path, default=Path("config/tool_policies.toml"))
+    demo.set_defaults(handler=_seed_demo)
+
     seed = commands.add_parser(
-        "seed-test", help="register the echo upstream and two fictional test clients"
+        "seed-test", help="register the echo upstream and two test clients (echo-test-*)"
     )
     seed.add_argument("--echo-url", default="http://echo:8000/mcp")
     seed.set_defaults(handler=_seed_test)
@@ -121,7 +171,7 @@ def _verb(status: ClientStatus) -> str:
 
 
 async def _migrate(database_url: str, _: argparse.Namespace) -> None:
-    applied = await apply_migrations(database_url)
+    applied = await apply_migrations(database_url, MIGRATIONS_PACKAGE)
     print(f"applied migrations: {applied}" if applied else "database is up to date")
 
 
@@ -185,11 +235,26 @@ async def _token_revoke(database_url: str, args: argparse.Namespace) -> None:
 
 
 async def _upstream_add(database_url: str, args: argparse.Namespace) -> None:
+    _require_credential_env_name(args.credential_env)
     async with await AsyncConnection.connect(database_url) as connection:
         await AdminRegistry(connection).upsert_upstream(
-            args.namespace, args.url, args.connect_timeout_ms, args.call_timeout_ms
+            args.namespace,
+            args.url,
+            args.connect_timeout_ms,
+            args.call_timeout_ms,
+            args.credential_env,
         )
     print(f"upstream {args.namespace}: {args.url}")
+
+
+async def _tool_policy_set(database_url: str, args: argparse.Namespace) -> None:
+    split = split_exposed(args.tool)
+    if split is None:
+        raise AdminError(f"{args.tool!r} is not a <namespace>__<tool> name")
+    namespace, tool = split
+    async with await AsyncConnection.connect(database_url) as connection:
+        await AdminRegistry(connection).upsert_tool_policy(namespace, tool, args.effect, args.notes)
+    print(f"{args.tool}: {args.effect}")
 
 
 async def _seed_test(database_url: str, args: argparse.Namespace) -> None:
@@ -202,9 +267,45 @@ async def _seed_test(database_url: str, args: argparse.Namespace) -> None:
         )
         for name, (description, scopes) in TEST_CLIENTS.items():
             client_id = await registry.upsert_client(name, description)
-            await registry.grant_scopes(client_id, scopes)
+            await registry.set_scopes(client_id, scopes)
             await registry.revoke_all_tokens(client_id)
             token = await _issue(registry, client_id, "seed-test", expires_at=None)
+            tokens[name] = token.plaintext
+    print(json.dumps(tokens, indent=2))
+
+
+def _require_credential_env_name(name: str | None) -> None:
+    if name is not None and not name.endswith(CREDENTIAL_ENV_SUFFIX):
+        raise AdminError(f"--credential-env must name a variable ending in {CREDENTIAL_ENV_SUFFIX}")
+
+
+async def _seed_demo(database_url: str, args: argparse.Namespace) -> None:
+    """Idempotent: re-running revokes the previous demo tokens and prints new ones."""
+    _require_credential_env_name(args.credential_env)
+    try:
+        policies = load_tool_policies(args.policies)
+    except ToolPolicyFileError as error:
+        raise AdminError(str(error)) from error
+    tokens = {}
+    async with await AsyncConnection.connect(database_url) as connection:
+        registry = AdminRegistry(connection)
+        await registry.upsert_upstream(
+            DEMO_TICKETS_NAMESPACE,
+            args.tickets_url,
+            connect_timeout_ms=5000,
+            call_timeout_ms=10000,
+            credential_env=args.credential_env,
+        )
+        for namespace in sorted({policy.namespace for policy in policies}):
+            await registry.replace_tool_policies(
+                namespace,
+                [(p.tool, p.effect, p.notes) for p in policies if p.namespace == namespace],
+            )
+        for name, (description, scopes) in DEMO_CLIENTS.items():
+            client_id = await registry.upsert_client(name, description)
+            await registry.set_scopes(client_id, scopes)
+            await registry.revoke_all_tokens(client_id)
+            token = await _issue(registry, client_id, "seed-demo", expires_at=None)
             tokens[name] = token.plaintext
     print(json.dumps(tokens, indent=2))
 

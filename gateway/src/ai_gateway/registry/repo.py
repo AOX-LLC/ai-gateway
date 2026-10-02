@@ -12,7 +12,9 @@ from psycopg import AsyncConnection
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
+from ai_gateway.pipeline.types import Effect
 from ai_gateway.registry.models import ClientStatus, StoredToken, UpstreamServer
+from mcp_common.health import read_schema_version
 
 _SELECT_BY_LOOKUP_ID = """
 SELECT t.id AS token_id, t.lookup_id, t.token_sha256, t.expires_at, t.revoked_at,
@@ -26,7 +28,7 @@ GROUP BY t.id, c.id
 """
 
 _ENABLED_UPSTREAMS = """
-SELECT id, namespace, url, connect_timeout_ms, call_timeout_ms
+SELECT id, namespace, url, connect_timeout_ms, call_timeout_ms, credential_env
 FROM upstream_servers
 WHERE enabled
 ORDER BY namespace
@@ -65,11 +67,7 @@ class GatewayRegistry:
 
     async def schema_version(self) -> int:
         """The newest applied migration, or 0 for an empty database."""
-        async with self._pool.connection() as connection:
-            cursor = await connection.execute(
-                "SELECT coalesce(max(version), 0) FROM schema_migrations"
-            )
-            return _first_column(await cursor.fetchone(), int)
+        return await read_schema_version(self._pool, "public")
 
     async def enabled_upstreams(self) -> list[UpstreamServer]:
         async with self._pool.connection() as connection:
@@ -83,9 +81,25 @@ class GatewayRegistry:
                 url=row["url"],
                 connect_timeout_s=row["connect_timeout_ms"] / 1000,
                 call_timeout_s=row["call_timeout_ms"] / 1000,
+                credential_env=row["credential_env"],
             )
             for row in rows
         ]
+
+    async def tool_policies(self) -> dict[tuple[str, str], Effect]:
+        """Reviewed effects, keyed by (namespace, upstream tool name)."""
+        async with self._pool.connection() as connection:
+            cursor = await connection.execute("SELECT namespace, tool, effect FROM tool_policies")
+            rows = await cursor.fetchall()
+        return {(namespace, tool): _effect(effect) for namespace, tool, effect in rows}
+
+
+def _effect(value: object) -> Effect:
+    if value == "read":
+        return "read"
+    if value == "write":
+        return "write"
+    raise RuntimeError(f"unexpected tool effect {value!r}")
 
 
 def _first_column[T](row: tuple[object, ...] | None, expected_type: type[T]) -> T:
@@ -144,12 +158,58 @@ class AdminRegistry:
                     (client_id, tool),
                 )
 
+    async def set_scopes(self, client_id: UUID, tools: Iterable[str]) -> None:
+        """Make the client's scopes exactly `tools`, in one transaction."""
+        wanted = sorted(set(tools))
+        async with self._connection.transaction():
+            await self._connection.execute(
+                "DELETE FROM client_scopes WHERE client_id = %s AND NOT (tool = ANY(%s))",
+                (client_id, wanted),
+            )
+            for tool in wanted:
+                await self._connection.execute(
+                    "INSERT INTO client_scopes (client_id, tool) VALUES (%s, %s)"
+                    " ON CONFLICT DO NOTHING",
+                    (client_id, tool),
+                )
+
     async def revoke_scopes(self, client_id: UUID, tools: Iterable[str]) -> None:
         async with self._connection.transaction():
             await self._connection.execute(
                 "DELETE FROM client_scopes WHERE client_id = %s AND tool = ANY(%s)",
                 (client_id, list(tools)),
             )
+
+    async def upsert_tool_policy(
+        self, namespace: str, tool: str, effect: Effect, notes: str = ""
+    ) -> None:
+        async with self._connection.transaction():
+            await self._connection.execute(
+                "INSERT INTO tool_policies (namespace, tool, effect, notes) VALUES (%s, %s, %s, %s)"
+                " ON CONFLICT (namespace, tool) DO UPDATE SET effect = EXCLUDED.effect,"
+                " notes = EXCLUDED.notes, reviewed_at = now()",
+                (namespace, tool, effect, notes),
+            )
+
+    async def replace_tool_policies(
+        self, namespace: str, policies: Iterable[tuple[str, Effect, str]]
+    ) -> None:
+        """Make the namespace's policies exactly `policies` (tool, effect, notes), in one
+        transaction: a tool missing from the list loses its row and so fails closed."""
+        wanted = list(policies)
+        async with self._connection.transaction():
+            await self._connection.execute(
+                "DELETE FROM tool_policies WHERE namespace = %s AND NOT (tool = ANY(%s))",
+                (namespace, [tool for tool, _, _ in wanted]),
+            )
+            for tool, effect, notes in wanted:
+                await self._connection.execute(
+                    "INSERT INTO tool_policies (namespace, tool, effect, notes)"
+                    " VALUES (%s, %s, %s, %s)"
+                    " ON CONFLICT (namespace, tool) DO UPDATE SET effect = EXCLUDED.effect,"
+                    " notes = EXCLUDED.notes, reviewed_at = now()",
+                    (namespace, tool, effect, notes),
+                )
 
     async def count_live_tokens(self, client_id: UUID) -> int:
         cursor = await self._connection.execute(
@@ -206,14 +266,21 @@ class AdminRegistry:
         return cursor.rowcount
 
     async def upsert_upstream(
-        self, namespace: str, url: str, connect_timeout_ms: int, call_timeout_ms: int
+        self,
+        namespace: str,
+        url: str,
+        connect_timeout_ms: int,
+        call_timeout_ms: int,
+        credential_env: str | None = None,
     ) -> None:
         async with self._connection.transaction():
             await self._connection.execute(
-                "INSERT INTO upstream_servers (namespace, url, connect_timeout_ms, call_timeout_ms)"
-                " VALUES (%s, %s, %s, %s)"
+                "INSERT INTO upstream_servers"
+                " (namespace, url, connect_timeout_ms, call_timeout_ms, credential_env)"
+                " VALUES (%s, %s, %s, %s, %s)"
                 " ON CONFLICT (namespace) DO UPDATE SET url = EXCLUDED.url,"
                 " connect_timeout_ms = EXCLUDED.connect_timeout_ms,"
-                " call_timeout_ms = EXCLUDED.call_timeout_ms, enabled = true, updated_at = now()",
-                (namespace, url, connect_timeout_ms, call_timeout_ms),
+                " call_timeout_ms = EXCLUDED.call_timeout_ms,"
+                " credential_env = EXCLUDED.credential_env, enabled = true, updated_at = now()",
+                (namespace, url, connect_timeout_ms, call_timeout_ms, credential_env),
             )

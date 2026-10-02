@@ -1,0 +1,25 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "harborline-setup"
+version = "0.1.0.dev0"
+description = "One-shot setup for the Harborline (fictional) MCP servers: roles, schemas, migrations, seed data."
+authors = [{ name = "AOX LLC" }]
+requires-python = ">=3.12"
+dependencies = [
+    "mcp-common",
+    "ticketing-server",
+    "psycopg[binary]>=3.2,<4",
+]
+
+[project.scripts]
+harborline-setup = "harborline_setup.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/harborline_setup"]
+
+[tool.uv.sources]
+mcp-common = { workspace = true }
+ticketing-server = { workspace = true }

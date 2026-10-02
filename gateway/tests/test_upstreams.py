@@ -12,9 +12,17 @@ import psycopg
 import pytest
 from mcp.client import Client
 from mcp.shared.exceptions import MCPError
-from mcp.types import INVALID_PARAMS, CallToolResult, ListToolsResult, TextContent, Tool
+from mcp.types import (
+    INVALID_PARAMS,
+    CallToolResult,
+    ListToolsResult,
+    TextContent,
+    Tool,
+    ToolAnnotations,
+)
 
 from ai_gateway.pipeline.runner import UpstreamStatus
+from ai_gateway.pipeline.types import Effect
 from ai_gateway.proxy.catalog import Catalog
 from ai_gateway.proxy.sessions import (
     SessionOwnershipError,
@@ -45,6 +53,8 @@ class FakeUpstream:
         self.closed = 0
         self.calls: list[str] = []
         self.cancelled = 0
+        self.metas: list[dict[str, Any] | None] = []
+        self.annotations: dict[str, ToolAnnotations] = {}
 
     @asynccontextmanager
     async def open(self, upstream: UpstreamServer) -> AsyncGenerator[Client]:
@@ -69,15 +79,27 @@ class FakeClient:
         names = self._upstream.tool_pages[page]
         has_more = page + 1 < len(self._upstream.tool_pages)
         return ListToolsResult(
-            tools=[Tool(name=name, input_schema={"type": "object"}) for name in names],
+            tools=[
+                Tool(
+                    name=name,
+                    input_schema={"type": "object"},
+                    annotations=self._upstream.annotations.get(name),
+                )
+                for name in names
+            ],
             next_cursor=str(page + 1) if has_more else None,
         )
 
     async def call_tool(
-        self, name: str, arguments: dict[str, Any], read_timeout_seconds: float | None = None
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        read_timeout_seconds: float | None = None,
+        meta: dict[str, Any] | None = None,
     ) -> CallToolResult:
         upstream = self._upstream
         upstream.calls.append(name)
+        upstream.metas.append(meta)
         if upstream.behaviour == "slow":
             try:
                 await anyio.sleep(60)
@@ -94,9 +116,13 @@ class FakeClient:
 class StaticSource:
     def __init__(self, *upstreams: UpstreamServer) -> None:
         self.upstreams = list(upstreams)
+        self.policies: dict[tuple[str, str], Effect] = {}
 
     async def enabled_upstreams(self) -> list[UpstreamServer]:
         return self.upstreams
+
+    async def tool_policies(self) -> dict[tuple[str, str], Effect]:
+        return self.policies
 
 
 class ManualClock:
@@ -128,8 +154,8 @@ async def test_each_session_gets_its_own_reused_connection() -> None:
 
     async with running_pool(upstream) as pool:
         for _ in range(3):
-            await pool.call_tool("session-a", client_a, ECHO, "say", {"text": "hi"})
-        await pool.call_tool("session-b", client_b, ECHO, "say", {"text": "hi"})
+            await pool.call_tool("session-a", client_a, ECHO, "say", {"text": "hi"}, "test-client")
+        await pool.call_tool("session-b", client_b, ECHO, "say", {"text": "hi"}, "test-client")
 
         assert upstream.opened == 2
     assert upstream.closed == 2
@@ -141,7 +167,7 @@ async def test_ending_a_session_closes_its_connections() -> None:
     client_id = uuid4()
 
     async with running_pool(upstream) as pool:
-        await pool.call_tool("session-a", client_id, ECHO, "say", {"text": "hi"})
+        await pool.call_tool("session-a", client_id, ECHO, "say", {"text": "hi"}, "test-client")
         pool.close_session("session-a", uuid4())  # another client's DELETE changes nothing
         await anyio.wait_all_tasks_blocked()
         assert upstream.closed == 0
@@ -157,7 +183,7 @@ async def test_idle_sessions_are_closed() -> None:
     clock = ManualClock()
 
     async with running_pool(upstream, clock=clock, idle_timeout_s=60) as pool:
-        await pool.call_tool("session-a", uuid4(), ECHO, "say", {"text": "hi"})
+        await pool.call_tool("session-a", uuid4(), ECHO, "say", {"text": "hi"}, "test-client")
         clock.now += 30
         assert pool.close_idle_sessions() == 0
         clock.now += 31
@@ -169,10 +195,10 @@ async def test_idle_sessions_are_closed() -> None:
 @pytest.mark.anyio
 async def test_a_session_id_cannot_be_used_by_a_second_client() -> None:
     async with running_pool(FakeUpstream()) as pool:
-        await pool.call_tool("session-a", uuid4(), ECHO, "say", {"text": "hi"})
+        await pool.call_tool("session-a", uuid4(), ECHO, "say", {"text": "hi"}, "test-client")
 
         with pytest.raises(SessionOwnershipError):
-            await pool.call_tool("session-a", uuid4(), ECHO, "say", {"text": "hi"})
+            await pool.call_tool("session-a", uuid4(), ECHO, "say", {"text": "hi"}, "test-client")
 
 
 @pytest.mark.anyio
@@ -182,7 +208,7 @@ async def test_a_slow_upstream_times_out_and_the_call_is_cancelled() -> None:
 
     async with running_pool(upstream) as pool:
         with anyio.fail_after(5), pytest.raises(UpstreamCallError) as raised:
-            await pool.call_tool("session-a", uuid4(), ECHO, "say", {"text": "hi"})
+            await pool.call_tool("session-a", uuid4(), ECHO, "say", {"text": "hi"}, "test-client")
 
     assert raised.value.status is UpstreamStatus.TIMEOUT
     assert upstream.cancelled == 1
@@ -194,7 +220,9 @@ async def test_a_client_that_goes_away_cancels_the_upstream_call() -> None:
     upstream.behaviour = "slow"
 
     async with running_pool(upstream) as pool, anyio.create_task_group() as task_group:
-        task_group.start_soon(pool.call_tool, "session-a", uuid4(), ECHO, "say", {"text": "hi"})
+        task_group.start_soon(
+            pool.call_tool, "session-a", uuid4(), ECHO, "say", {"text": "hi"}, "test-client"
+        )
         await anyio.wait_all_tasks_blocked()
         task_group.cancel_scope.cancel()
 
@@ -208,7 +236,7 @@ async def test_an_upstream_rejection_is_reported_not_retried() -> None:
 
     async with running_pool(upstream) as pool:
         with pytest.raises(UpstreamCallError) as raised:
-            await pool.call_tool("session-a", uuid4(), ECHO, "say", {"text": "hi"})
+            await pool.call_tool("session-a", uuid4(), ECHO, "say", {"text": "hi"}, "test-client")
 
     assert raised.value.status is UpstreamStatus.REJECTED
     assert upstream.calls == ["say"]
@@ -222,13 +250,15 @@ async def test_a_dropped_connection_is_replaced_on_the_next_call_but_not_retried
 
     async with running_pool(upstream) as pool:
         with pytest.raises(UpstreamCallError) as raised:
-            await pool.call_tool("session-a", client_id, ECHO, "say", {"text": "hi"})
+            await pool.call_tool("session-a", client_id, ECHO, "say", {"text": "hi"}, "test-client")
         assert raised.value.status is UpstreamStatus.UNAVAILABLE
         assert upstream.calls == ["say"]
 
         upstream.behaviour = "echo"
         await anyio.wait_all_tasks_blocked()
-        result = await pool.call_tool("session-a", client_id, ECHO, "say", {"text": "hi"})
+        result = await pool.call_tool(
+            "session-a", client_id, ECHO, "say", {"text": "hi"}, "test-client"
+        )
 
     assert result.content == [TextContent(type="text", text="hi")]
     assert upstream.opened == 2
@@ -241,7 +271,7 @@ async def test_an_unreachable_upstream_is_unavailable() -> None:
 
     async with running_pool(upstream) as pool:
         with pytest.raises(UpstreamCallError) as raised:
-            await pool.call_tool("session-a", uuid4(), ECHO, "say", {"text": "hi"})
+            await pool.call_tool("session-a", uuid4(), ECHO, "say", {"text": "hi"}, "test-client")
 
     assert raised.value.status is UpstreamStatus.UNAVAILABLE
 
@@ -421,3 +451,17 @@ async def test_a_registry_outage_keeps_the_last_catalog() -> None:
         await catalog.sync_with_registry()
 
         assert [tool.exposed_name for tool in catalog.tools()] == ["echo__say", "echo__shout"]
+
+
+@pytest.mark.anyio
+async def test_only_the_gateways_own_client_name_is_sent_upstream() -> None:
+    upstream = FakeUpstream()
+
+    async with running_pool(upstream) as pool:
+        await pool.call_tool("session-a", uuid4(), ECHO, "say", {"text": "hi"}, "harborline-bot")
+        await pool.call_tool(None, uuid4(), ECHO, "say", {"text": "hi"}, "other-bot")
+
+    assert upstream.metas == [
+        {"io.aox.ai-gateway/client": "harborline-bot"},
+        {"io.aox.ai-gateway/client": "other-bot"},
+    ]

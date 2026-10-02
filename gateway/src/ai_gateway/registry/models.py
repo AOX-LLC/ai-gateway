@@ -27,6 +27,10 @@ class StoredToken:
     scopes: frozenset[str]
 
 
+CREDENTIAL_ENV_SUFFIX = "_SERVICE_TOKEN"
+"""Only environment variables with this ending may be named as an upstream credential."""
+
+
 @dataclass(frozen=True)
 class UpstreamServer:
     id: UUID
@@ -34,3 +38,5 @@ class UpstreamServer:
     url: str
     connect_timeout_s: float
     call_timeout_s: float
+    credential_env: str | None = None
+    """Name of the environment variable holding the credential to send, never its value."""
