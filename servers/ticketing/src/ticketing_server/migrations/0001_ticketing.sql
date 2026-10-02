@@ -1,6 +1,6 @@
 -- Harborline Supply Co. is fictional. This schema belongs to the ticketing server alone:
 -- the server's role (ticketing_app) reads it and makes a few narrow writes, and no other
--- role can see it. The mcp-common runner runs this with the ticketing schema first on
+-- role can see it (harborline-setup grants that access). The mcp-common runner runs this with the ticketing schema first on
 -- the search path.
 
 CREATE SEQUENCE ticket_number;
@@ -48,20 +48,5 @@ CREATE TABLE comments (
 
 CREATE INDEX comments_by_ticket ON comments (ticket_id);
 
-REVOKE ALL ON SCHEMA ticketing FROM PUBLIC;
-
--- The server's role may read everything, create tickets and comments, and change only a
--- ticket's status, assignee and update time. It cannot delete, truncate or create.
--- The role exists in the Compose stack (created by harborline-setup) but not
--- necessarily in a bare test database.
-DO $$
-BEGIN
-    IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'ticketing_app') THEN
-        GRANT USAGE ON SCHEMA ticketing TO ticketing_app;
-        GRANT SELECT ON staff, tickets, comments TO ticketing_app;
-        GRANT INSERT ON tickets, comments TO ticketing_app;
-        GRANT UPDATE (status, assignee, updated_at) ON tickets TO ticketing_app;
-        GRANT USAGE ON SEQUENCE ticket_number, comments_id_seq TO ticketing_app;
-    END IF;
-END
-$$;
+-- No grants here: harborline-setup applies the ticketing_app role's grants on every run
+-- (see harborline_setup.ticketing), so they cannot depend on when the role was created.

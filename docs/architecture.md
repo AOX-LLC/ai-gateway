@@ -267,11 +267,12 @@ Each server owns one Postgres schema and one role, and no role can see another's
 has nothing in `public`. Tests assert each of these, including the column-level updates.
 
 The `harborline-setup` one-shot (the `servers-setup` Compose service) runs as the database
-owner and is safe to repeat. It creates the role if missing (a Postgres `DO` block, then
-`ALTER ROLE ... PASSWORD` with a quoted literal, so it also rotates the password), creates
-the schema, runs the schema's migrations and seeds it when empty. A role cannot only live in
-`db/init`, which runs once on a fresh volume, so existing volumes get it from this step. The
-ticketing process itself connects only as `ticketing_app`.
+owner and is safe to repeat. It creates the role if missing, then `ALTER ROLE ... PASSWORD`
+with a quoted literal (so it also rotates the password), creates the schema, runs the
+schema's migrations, **applies the role's grants on every run** (not in a migration, so they
+never depend on when the role was created) and seeds the schema when empty. A role cannot only
+live in `db/init`, which runs once on a fresh volume, so existing volumes get it from this
+step. The ticketing process itself connects only as `ticketing_app`.
 
 ### Tool effects: read or write, fail closed
 

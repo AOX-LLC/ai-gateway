@@ -13,6 +13,7 @@ from ai_gateway.auth.tokens import IssuedToken, generate_token
 from ai_gateway.registry import MIGRATIONS_PACKAGE
 from ai_gateway.registry.repo import AdminRegistry
 from echo_server.server import build_app
+from harborline_setup.ticketing import grant_ticketing_access
 from mcp_common.migrate import apply_migrations
 from tests.helpers import serve_in_thread
 from ticketing_server import CONNECTION_KWARGS as TICKETING_CONNECTION_KWARGS
@@ -122,6 +123,8 @@ async def ticketing_schema(test_database_url: str) -> None:
         await conn.execute("CREATE SCHEMA ticketing")
         await conn.execute("REVOKE ALL ON SCHEMA ticketing FROM PUBLIC")
     await apply_migrations(test_database_url, TICKETING_MIGRATIONS_PACKAGE, TICKETING_SCHEMA)
+    async with await psycopg.AsyncConnection.connect(test_database_url, autocommit=True) as conn:
+        await grant_ticketing_access(conn)
 
 
 @pytest.fixture
