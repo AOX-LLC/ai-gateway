@@ -321,7 +321,11 @@ CRM_FORBIDDEN = {
 
 
 @pytest.fixture
-async def as_crm(crm_app_url: str, crm_data: object) -> AsyncIterator[AsyncConnection]:
+async def as_crm(
+    crm_app_url: str, ticketing_data: object, crm_data: object, handbook_data: object
+) -> AsyncIterator[AsyncConnection]:
+    # All three schemas must exist: the statements below reach into the other two, and
+    # a missing table would raise UndefinedTable instead of the privilege error expected.
     connection = await AsyncConnection.connect(crm_app_url, autocommit=True)
     try:
         yield connection
@@ -413,8 +417,9 @@ HANDBOOK_FORBIDDEN = {
 
 @pytest.fixture
 async def as_handbook(
-    handbook_app_url: str, handbook_data: object
+    handbook_app_url: str, ticketing_data: object, crm_data: object, handbook_data: object
 ) -> AsyncIterator[AsyncConnection]:
+    # All three schemas must exist; see as_crm.
     connection = await AsyncConnection.connect(handbook_app_url, autocommit=True)
     try:
         yield connection
