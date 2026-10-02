@@ -16,6 +16,8 @@ logger = logging.getLogger(__name__)
 _GRANTS = [
     "GRANT USAGE ON SCHEMA {schema} TO {role}",
     "GRANT SELECT ON {schema}.staff, {schema}.tickets, {schema}.comments TO {role}",
+    # So /healthz can report which migration is applied; read only.
+    "GRANT SELECT ON {schema}.schema_migrations TO {role}",
     "GRANT INSERT ON {schema}.tickets, {schema}.comments TO {role}",
     "GRANT UPDATE (status, assignee, updated_at) ON {schema}.tickets TO {role}",
     "GRANT USAGE ON SEQUENCE {schema}.ticket_number, {schema}.comments_id_seq TO {role}",

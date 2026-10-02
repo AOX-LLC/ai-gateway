@@ -3,6 +3,7 @@ client attribution as they run in the stack."""
 
 from collections.abc import AsyncGenerator, Awaitable, Callable, Iterator
 from contextlib import asynccontextmanager
+from importlib.metadata import version
 from pathlib import Path
 from typing import Any, cast
 from uuid import UUID
@@ -20,8 +21,10 @@ from ai_gateway.auth.tokens import IssuedToken
 from ai_gateway.registry.repo import AdminRegistry
 from ai_gateway.registry.tool_policies import load_tool_policies
 from mcp_common.attribution import CLIENT_META_KEY
+from mcp_common.migrate import load_migrations
 from mcp_common.schema_contract import check_input_schema
 from tests.helpers import RunningGateway, run_gateway, serve_in_thread
+from ticketing_server import MIGRATIONS_PACKAGE as TICKETING_MIGRATIONS_PACKAGE
 from ticketing_server.seed import Dataset
 from ticketing_server.server import build_app
 from ticketing_server.settings import TicketingSettings
@@ -198,4 +201,73 @@ async def test_the_ticketing_server_refuses_calls_without_its_credential(
         health = await http.get(ticketing_url.removesuffix("/mcp") + "/healthz")
 
     assert (missing.status_code, wrong.status_code, right.status_code) == (401, 401, 200)
-    assert health.json() == {"status": "ok"}
+    assert health.status_code == 200
+
+
+def _health_settings(ticketing_app_url: str) -> TicketingSettings:
+    return TicketingSettings(
+        database_url=SecretStr(ticketing_app_url),
+        service_token=SecretStr(SERVICE_TOKEN),
+        allowed_hosts=["127.0.0.1:*"],
+        git_commit="0123456789abcdef0123456789abcdef01234567",
+        git_branch="phase-2-mcp-servers",
+    )
+
+
+async def test_healthz_reports_the_build_and_the_schema_in_the_house_format(
+    ticketing_app_url: str, ticketing_data: Dataset
+) -> None:
+    with serve_in_thread(build_app(_health_settings(ticketing_app_url))) as base_url:
+        async with httpx2.AsyncClient() as http:
+            response = await http.get(f"{base_url}/healthz")  # no credential needed
+
+    health = response.json()
+    newest = max(m.version for m in load_migrations(TICKETING_MIGRATIONS_PACKAGE))
+    assert response.status_code == 200
+    assert health["status"] == "ok"
+    assert health["commit"] == "0123456789abcdef0123456789abcdef01234567"
+    assert health["branch"] == "phase-2-mcp-servers"
+    assert health["commit_source"] == "process_start"
+    assert health["version"] == version("ticketing-server")
+    assert health["schema_version"] == f"{newest:04d}"
+    assert health["uptime_s"] >= 0
+    assert set(health) == {
+        "status",
+        "commit",
+        "commit_source",
+        "branch",
+        "version",
+        "schema_version",
+        "uptime_s",
+    }
+
+
+async def test_healthz_without_a_build_reports_null_commit_and_branch(
+    ticketing_app_url: str, ticketing_data: Dataset
+) -> None:
+    settings = _health_settings(ticketing_app_url).model_copy(
+        update={"git_commit": None, "git_branch": None}
+    )
+    with serve_in_thread(build_app(settings)) as base_url:
+        async with httpx2.AsyncClient() as http:
+            health = (await http.get(f"{base_url}/healthz")).json()
+
+    assert (health["commit"], health["branch"]) == (None, None)
+
+
+async def test_healthz_is_unavailable_when_the_database_cannot_be_read(
+    ticketing_app_url: str, test_database_url: str, ticketing_data: Dataset
+) -> None:
+    owner = await psycopg.AsyncConnection.connect(test_database_url, autocommit=True)
+    try:
+        with serve_in_thread(build_app(_health_settings(ticketing_app_url))) as base_url:
+            await owner.execute("REVOKE SELECT ON ticketing.schema_migrations FROM ticketing_app")
+            async with httpx2.AsyncClient() as http:
+                response = await http.get(f"{base_url}/healthz")
+    finally:
+        await owner.execute("GRANT SELECT ON ticketing.schema_migrations TO ticketing_app")
+        await owner.close()
+
+    assert response.status_code == 503
+    assert response.json()["status"] == "unavailable"
+    assert response.json()["schema_version"] is None

@@ -15,6 +15,9 @@ x-gateway-build: &gateway-build
 x-servers-build: &servers-build
   context: .
   dockerfile: servers/Dockerfile
+  args:
+    GIT_COMMIT: ${GIT_COMMIT:-}
+    GIT_BRANCH: ${GIT_BRANCH:-}
 
 x-hardening: &hardening
   read_only: true

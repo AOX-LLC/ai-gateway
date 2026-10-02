@@ -2,11 +2,12 @@
 
 Mirrors how the gateway serves its own endpoint: JSON responses, DNS-rebinding protection
 with an explicit host allowlist, and the session manager's task group tied to the app's
-lifespan. The MCP route sits behind the service credential; /healthz is open and says
-nothing but "ok", so a container health check needs no secret.
+lifespan. The MCP route sits behind the service credential; /healthz is open, so a
+container health check needs no secret. By default it says only "ok"; a server that knows
+more (its build, its schema) passes `health` and discloses nothing secret there either.
 """
 
-from collections.abc import AsyncGenerator, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import Any
 
@@ -23,6 +24,7 @@ from mcp_common.credentials import ServiceCredentialMiddleware
 MCP_PATH = "/mcp"
 
 AppLifespan = Callable[[], AbstractAsyncContextManager[None]]
+HealthResponder = Callable[[], Awaitable[JSONResponse]]
 
 
 def build_mcp_app(
@@ -31,9 +33,11 @@ def build_mcp_app(
     allowed_hosts: list[str],
     credential: str,
     lifespan: AppLifespan | None = None,
+    health: HealthResponder | None = None,
 ) -> Starlette:
     """Serve `server` at /mcp, requiring the service credential. `lifespan`, if given,
-    wraps the app's run, for resources such as a database pool."""
+    wraps the app's run, for resources such as a database pool; `health`, if given, answers
+    GET /healthz in place of the bare "ok"."""
     session_manager = StreamableHTTPSessionManager(
         server,
         json_response=True,
@@ -50,6 +54,8 @@ def build_mcp_app(
                 yield
 
     async def healthz(_: Request) -> JSONResponse:
+        if health is not None:
+            return await health()
         return JSONResponse({"status": "ok"})
 
     mcp_endpoint = ServiceCredentialMiddleware(StreamableHTTPASGIApp(session_manager), credential)

@@ -20,4 +20,9 @@ ENV PATH=/app/.venv/bin:$PATH PYTHONUNBUFFERED=1
 WORKDIR /app
 USER 10001
 EXPOSE 4412
+# Reported on the ticketing server's /healthz; left empty (null) when not passed at build
+# time. Last, so a new commit does not rebuild the dependency layers above.
+ARG GIT_COMMIT=
+ARG GIT_BRANCH=
+ENV TICKETING_GIT_COMMIT=$GIT_COMMIT TICKETING_GIT_BRANCH=$GIT_BRANCH
 CMD ["ticketing-server"]

@@ -102,7 +102,7 @@ async def test_the_gateway_role_may_record_token_use(
 
 # --- the ticketing server's role and schema -------------------------------------------------
 
-TICKETING_READABLE = ["staff", "tickets", "comments"]
+TICKETING_READABLE = ["staff", "tickets", "comments", "schema_migrations"]
 
 TICKETING_FORBIDDEN = {
     "update ticket subject": "UPDATE ticketing.tickets SET subject = 'rewritten'",
@@ -126,7 +126,9 @@ TICKETING_FORBIDDEN = {
     "create table in ticketing": "CREATE TABLE ticketing.intruder (id integer)",
     "create table in public": "CREATE TABLE public.intruder (id integer)",
     "drop table": "DROP TABLE ticketing.comments",
-    "read migrations": "SELECT * FROM ticketing.schema_migrations",
+    "write migrations": "INSERT INTO ticketing.schema_migrations (version) VALUES (999)",
+    "update migrations": "UPDATE ticketing.schema_migrations SET version = version",
+    "delete migrations": "DELETE FROM ticketing.schema_migrations",
     **{
         f"read registry {table}": f"SELECT count(*) FROM public.{table}"  # noqa: S608 - names come from the list above
         for table in READABLE_TABLES

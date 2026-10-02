@@ -106,12 +106,13 @@ jobs:
           # head commit that was actually pushed.
           GIT_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
           GIT_BRANCH: ${{ github.head_ref || github.ref_name }}
-      - name: Health check reports the build
+      - name: Health checks report the build
         env:
           EXPECTED_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
           EXPECTED_BRANCH: ${{ github.head_ref || github.ref_name }}
         run: |
-          curl -sSf http://127.0.0.1:4401/healthz | python3 -c '
+          for port in 4401 4412; do
+            curl -sSf "http://127.0.0.1:$port/healthz" | python3 -c '
           import json, os, sys
           health = json.load(sys.stdin)
           print(health)
@@ -121,6 +122,7 @@ jobs:
           assert health["commit_source"] == "process_start"
           assert len(health["schema_version"]) == 4 and int(health["schema_version"]) >= 1
           '
+          done
       - name: Acceptance check through the gateway
         shell: bash
         run: |

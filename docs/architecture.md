@@ -230,7 +230,8 @@ Harborline Supply Co. is fictional, and so is everything its servers hold. Phase
 - **Service credential (`credentials.py`).** The MCP route requires
   `Authorization: Bearer <credential>`, compared with `hmac.compare_digest`. Every failure
   is the same bare `401`. A server with a missing or empty credential refuses to start.
-  `/healthz` is open and says only `ok`.
+  `/healthz` is open (it discloses nothing secret). The ticketing server answers it in the
+  gateway's identity format, below; a server that passes no responder says only `ok`.
 - **Migrations (`migrate.py`).** `apply_migrations(conninfo, package, schema)` serves the
   gateway's registry (`public`) and each server's own schema. Every schema keeps its own
   `schema_migrations` table and advisory lock.
@@ -359,7 +360,12 @@ Any option that crosses a network carries the bearer token, so it must use TLS o
 ## Health check
 
 `GET /healthz` needs no token and, like everything else, is published on 127.0.0.1 only.
-It answers 200 while the MCP endpoint is serving and 503 otherwise.
+The gateway answers 200 while the MCP endpoint is serving and 503 otherwise. The ticketing
+server (4412) uses the same format and the same cache (`mcp_common.health`) and answers 200
+while it can read its own schema version, 503 with `status: "unavailable"` when it cannot.
+Its `GIT_COMMIT`/`GIT_BRANCH` come from the build arguments of `servers/Dockerfile`, its
+`version` is the `ticketing-server` package, and `schema_version` is the newest migration in
+the `ticketing` schema (its role may read `ticketing.schema_migrations`, nothing more there).
 
 | Field | Meaning |
 | --- | --- |
