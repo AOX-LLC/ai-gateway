@@ -518,6 +518,7 @@ version = "0.1.0.dev0"
 source = { editable = "servers/setup" }
 dependencies = [
     { name = "crm-server" },
+    { name = "handbook-server" },
     { name = "mcp-common" },
     { name = "psycopg", extra = ["binary"] },
     { name = "ticketing-server" },
@@ -526,6 +527,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "crm-server", editable = "servers/crm" },
+    { name = "handbook-server", editable = "servers/handbook" },
     { name = "mcp-common", editable = "servers/common" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2,<4" },
     { name = "ticketing-server", editable = "servers/ticketing" },

@@ -1,8 +1,10 @@
 """Shared fixtures: the Postgres test database, registry helpers and the echo MCP server."""
 
+import importlib.util
 import os
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from datetime import datetime
+from pathlib import Path
 from uuid import UUID, uuid4
 
 import psycopg
@@ -22,7 +24,16 @@ from crm_server.seed import Dataset as CrmDataset
 from crm_server.seed import build_dataset as build_crm_dataset
 from crm_server.seed import insert_dataset as insert_crm_dataset
 from echo_server.server import build_app
+from handbook_server import CONNECTION_KWARGS as HANDBOOK_CONNECTION_KWARGS
+from handbook_server import MIGRATIONS_PACKAGE as HANDBOOK_MIGRATIONS_PACKAGE
+from handbook_server import ROLE as HANDBOOK_ROLE
+from handbook_server import SCHEMA as HANDBOOK_SCHEMA
+from handbook_server.embedding import Embedder
+from handbook_server.seed import Dataset as HandbookDataset
+from handbook_server.seed import build_dataset as build_handbook_dataset
+from handbook_server.seed import insert_dataset as insert_handbook_dataset
 from harborline_setup.crm import grant_crm_access
+from harborline_setup.handbook import grant_handbook_access, prepare_schema
 from harborline_setup.shared import restrict_database_access
 from harborline_setup.ticketing import grant_ticketing_access
 from mcp_common.migrate import apply_migrations
@@ -51,7 +62,7 @@ async def test_database_url(anyio_backend: str) -> str:
         await connection.execute("CREATE SCHEMA public")
         # The same model as harborline-setup: PUBLIC gets nothing, and the roles that need
         # the database and its public schema (the gateway's) are granted it by name.
-        await restrict_database_access(connection, [TICKETING_ROLE, CRM_ROLE])
+        await restrict_database_access(connection, [TICKETING_ROLE, CRM_ROLE, HANDBOOK_ROLE])
     await apply_migrations(url, MIGRATIONS_PACKAGE)
     return url
 
@@ -201,6 +212,73 @@ async def crm_data(test_database_url: str, crm_schema: None) -> CrmDataset:
 @pytest.fixture
 async def crm_pool(crm_app_url: str, crm_data: CrmDataset) -> AsyncIterator[AsyncConnectionPool]:
     pool = AsyncConnectionPool(crm_app_url, kwargs=CRM_CONNECTION_KWARGS, open=False)
+    await pool.open()
+    try:
+        yield pool
+    finally:
+        await pool.close()
+
+
+DEFAULT_MODEL_DIR = Path.home() / ".cache" / "ai-gateway" / "models" / "potion-base-8M"
+_FETCH_MODEL = Path(__file__).resolve().parents[2] / "scripts" / "fetch_model.py"
+
+
+@pytest.fixture(scope="session")
+def model_path() -> Path:
+    """The pinned embedding model: HANDBOOK_MODEL_PATH, or a cache directory under the home
+    directory. Missing or damaged files are fetched, hash-verified, by scripts/fetch_model.py."""
+    path = Path(os.environ.get("HANDBOOK_MODEL_PATH") or DEFAULT_MODEL_DIR)
+    spec = importlib.util.spec_from_file_location("fetch_model_script", _FETCH_MODEL)
+    assert spec is not None
+    assert spec.loader is not None
+    script = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(script)
+    script.fetch(path)
+    return path
+
+
+@pytest.fixture(scope="session")
+def embedder(model_path: Path) -> Embedder:
+    return Embedder(model_path)
+
+
+@pytest.fixture(scope="session")
+def handbook_dataset(embedder: Embedder) -> HandbookDataset:
+    return build_handbook_dataset(embedder)
+
+
+@pytest.fixture
+def handbook_app_url(test_database_url: str) -> str:
+    """The test database as the handbook server's own role, handbook_app."""
+    url = os.environ.get("HANDBOOK_TEST_APP_DATABASE_URL")
+    if not url:
+        pytest.skip("HANDBOOK_TEST_APP_DATABASE_URL is not set")
+    return url
+
+
+@pytest.fixture(scope="session")
+async def handbook_data(
+    test_database_url: str, handbook_dataset: HandbookDataset
+) -> HandbookDataset:
+    """A fresh handbook schema, built and seeded the way harborline-setup builds it. The
+    server only reads, so it is built once per run."""
+    async with await psycopg.AsyncConnection.connect(test_database_url, autocommit=True) as conn:
+        await conn.execute(f"DROP SCHEMA IF EXISTS {HANDBOOK_SCHEMA} CASCADE".encode())
+        await prepare_schema(conn)
+    await apply_migrations(test_database_url, HANDBOOK_MIGRATIONS_PACKAGE, HANDBOOK_SCHEMA)
+    async with await psycopg.AsyncConnection.connect(test_database_url, autocommit=True) as conn:
+        await grant_handbook_access(conn)
+    async with await psycopg.AsyncConnection.connect(test_database_url) as conn:
+        await conn.execute(f"SET search_path TO {HANDBOOK_SCHEMA}".encode())
+        await insert_handbook_dataset(conn, handbook_dataset)
+    return handbook_dataset
+
+
+@pytest.fixture
+async def handbook_pool(
+    handbook_app_url: str, handbook_data: HandbookDataset
+) -> AsyncIterator[AsyncConnectionPool]:
+    pool = AsyncConnectionPool(handbook_app_url, kwargs=HANDBOOK_CONNECTION_KWARGS, open=False)
     await pool.open()
     try:
         yield pool

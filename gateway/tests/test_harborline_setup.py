@@ -1,5 +1,6 @@
 """harborline-setup: idempotent role, schema, migration and seed, run as the owner."""
 
+from pathlib import Path
 from uuid import uuid4
 
 import psycopg
@@ -9,6 +10,7 @@ from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
 from crm_server.seed import ACCOUNT_COUNT, CONTACT_COUNT, DEAL_COUNT, NOTE_COUNT
 from harborline_setup.crm import setup_crm
+from harborline_setup.handbook import setup_handbook
 from harborline_setup.ticketing import setup_ticketing
 from ticketing_server.seed import COMMENT_COUNT, TICKET_COUNT
 
@@ -252,3 +254,104 @@ async def test_crm_setup_narrows_a_grant_that_was_widened(
 async def test_crm_setup_refuses_an_empty_password(test_database_url: str) -> None:
     with pytest.raises(ValueError, match="CRM_DB_PASSWORD"):
         await setup_crm(test_database_url, "", None)
+
+
+# --- the handbook step ----------------------------------------------------------------------
+
+
+async def _handbook_counts(url: str) -> tuple[int, int]:
+    async with await psycopg.AsyncConnection.connect(url) as connection:
+        cursor = await connection.execute("SELECT count(*) FROM handbook.documents")
+        documents = await cursor.fetchone()
+        cursor = await connection.execute("SELECT count(*) FROM handbook.chunks")
+        chunks = await cursor.fetchone()
+    assert documents is not None
+    assert chunks is not None
+    return int(documents[0]), int(chunks[0])
+
+
+async def _handbook_privileges(url: str, role: str) -> dict[str, bool]:
+    async with await psycopg.AsyncConnection.connect(url) as connection:
+        cursor = await connection.execute(
+            "SELECT has_schema_privilege(%(r)s, 'handbook', 'USAGE'),"
+            " has_table_privilege(%(r)s, 'handbook.published_documents', 'SELECT'),"
+            " has_table_privilege(%(r)s, 'handbook.searchable_chunks', 'SELECT'),"
+            " has_table_privilege(%(r)s, 'handbook.documents', 'SELECT'),"
+            " has_table_privilege(%(r)s, 'handbook.chunks', 'SELECT'),"
+            " has_table_privilege(%(r)s, 'handbook.searchable_chunks', 'INSERT')",
+            {"r": role},
+        )
+        row = await cursor.fetchone()
+    assert row is not None
+    names = ["usage", "documents_view", "chunks_view", "documents", "chunks", "insert"]
+    return dict(zip(names, row, strict=True))
+
+
+async def test_handbook_setup_builds_everything_once_and_is_safe_to_repeat(
+    scratch_database: tuple[str, str], model_path: Path
+) -> None:
+    url, role = scratch_database
+    password = f"scratch-{uuid4().hex}"
+
+    await setup_handbook(url, password, model_path, role)
+    first_counts = await _handbook_counts(url)
+    first_privileges = await _handbook_privileges(url, role)
+    await setup_handbook(url, password, model_path, role)
+
+    assert first_counts[0] == 30
+    assert first_counts[1] >= 30
+    assert await _handbook_counts(url) == first_counts
+    expected = {
+        "usage": True,
+        "documents_view": True,
+        "chunks_view": True,
+        "documents": False,
+        "chunks": False,
+        "insert": False,
+    }
+    assert first_privileges == expected
+    assert await _handbook_privileges(url, role) == expected
+
+
+async def test_handbook_setup_puts_the_vector_extension_in_the_handbook_schema(
+    scratch_database: tuple[str, str], model_path: Path
+) -> None:
+    url, role = scratch_database
+
+    await setup_handbook(url, f"scratch-{uuid4().hex}", model_path, role)
+
+    async with await psycopg.AsyncConnection.connect(url) as connection:
+        cursor = await connection.execute(
+            "SELECT n.nspname FROM pg_extension e JOIN pg_namespace n ON n.oid = e.extnamespace"
+            " WHERE e.extname = 'vector'"
+        )
+        assert await cursor.fetchall() == [("handbook",)]
+
+
+async def test_handbook_setup_narrows_a_grant_widened_onto_a_base_table(
+    scratch_database: tuple[str, str], model_path: Path
+) -> None:
+    url, role = scratch_database
+    password = f"scratch-{uuid4().hex}"
+    await setup_handbook(url, password, model_path, role)
+    async with await psycopg.AsyncConnection.connect(url, autocommit=True) as connection:
+        await connection.execute(
+            sql.SQL("GRANT SELECT ON handbook.documents, handbook.chunks TO {}").format(
+                sql.Identifier(role)
+            )
+        )
+    assert (await _handbook_privileges(url, role))["documents"] is True
+
+    await setup_handbook(url, password, model_path, role)
+
+    privileges = await _handbook_privileges(url, role)
+    assert privileges["documents"] is False
+    assert privileges["chunks"] is False
+    assert privileges["documents_view"] is True
+
+
+async def test_handbook_setup_refuses_an_empty_password(
+    test_database_url: str, model_path: Path
+) -> None:
+    with pytest.raises(ValueError, match="HANDBOOK_DB_PASSWORD"):
+        await setup_handbook(test_database_url, "", model_path)

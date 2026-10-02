@@ -3,6 +3,8 @@
 HARBORLINE_SETUP_DATABASE_URL       the OWNER connection string
 TICKETING_DB_PASSWORD               the password to give the ticketing_app role
 CRM_DB_PASSWORD                     the password to give the crm_app role
+HANDBOOK_DB_PASSWORD                the password to give the handbook_app role
+HANDBOOK_MODEL_PATH                 the directory holding the embedding model
 HARBORLINE_TICKETING_EXTRA_RECORDS  optional JSON file of extra tickets and comments
 HARBORLINE_CRM_EXTRA_RECORDS        optional JSON file of extra accounts and notes
 """
@@ -15,9 +17,16 @@ from pathlib import Path
 import anyio
 
 from harborline_setup.crm import setup_crm
+from harborline_setup.handbook import setup_handbook
 from harborline_setup.ticketing import setup_ticketing
 
-_REQUIRED = ["HARBORLINE_SETUP_DATABASE_URL", "TICKETING_DB_PASSWORD", "CRM_DB_PASSWORD"]
+_REQUIRED = [
+    "HARBORLINE_SETUP_DATABASE_URL",
+    "TICKETING_DB_PASSWORD",
+    "CRM_DB_PASSWORD",
+    "HANDBOOK_DB_PASSWORD",
+    "HANDBOOK_MODEL_PATH",
+]
 
 
 def _optional_path(name: str) -> Path | None:
@@ -34,6 +43,9 @@ async def _run() -> None:
     )
     await setup_crm(
         owner_url, os.environ["CRM_DB_PASSWORD"], _optional_path("HARBORLINE_CRM_EXTRA_RECORDS")
+    )
+    await setup_handbook(
+        owner_url, os.environ["HANDBOOK_DB_PASSWORD"], Path(os.environ["HANDBOOK_MODEL_PATH"])
     )
 
 
