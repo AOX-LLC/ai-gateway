@@ -14,14 +14,19 @@ ALTER TABLE documents
         CHECK (superseded_by <> id);
 
 -- Search reads only this view, so excluding superseded documents here covers every step of
--- every ranking. CREATE OR REPLACE keeps the role's grant on the view.
+-- every ranking. A document counts as superseded only when its successor is published, the
+-- same rule as the pointer in published_documents below: otherwise a bad row naming a
+-- restricted successor would drop the document from search while get_document still called
+-- it current, and the difference would hint that a hidden successor exists. CREATE OR
+-- REPLACE keeps the role's grant on the view.
 CREATE OR REPLACE VIEW searchable_chunks WITH (security_barrier = true) AS
 SELECT c.id, c.document_id, d.title, d.category, d.classification,
        c.ordinal, c.heading, c.text, c.embedding, c.tsv
 FROM chunks AS c
 JOIN documents AS d ON d.id = c.document_id
 WHERE d.classification <> 'restricted'
-  AND d.superseded_by IS NULL;
+  AND NOT EXISTS (SELECT 1 FROM documents AS s
+                   WHERE s.id = d.superseded_by AND s.classification <> 'restricted');
 
 -- The pointer is shown only when its target is published, so a bad row cannot reveal that a
 -- restricted document exists. It is a subquery rather than a join so that the view stays a

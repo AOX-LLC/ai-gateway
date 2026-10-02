@@ -1,5 +1,6 @@
 """harborline-setup: idempotent role, schema, migration and seed, run as the owner."""
 
+import shutil
 from pathlib import Path
 from uuid import uuid4
 
@@ -11,6 +12,7 @@ from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from crm_server.seed import ACCOUNT_COUNT, CONTACT_COUNT, DEAL_COUNT, NOTE_COUNT
 from harborline_setup.crm import setup_crm
 from harborline_setup.handbook import setup_handbook
+from harborline_setup.handbook_documents import DocumentFileError
 from harborline_setup.ticketing import setup_ticketing
 from tests.helpers import HANDBOOK_DOCUMENTS
 from ticketing_server.seed import COMMENT_COUNT, TICKET_COUNT
@@ -334,6 +336,34 @@ async def test_handbook_setup_restores_the_superseded_markers_of_an_already_seed
             "SELECT id, superseded_by FROM handbook.documents WHERE superseded_by IS NOT NULL"
         )
         assert await cursor.fetchall() == [("DOC-007", "DOC-008")]
+
+
+async def test_handbook_setup_names_a_superseding_document_that_was_never_seeded(
+    scratch_database: tuple[str, str], model_path: Path, tmp_path: Path
+) -> None:
+    """The seed runs only into an empty schema, so a pointer to a document added to the files
+    since is an error with a clear cause, not a foreign-key failure at commit."""
+    url, role = scratch_database
+    password = f"scratch-{uuid4().hex}"
+    await setup_handbook(url, password, model_path, HANDBOOK_DOCUMENTS, role)
+    folder = tmp_path / "documents"
+    shutil.copytree(HANDBOOK_DOCUMENTS, folder)
+    (folder / "DOC-031.md").write_text(
+        "---\nid: DOC-031\ntitle: New edition\ncategory: returns\n"
+        "classification: general\nupdated: 2026-09-01\n---\n\n# New edition\n\n"
+        "## Rule\n\nText.\n",
+        encoding="utf-8",
+    )
+    superseded = folder / "DOC-016.md"
+    superseded.write_text(
+        superseded.read_text(encoding="utf-8").replace(
+            "updated: 2025-12-01\n", "updated: 2025-12-01\nsuperseded_by: DOC-031\n"
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(DocumentFileError, match="DOC-031, which is not in the database"):
+        await setup_handbook(url, password, model_path, folder, role)
 
 
 async def test_handbook_setup_puts_the_vector_extension_in_the_handbook_schema(

@@ -388,9 +388,15 @@ class TestTools:
                 "SELECT superseded_by FROM published_documents WHERE id = 'DOC-016'"
             )
             row = await cursor.fetchone()
+            cursor = await connection.execute(
+                "SELECT count(*) FROM searchable_chunks WHERE document_id = 'DOC-016'"
+            )
+            chunks = await cursor.fetchone()
             await connection.rollback()
 
         assert row == (None,)
+        assert chunks is not None
+        assert chunks[0] > 0, "the document must stay searchable, like a current one"
 
     async def test_a_restricted_document_looks_exactly_like_one_that_does_not_exist(
         self, client: Client
