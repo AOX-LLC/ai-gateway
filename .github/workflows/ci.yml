@@ -1,0 +1,127 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.12.10"
+          enable-cache: true
+      - run: uv sync --frozen
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy
+
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: ai_gateway_owner
+          POSTGRES_PASSWORD: ci-only-password
+          POSTGRES_DB: ai_gateway_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ai_gateway_owner"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      GATEWAY_TEST_DATABASE_URL: postgresql://ai_gateway_owner:ci-only-password@localhost:5432/ai_gateway_test
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.12.10"
+          enable-cache: true
+      - run: uv sync --frozen
+      - run: uv run pytest -ra --junitxml=pytest.xml
+      - name: Fail if any test was skipped
+        run: |
+          python3 - <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+
+          root = ET.parse("pytest.xml").getroot()
+          suites = [root] if root.tag == "testsuite" else list(root)
+          skipped = sum(int(suite.get("skipped", 0)) for suite in suites)
+          print(f"skipped tests: {skipped}")
+          sys.exit(1 if skipped else 0)
+          PY
+
+  e2e:
+    needs: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.12.10"
+          enable-cache: true
+      - run: uv sync --frozen
+      - run: cp .env.example .env
+      - run: docker compose --profile test up -d --build --wait
+      - name: Acceptance check through the gateway
+        shell: bash
+        run: |
+          set -euo pipefail
+          trap 'rm -f seed.json' EXIT
+          docker compose run --rm -T admin seed-test > seed.json
+          SUPPORT=$(python3 -c 'import json; print(json.load(open("seed.json"))["harborline-support-bot"])')
+          echo "::add-mask::$SUPPORT"
+          OPS=$(python3 -c 'import json; print(json.load(open("seed.json"))["harborline-ops-bot"])')
+          echo "::add-mask::$OPS"
+          # The gateway polls the registry every 5 seconds.
+          sleep 8
+          GATEWAY_TOKEN="$SUPPORT" uv run scripts/test_client.py --expect echo__say --refused echo__shout
+          GATEWAY_TOKEN="$OPS" uv run scripts/test_client.py --expect echo__say --expect echo__shout
+          LOOKUP_ID=$(echo "$SUPPORT" | cut -d_ -f2)
+          docker compose run --rm -T admin token-revoke "$LOOKUP_ID"
+          GATEWAY_TOKEN="$SUPPORT" uv run scripts/test_client.py --expect-rejected
+      - name: Show stack logs
+        if: failure()
+        run: docker compose --profile test logs --no-color
+      - name: Tear down
+        if: always()
+        run: docker compose --profile test down -v
+
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install gitleaks
+        run: |
+          set -euo pipefail
+          base=https://github.com/gitleaks/gitleaks/releases/download/v8.30.1
+          curl -sSfL -O "$base/gitleaks_8.30.1_linux_x64.tar.gz"
+          curl -sSfL -O "$base/gitleaks_8.30.1_checksums.txt"
+          sha256sum --check --ignore-missing gitleaks_8.30.1_checksums.txt
+          tar -xzf gitleaks_8.30.1_linux_x64.tar.gz gitleaks
+      - name: Scan history
+        run: ./gitleaks git --config .gitleaks.toml --redact --verbose .
