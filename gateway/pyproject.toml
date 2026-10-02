@@ -1,0 +1,28 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ai-gateway"
+version = "0.1.0.dev0"
+description = "Zero-trust gateway between AI clients and MCP tools."
+authors = [{ name = "AOX LLC" }]
+requires-python = ">=3.12"
+dependencies = [
+    "mcp==2.2.0",
+    "httpx2>=2.13,<3",
+    "fastapi>=0.142,<1",
+    "uvicorn>=0.54,<1",
+    "pydantic>=2.13,<3",
+    "pydantic-settings>=2.13,<3",
+    "psycopg[binary]>=3.2,<4",
+    "psycopg-pool>=3.2,<4",
+    "opentelemetry-api>=1.45,<2",
+]
+
+[project.scripts]
+ai-gateway = "ai_gateway.__main__:main"
+gateway-admin = "ai_gateway.admin.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ai_gateway"]
