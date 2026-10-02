@@ -127,9 +127,9 @@ jobs:
           set -euo pipefail
           trap 'rm -f seed.json' EXIT
           docker compose run --rm -T admin seed-test > seed.json
-          SUPPORT=$(python3 -c 'import json; print(json.load(open("seed.json"))["harborline-support-bot"])')
+          SUPPORT=$(python3 -c 'import json; print(json.load(open("seed.json"))["echo-test-narrow"])')
           echo "::add-mask::$SUPPORT"
-          OPS=$(python3 -c 'import json; print(json.load(open("seed.json"))["harborline-ops-bot"])')
+          OPS=$(python3 -c 'import json; print(json.load(open("seed.json"))["echo-test-wide"])')
           echo "::add-mask::$OPS"
           # The gateway polls the registry every 5 seconds.
           sleep 8

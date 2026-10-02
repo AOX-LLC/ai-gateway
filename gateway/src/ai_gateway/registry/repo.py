@@ -161,6 +161,21 @@ class AdminRegistry:
                     (client_id, tool),
                 )
 
+    async def set_scopes(self, client_id: UUID, tools: Iterable[str]) -> None:
+        """Make the client's scopes exactly `tools`, in one transaction."""
+        wanted = sorted(set(tools))
+        async with self._connection.transaction():
+            await self._connection.execute(
+                "DELETE FROM client_scopes WHERE client_id = %s AND NOT (tool = ANY(%s))",
+                (client_id, wanted),
+            )
+            for tool in wanted:
+                await self._connection.execute(
+                    "INSERT INTO client_scopes (client_id, tool) VALUES (%s, %s)"
+                    " ON CONFLICT DO NOTHING",
+                    (client_id, tool),
+                )
+
     async def revoke_scopes(self, client_id: UUID, tools: Iterable[str]) -> None:
         async with self._connection.transaction():
             await self._connection.execute(

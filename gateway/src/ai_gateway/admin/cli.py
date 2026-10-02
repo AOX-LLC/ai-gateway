@@ -30,12 +30,9 @@ MAX_LIVE_TOKENS_PER_CLIENT = 2
 # Fictional demo data for the test profile. Harborline Supply Co. does not exist.
 TEST_ECHO_NAMESPACE = "echo"
 TEST_CLIENTS = {
-    "harborline-support-bot": (
-        "Support assistant for the fictional Harborline Supply Co. (test data)",
-        ["echo__say"],
-    ),
-    "harborline-ops-bot": (
-        "Operations assistant for the fictional Harborline Supply Co. (test data)",
+    "echo-test-narrow": ("Test client that may only call echo__say (test data)", ["echo__say"]),
+    "echo-test-wide": (
+        "Test client that may call both echo tools (test data)",
         ["echo__say", "echo__shout"],
     ),
 }
@@ -153,7 +150,7 @@ def _parser() -> argparse.ArgumentParser:
     demo.set_defaults(handler=_seed_demo)
 
     seed = commands.add_parser(
-        "seed-test", help="register the echo upstream and two fictional test clients"
+        "seed-test", help="register the echo upstream and two test clients (echo-test-*)"
     )
     seed.add_argument("--echo-url", default="http://echo:8000/mcp")
     seed.set_defaults(handler=_seed_test)
@@ -267,7 +264,7 @@ async def _seed_test(database_url: str, args: argparse.Namespace) -> None:
         )
         for name, (description, scopes) in TEST_CLIENTS.items():
             client_id = await registry.upsert_client(name, description)
-            await registry.grant_scopes(client_id, scopes)
+            await registry.set_scopes(client_id, scopes)
             await registry.revoke_all_tokens(client_id)
             token = await _issue(registry, client_id, "seed-test", expires_at=None)
             tokens[name] = token.plaintext
@@ -296,7 +293,7 @@ async def _seed_demo(database_url: str, args: argparse.Namespace) -> None:
             )
         for name, (description, scopes) in DEMO_CLIENTS.items():
             client_id = await registry.upsert_client(name, description)
-            await registry.grant_scopes(client_id, scopes)
+            await registry.set_scopes(client_id, scopes)
             await registry.revoke_all_tokens(client_id)
             token = await _issue(registry, client_id, "seed-demo", expires_at=None)
             tokens[name] = token.plaintext

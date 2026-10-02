@@ -8,6 +8,7 @@ import psycopg
 import pytest
 
 from ai_gateway.admin import cli
+from ai_gateway.registry.repo import AdminRegistry
 
 pytestmark = [pytest.mark.integration, pytest.mark.anyio]
 
@@ -105,3 +106,55 @@ async def test_tool_policy_set_rejects_a_name_without_a_namespace(
 ) -> None:
     with pytest.raises(SystemExit, match="not a <namespace>__<tool> name"):
         await _admin(monkeypatch, test_database_url, "tool-policy-set", "find", "read")
+
+
+async def _scopes_by_client(url: str) -> dict[str, list[str]]:
+    rows = await _rows(
+        url,
+        "SELECT c.name, array_agg(s.tool ORDER BY s.tool) FROM clients c"
+        " JOIN client_scopes s ON s.client_id = c.id GROUP BY c.name",
+    )
+    return {str(name): list(tools) for name, tools in rows}  # type: ignore[call-overload]
+
+
+@pytest.mark.parametrize("order", [("seed-test", "seed-demo"), ("seed-demo", "seed-test")])
+async def test_seeding_both_data_sets_leaves_each_client_with_exactly_its_own_scopes(
+    monkeypatch: pytest.MonkeyPatch,
+    test_database_url: str,
+    clean_database: None,
+    capsys: pytest.CaptureFixture[str],
+    order: tuple[str, str],
+) -> None:
+    policies = str(REPO_ROOT / "config" / "tool_policies.toml")
+    for command in order:
+        extra = ["--policies", policies] if command == "seed-demo" else []
+        await _admin(monkeypatch, test_database_url, command, *extra)
+    capsys.readouterr()
+
+    scopes = await _scopes_by_client(test_database_url)
+    assert scopes["echo-test-narrow"] == ["echo__say"]
+    assert scopes["echo-test-wide"] == ["echo__say", "echo__shout"]
+    assert len(scopes["harborline-support-bot"]) == 4
+    assert len(scopes["harborline-ops-bot"]) == 6
+    assert not any(tool.startswith("echo__") for tool in scopes["harborline-ops-bot"])
+    assert sorted(scopes) == [
+        "echo-test-narrow",
+        "echo-test-wide",
+        "harborline-ops-bot",
+        "harborline-support-bot",
+    ]
+
+
+async def test_seeding_again_removes_scopes_that_are_no_longer_listed(
+    monkeypatch: pytest.MonkeyPatch,
+    test_database_url: str,
+    clean_database: None,
+    admin_registry: AdminRegistry,
+) -> None:
+    await _admin(monkeypatch, test_database_url, "seed-test")
+    client_id = await admin_registry.client_id("echo-test-narrow")
+    await admin_registry.grant_scopes(client_id, ["echo__shout", "tickets__assign"])
+
+    await _admin(monkeypatch, test_database_url, "seed-test")
+
+    assert (await _scopes_by_client(test_database_url))["echo-test-narrow"] == ["echo__say"]

@@ -199,7 +199,7 @@ async def _run_gateway_scenario(url: str, token: str, client_name: str, scenario
     allowed = {f"{prefix}{c.tool}" for c in scenario.calls if client_name in c.allowed_for}
     async with _connect(url, token) as client:
         _ok(f"connected as {client_name}; negotiated MCP protocol {client.protocol_version}")
-        listed = {t.name for t in (await client.list_tools()).tools if t.name.startswith(prefix)}
+        listed = {t.name for t in (await client.list_tools()).tools}
         if listed != allowed:
             raise CheckFailedError(
                 f"tools/list returned {sorted(listed)}, expected {sorted(allowed)}"
