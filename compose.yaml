@@ -47,6 +47,7 @@ services:
     ports:
       - "127.0.0.1:4402:5432"
     networks: [edge, backend]
+    mem_limit: 512m
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./db/init:/docker-entrypoint-initdb.d:ro
@@ -62,6 +63,7 @@ services:
     command: ["gateway-admin", "migrate"]
     <<: *hardening
     networks: [backend]
+    mem_limit: 192m
     environment:
       GATEWAY_MIGRATE_DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
     depends_on:
@@ -88,6 +90,7 @@ services:
     ports:
       - "127.0.0.1:4401:4401"
     networks: [edge, backend]
+    mem_limit: 256m
     volumes:
       - ./config:/app/config:ro
     depends_on:
@@ -115,6 +118,7 @@ services:
     command: ["harborline-setup"]
     <<: *hardening
     networks: [backend]
+    mem_limit: 512m
     environment:
       HARBORLINE_SETUP_DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       TICKETING_DB_PASSWORD: ${TICKETING_DB_PASSWORD:?set it in .env}
@@ -142,6 +146,7 @@ services:
       TICKETING_SERVICE_TOKEN: ${TICKETING_SERVICE_TOKEN:?set it in .env}
       TICKETING_ALLOWED_HOSTS: ticketing:*,127.0.0.1:*,localhost:*
     networks: [backend]
+    mem_limit: 192m
     depends_on:
       servers-setup:
         condition: service_completed_successfully
@@ -169,6 +174,7 @@ services:
       CRM_SERVICE_TOKEN: ${CRM_SERVICE_TOKEN:?set it in .env}
       CRM_ALLOWED_HOSTS: crm:*,127.0.0.1:*,localhost:*
     networks: [backend]
+    mem_limit: 192m
     depends_on:
       servers-setup:
         condition: service_completed_successfully
@@ -197,6 +203,7 @@ services:
       HANDBOOK_SERVICE_TOKEN: ${HANDBOOK_SERVICE_TOKEN:?set it in .env}
       HANDBOOK_ALLOWED_HOSTS: handbook:*,127.0.0.1:*,localhost:*
     networks: [backend]
+    mem_limit: 384m
     depends_on:
       servers-setup:
         condition: service_completed_successfully
@@ -219,6 +226,7 @@ services:
     entrypoint: ["gateway-admin"]
     <<: *hardening
     networks: [backend]
+    mem_limit: 192m
     environment:
       GATEWAY_MIGRATE_DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
     depends_on:
@@ -234,6 +242,7 @@ services:
     entrypoint: ["python", "/scripts/test_client.py"]
     <<: *hardening
     networks: [backend]
+    mem_limit: 192m
     environment:
       TICKETING_SERVICE_TOKEN: ${TICKETING_SERVICE_TOKEN:?set it in .env}
       CRM_SERVICE_TOKEN: ${CRM_SERVICE_TOKEN:?set it in .env}
@@ -259,6 +268,7 @@ services:
       ECHO_ALLOWED_HOSTS: echo:*,127.0.0.1:*
     <<: *hardening
     networks: [backend]
+    mem_limit: 128m
 
 networks:
   edge: {}
