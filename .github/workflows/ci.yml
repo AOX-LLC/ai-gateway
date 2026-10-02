@@ -32,7 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: pgvector/pgvector:pg17
+        image: pgvector/pgvector:pg17@sha256:ac08538c6f8b9904c33c8224c5e5706dbe760aca29db1d096972b4052c22a75d
         env:
           POSTGRES_USER: ai_gateway_owner
           POSTGRES_PASSWORD: ci-only-password
@@ -135,8 +135,10 @@ jobs:
           set -euo pipefail
           base=https://github.com/gitleaks/gitleaks/releases/download/v8.30.1
           curl -sSfL -O "$base/gitleaks_8.30.1_linux_x64.tar.gz"
-          curl -sSfL -O "$base/gitleaks_8.30.1_checksums.txt"
-          sha256sum --check --ignore-missing gitleaks_8.30.1_checksums.txt
+          # Pinned here rather than read from the release's own checksums file, which
+          # would only prove the download matches whatever the release currently holds.
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  gitleaks_8.30.1_linux_x64.tar.gz" \
+            | sha256sum --check
           tar -xzf gitleaks_8.30.1_linux_x64.tar.gz gitleaks
       - name: Scan history
         run: ./gitleaks git --config .gitleaks.toml --redact --verbose .
