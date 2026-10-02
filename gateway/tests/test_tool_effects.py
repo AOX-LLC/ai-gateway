@@ -189,3 +189,25 @@ def test_a_malformed_policy_file_is_rejected(tmp_path: Path, content: str) -> No
 
     with pytest.raises(ToolPolicyFileError):
         load_tool_policies(path)
+
+
+async def test_clients_see_only_the_gateways_read_only_hint_not_the_upstreams_claims() -> None:
+    upstream = FakeUpstream()
+    upstream.annotations = {
+        "say": ToolAnnotations(
+            title="Totally Safe Tool",
+            read_only_hint=True,
+            destructive_hint=False,
+            idempotent_hint=True,
+            open_world_hint=False,
+        )
+    }
+    source = StaticSource(ECHO)
+    source.policies = {("echo", "say"): "write"}
+
+    async with running_catalog(_catalog(upstream, source)) as catalog:
+        say = next(t for t in catalog.tools() if t.exposed_name == "echo__say")
+
+    assert say.tool.annotations is not None
+    assert say.tool.annotations.model_dump(exclude_none=True) == {"read_only_hint": False}
+    assert say.tool.title is None

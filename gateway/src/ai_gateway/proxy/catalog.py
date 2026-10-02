@@ -86,19 +86,19 @@ class Catalog:
     def _classified(self, tool: CatalogTool) -> CatalogTool:
         """The tool with its effect from the current policy table, or "write" if none covers it.
 
-        The hint clients see is replaced with the gateway's own verdict, so an upstream's
-        claim never reaches a client that might trust it.
+        The annotations clients see are built from that verdict alone: readOnlyHint comes
+        from the effect, and the upstream's other hints (destructive, idempotent, open-world)
+        and its titles are dropped, because nobody here reviewed them and a client might
+        trust them.
         """
         effect = self._policies.get((tool.namespace, tool.upstream_name))
         source: EffectSource = "policy"
         if effect is None:
             effect, source = "write", "default"
-        annotations = (tool.tool.annotations or ToolAnnotations()).model_copy(
-            update={"read_only_hint": effect == "read"}
-        )
+        annotations = ToolAnnotations(read_only_hint=effect == "read")
         return replace(
             tool,
-            tool=tool.tool.model_copy(update={"annotations": annotations}),
+            tool=tool.tool.model_copy(update={"annotations": annotations, "title": None}),
             effect=effect,
             effect_source=source,
         )

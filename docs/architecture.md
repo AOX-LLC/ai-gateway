@@ -302,7 +302,8 @@ Whether a call can change anything is the gateway's decision, never the upstream
   server therefore never makes it look harmless.
 - The upstream's `readOnlyHint` is ignored. If it contradicts the policy, the gateway logs
   one warning (a drift signal) and uses the policy. The hint clients see in `tools/list` is
-  the gateway's own verdict.
+  the gateway's own verdict, and it is the only annotation clients see: the upstream's
+  `destructiveHint`, `idempotentHint`, `openWorldHint` and titles are dropped.
 - Policies are re-read every registry poll (5 s), so a change applies within seconds.
 - Every decision record carries `effect` and `effect_source`. Phase 3's approval layer keys
   on the effect.
