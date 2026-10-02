@@ -42,10 +42,15 @@ def main(argv: Sequence[str] | None = None) -> None:
     token = os.environ.get("GATEWAY_TOKEN", "")
     if not token:
         sys.exit("test_client: set GATEWAY_TOKEN")
+    failures: list[BaseException] = []
     try:
         anyio.run(_run_checks, args, token)
-    except CheckFailedError as failure:
+    except* CheckFailedError as group:
+        # A failure inside the MCP client's context arrives wrapped in an exception group.
+        failures.extend(group.exceptions)
+    for failure in failures:
         print(f"FAIL  {failure}")
+    if failures:
         sys.exit(1)
     print("PASS  all checks")
 
