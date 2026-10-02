@@ -10,6 +10,7 @@ dev = [
     "pytest>=9.1",
     "ruff>=0.16.10",
     "pre-commit>=3.6",
+    "echo-server",
 ]
 
 [tool.uv]
@@ -20,11 +21,12 @@ members = ["gateway", "servers/*"]
 
 [tool.uv.sources]
 ai-gateway = { workspace = true }
+echo-server = { workspace = true }
 
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-src = ["gateway/src", "gateway/tests", "servers", "scripts"]
+src = ["gateway/src", "gateway/tests", "servers/echo/src", "scripts"]
 
 [tool.ruff.lint]
 select = [
@@ -55,9 +57,9 @@ ban-relative-imports = "all"
 [tool.mypy]
 strict = true
 python_version = "3.12"
-files = ["gateway/src", "gateway/tests"]
+files = ["gateway/src", "gateway/tests", "servers/echo/src"]
 plugins = ["pydantic.mypy"]
-mypy_path = "gateway/src"
+mypy_path = "gateway/src:servers/echo/src"
 explicit_package_bases = true
 
 [tool.pydantic-mypy]

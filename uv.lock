@@ -11,6 +11,7 @@ resolution-markers = [
 members = [
     "ai-gateway",
     "ai-gateway-workspace",
+    "echo-server",
 ]
 
 [[package]]
@@ -52,6 +53,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "echo-server" },
     { name = "mypy" },
     { name = "pre-commit" },
     { name = "pytest" },
@@ -63,6 +65,7 @@ requires-dist = [{ name = "ai-gateway", editable = "gateway" }]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "echo-server", editable = "servers/echo" },
     { name = "mypy", specifier = ">=2.4" },
     { name = "pre-commit", specifier = ">=3.6" },
     { name = "pytest", specifier = ">=9.1" },
@@ -355,6 +358,21 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/c9/02/bd72be9134d25ed783ecbbc38a539ffaefbf90c78418c7fb7229600dbac7/distlib-0.4.3.tar.gz", hash = "sha256:f152097224a0ae24be5a0f6bae1b9359af82133bce63f98a95f86cae1aede9ed", size = 615141, upload-time = "2026-06-12T08:04:52.847Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/02/08/9c41fb51ab5b43eb21674aff13df270e8ba6c4b29c8624e328dc7a9482af/distlib-0.4.3-py2.py3-none-any.whl", hash = "sha256:4b0ce306c966eb73bc3a7b6abad017c556dadd92c44701562cd528ac7fde4d5b", size = 470628, upload-time = "2026-06-12T08:04:50.506Z" },
+]
+
+[[package]]
+name = "echo-server"
+version = "0.1.0.dev0"
+source = { editable = "servers/echo" }
+dependencies = [
+    { name = "mcp" },
+    { name = "uvicorn" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "mcp", specifier = "==2.2.0" },
+    { name = "uvicorn", specifier = ">=0.54,<1" },
 ]
 
 [[package]]
