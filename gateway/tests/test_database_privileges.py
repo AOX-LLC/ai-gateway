@@ -92,3 +92,96 @@ async def test_the_gateway_role_may_record_token_use(
     )
 
     assert cursor.rowcount == 1
+
+
+# --- the ticketing server's role and schema -------------------------------------------------
+
+TICKETING_READABLE = ["staff", "tickets", "comments"]
+
+TICKETING_FORBIDDEN = {
+    "update ticket subject": "UPDATE ticketing.tickets SET subject = 'rewritten'",
+    "update ticket description": "UPDATE ticketing.tickets SET description = 'rewritten'",
+    "update ticket internal notes": "UPDATE ticketing.tickets SET internal_notes = NULL",
+    "update ticket requested_by": "UPDATE ticketing.tickets SET requested_by = 'someone-else'",
+    "update ticket account": "UPDATE ticketing.tickets SET account_id = 'ACC-00001'",
+    "update ticket id": "UPDATE ticketing.tickets SET id = 'TKT-999999'",
+    "update ticket created_at": "UPDATE ticketing.tickets SET created_at = now()",
+    "update comment body": "UPDATE ticketing.comments SET body = 'rewritten'",
+    "update comment visibility": "UPDATE ticketing.comments SET visibility = 'public'",
+    "update staff": "UPDATE ticketing.staff SET team = 'nowhere'",
+    "insert staff": (
+        "INSERT INTO ticketing.staff (handle, display_name, team) VALUES ('a.b', 'A', 't')"
+    ),
+    "delete ticket": "DELETE FROM ticketing.tickets",
+    "delete comment": "DELETE FROM ticketing.comments",
+    "delete staff": "DELETE FROM ticketing.staff",
+    "truncate tickets": "TRUNCATE ticketing.tickets CASCADE",
+    "truncate comments": "TRUNCATE ticketing.comments",
+    "create table in ticketing": "CREATE TABLE ticketing.intruder (id integer)",
+    "create table in public": "CREATE TABLE public.intruder (id integer)",
+    "drop table": "DROP TABLE ticketing.comments",
+    "read migrations": "SELECT * FROM ticketing.schema_migrations",
+    **{
+        f"read registry {table}": f"SELECT count(*) FROM public.{table}"  # noqa: S608 - names come from the list above
+        for table in READABLE_TABLES
+    },
+}
+
+
+@pytest.fixture
+async def as_ticketing(
+    ticketing_app_url: str, ticketing_data: object
+) -> AsyncIterator[AsyncConnection]:
+    connection = await AsyncConnection.connect(ticketing_app_url, autocommit=True)
+    try:
+        yield connection
+    finally:
+        await connection.close()
+
+
+@pytest.mark.parametrize("table", TICKETING_READABLE)
+async def test_the_ticketing_role_reads_its_tables(
+    as_ticketing: AsyncConnection, table: str
+) -> None:
+    query = f"SELECT count(*) FROM ticketing.{table}"  # noqa: S608 - names come from the list above
+    cursor = await as_ticketing.execute(query.encode())
+
+    assert await cursor.fetchone() is not None
+
+
+@pytest.mark.parametrize("statement", TICKETING_FORBIDDEN.values(), ids=TICKETING_FORBIDDEN.keys())
+async def test_the_ticketing_role_is_confined_to_narrow_writes(
+    as_ticketing: AsyncConnection, statement: str
+) -> None:
+    with pytest.raises(psycopg.errors.InsufficientPrivilege):
+        await as_ticketing.execute(statement.encode())
+
+
+async def test_the_ticketing_role_may_change_status_assignee_and_update_time(
+    as_ticketing: AsyncConnection,
+) -> None:
+    cursor = await as_ticketing.execute(
+        "UPDATE ticketing.tickets SET status = 'closed', assignee = NULL, updated_at = now()"
+        " WHERE id = 'TKT-000001'"
+    )
+
+    assert cursor.rowcount == 1
+
+
+@pytest.mark.parametrize("table", TICKETING_READABLE)
+async def test_the_gateway_role_cannot_see_the_ticketing_schema(
+    as_gateway: AsyncConnection, ticketing_data: object, table: str
+) -> None:
+    query = f"SELECT count(*) FROM ticketing.{table}"  # noqa: S608 - names come from the list above
+    with pytest.raises(psycopg.errors.InsufficientPrivilege):
+        await as_gateway.execute(query.encode())
+
+
+async def test_the_gateway_role_cannot_write_the_ticketing_schema(
+    as_gateway: AsyncConnection, ticketing_data: object
+) -> None:
+    with pytest.raises(psycopg.errors.InsufficientPrivilege):
+        await as_gateway.execute(
+            b"INSERT INTO ticketing.tickets (account_id, subject, description, requested_by)"
+            b" VALUES ('ACC-00001', 'abc', 'x', 'y')"
+        )

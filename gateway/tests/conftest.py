@@ -17,6 +17,10 @@ from ai_gateway.registry import MIGRATIONS_PACKAGE
 from ai_gateway.registry.repo import AdminRegistry
 from echo_server.server import build_app
 from mcp_common.migrate import apply_migrations
+from ticketing_server import CONNECTION_KWARGS as TICKETING_CONNECTION_KWARGS
+from ticketing_server import MIGRATIONS_PACKAGE as TICKETING_MIGRATIONS_PACKAGE
+from ticketing_server import SCHEMA as TICKETING_SCHEMA
+from ticketing_server.seed import Dataset, build_dataset, insert_dataset
 
 MakeClient = Callable[..., Awaitable[tuple[UUID, IssuedToken]]]
 
@@ -119,3 +123,46 @@ def echo_url() -> Iterator[str]:
     finally:
         server.should_exit = True
         thread.join(timeout=_SERVER_START_TIMEOUT_S)
+
+
+@pytest.fixture
+def ticketing_app_url(test_database_url: str) -> str:
+    """The test database as the ticketing server's own role, ticketing_app."""
+    url = os.environ.get("TICKETING_TEST_APP_DATABASE_URL")
+    if not url:
+        pytest.skip("TICKETING_TEST_APP_DATABASE_URL is not set")
+    return url
+
+
+@pytest.fixture(scope="session")
+async def ticketing_schema(test_database_url: str) -> None:
+    """A fresh ticketing schema, built the way harborline-setup builds it."""
+    async with await psycopg.AsyncConnection.connect(test_database_url, autocommit=True) as conn:
+        await conn.execute("DROP SCHEMA IF EXISTS ticketing CASCADE")
+        await conn.execute("CREATE SCHEMA ticketing")
+        await conn.execute("REVOKE ALL ON SCHEMA ticketing FROM PUBLIC")
+    await apply_migrations(test_database_url, TICKETING_MIGRATIONS_PACKAGE, TICKETING_SCHEMA)
+
+
+@pytest.fixture
+async def ticketing_data(test_database_url: str, ticketing_schema: None) -> Dataset:
+    """The deterministic seed, reloaded before every test so writes never leak across tests."""
+    dataset = build_dataset()
+    async with await psycopg.AsyncConnection.connect(test_database_url) as conn:
+        await conn.execute("SET search_path TO ticketing")
+        await conn.execute("TRUNCATE comments, tickets, staff RESTART IDENTITY CASCADE")
+        await conn.execute("ALTER SEQUENCE ticket_number RESTART")
+        await insert_dataset(conn, dataset)
+    return dataset
+
+
+@pytest.fixture
+async def ticketing_pool(
+    ticketing_app_url: str, ticketing_data: Dataset
+) -> AsyncIterator[AsyncConnectionPool]:
+    pool = AsyncConnectionPool(ticketing_app_url, kwargs=TICKETING_CONNECTION_KWARGS, open=False)
+    await pool.open()
+    try:
+        yield pool
+    finally:
+        await pool.close()
