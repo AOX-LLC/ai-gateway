@@ -34,3 +34,5 @@ class UpstreamServer:
     url: str
     connect_timeout_s: float
     call_timeout_s: float
+    credential_env: str | None = None
+    """Name of the environment variable holding the credential to send, never its value."""

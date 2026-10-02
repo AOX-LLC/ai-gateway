@@ -1,15 +1,12 @@
 """Shared fixtures: the Postgres test database, registry helpers and the echo MCP server."""
 
 import os
-import threading
-import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from datetime import datetime
 from uuid import UUID
 
 import psycopg
 import pytest
-import uvicorn
 from psycopg_pool import AsyncConnectionPool
 
 from ai_gateway.auth.tokens import IssuedToken, generate_token
@@ -17,14 +14,13 @@ from ai_gateway.registry import MIGRATIONS_PACKAGE
 from ai_gateway.registry.repo import AdminRegistry
 from echo_server.server import build_app
 from mcp_common.migrate import apply_migrations
+from tests.helpers import serve_in_thread
 from ticketing_server import CONNECTION_KWARGS as TICKETING_CONNECTION_KWARGS
 from ticketing_server import MIGRATIONS_PACKAGE as TICKETING_MIGRATIONS_PACKAGE
 from ticketing_server import SCHEMA as TICKETING_SCHEMA
 from ticketing_server.seed import Dataset, build_dataset, insert_dataset
 
 MakeClient = Callable[..., Awaitable[tuple[UUID, IssuedToken]]]
-
-_SERVER_START_TIMEOUT_S = 10.0
 
 
 @pytest.fixture(scope="session")
@@ -105,24 +101,8 @@ def make_client(admin_registry: AdminRegistry) -> MakeClient:
 
 @pytest.fixture(scope="session")
 def echo_url() -> Iterator[str]:
-    config = uvicorn.Config(
-        build_app(["127.0.0.1:*"]), host="127.0.0.1", port=0, log_level="warning"
-    )
-    server = uvicorn.Server(config)
-    thread = threading.Thread(target=server.run, daemon=True)
-    thread.start()
-    deadline = time.monotonic() + _SERVER_START_TIMEOUT_S
-    while not server.started:
-        if time.monotonic() > deadline or not thread.is_alive():
-            server.should_exit = True
-            raise RuntimeError("echo server did not start")
-        time.sleep(0.02)
-    port = server.servers[0].sockets[0].getsockname()[1]
-    try:
-        yield f"http://127.0.0.1:{port}/mcp"
-    finally:
-        server.should_exit = True
-        thread.join(timeout=_SERVER_START_TIMEOUT_S)
+    with serve_in_thread(build_app(["127.0.0.1:*"])) as base_url:
+        yield f"{base_url}/mcp"
 
 
 @pytest.fixture

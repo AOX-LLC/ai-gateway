@@ -26,7 +26,7 @@ GROUP BY t.id, c.id
 """
 
 _ENABLED_UPSTREAMS = """
-SELECT id, namespace, url, connect_timeout_ms, call_timeout_ms
+SELECT id, namespace, url, connect_timeout_ms, call_timeout_ms, credential_env
 FROM upstream_servers
 WHERE enabled
 ORDER BY namespace
@@ -83,6 +83,7 @@ class GatewayRegistry:
                 url=row["url"],
                 connect_timeout_s=row["connect_timeout_ms"] / 1000,
                 call_timeout_s=row["call_timeout_ms"] / 1000,
+                credential_env=row["credential_env"],
             )
             for row in rows
         ]
@@ -206,14 +207,21 @@ class AdminRegistry:
         return cursor.rowcount
 
     async def upsert_upstream(
-        self, namespace: str, url: str, connect_timeout_ms: int, call_timeout_ms: int
+        self,
+        namespace: str,
+        url: str,
+        connect_timeout_ms: int,
+        call_timeout_ms: int,
+        credential_env: str | None = None,
     ) -> None:
         async with self._connection.transaction():
             await self._connection.execute(
-                "INSERT INTO upstream_servers (namespace, url, connect_timeout_ms, call_timeout_ms)"
-                " VALUES (%s, %s, %s, %s)"
+                "INSERT INTO upstream_servers"
+                " (namespace, url, connect_timeout_ms, call_timeout_ms, credential_env)"
+                " VALUES (%s, %s, %s, %s, %s)"
                 " ON CONFLICT (namespace) DO UPDATE SET url = EXCLUDED.url,"
                 " connect_timeout_ms = EXCLUDED.connect_timeout_ms,"
-                " call_timeout_ms = EXCLUDED.call_timeout_ms, enabled = true, updated_at = now()",
-                (namespace, url, connect_timeout_ms, call_timeout_ms),
+                " call_timeout_ms = EXCLUDED.call_timeout_ms,"
+                " credential_env = EXCLUDED.credential_env, enabled = true, updated_at = now()",
+                (namespace, url, connect_timeout_ms, call_timeout_ms, credential_env),
             )

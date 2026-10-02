@@ -39,6 +39,12 @@ StrictInput = ConfigDict(extra="forbid")
 """The model_config every tool input model uses, so its schema says additionalProperties: false."""
 
 
+class NoArguments(BaseModel):
+    """The input model of a tool that takes no arguments."""
+
+    model_config = StrictInput
+
+
 class ToolError(Exception):
     """A failure the model should see and can react to: returned as an error result,
     not a protocol error. The message must be safe to show the client."""

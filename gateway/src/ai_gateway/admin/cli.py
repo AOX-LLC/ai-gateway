@@ -100,6 +100,11 @@ def _parser() -> argparse.ArgumentParser:
     upstream.add_argument("url")
     upstream.add_argument("--connect-timeout-ms", type=int, default=5000)
     upstream.add_argument("--call-timeout-ms", type=int, default=30000)
+    upstream.add_argument(
+        "--credential-env",
+        metavar="NAME",
+        help="name of the environment variable holding the service credential to send",
+    )
     upstream.set_defaults(handler=_upstream_add)
 
     seed = commands.add_parser(
@@ -188,7 +193,11 @@ async def _token_revoke(database_url: str, args: argparse.Namespace) -> None:
 async def _upstream_add(database_url: str, args: argparse.Namespace) -> None:
     async with await AsyncConnection.connect(database_url) as connection:
         await AdminRegistry(connection).upsert_upstream(
-            args.namespace, args.url, args.connect_timeout_ms, args.call_timeout_ms
+            args.namespace,
+            args.url,
+            args.connect_timeout_ms,
+            args.call_timeout_ms,
+            args.credential_env,
         )
     print(f"upstream {args.namespace}: {args.url}")
 
