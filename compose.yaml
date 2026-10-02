@@ -1,5 +1,15 @@
 name: ai-gateway
 
+# One image serves migrate, gateway and admin. GIT_COMMIT and GIT_BRANCH end up on
+# /healthz; export them before building, e.g.
+#   GIT_COMMIT=$(git rev-parse --short HEAD) GIT_BRANCH=$(git branch --show-current) docker compose build
+x-gateway-build: &gateway-build
+  context: .
+  dockerfile: gateway/Dockerfile
+  args:
+    GIT_COMMIT: ${GIT_COMMIT:-unknown}
+    GIT_BRANCH: ${GIT_BRANCH:-unknown}
+
 x-hardening: &hardening
   read_only: true
   tmpfs:
@@ -28,9 +38,7 @@ services:
       retries: 10
 
   migrate:
-    build:
-      context: .
-      dockerfile: gateway/Dockerfile
+    build: *gateway-build
     image: ai-gateway-gateway
     command: ["gateway-admin", "migrate"]
     <<: *hardening
@@ -42,9 +50,7 @@ services:
     restart: "no"
 
   gateway:
-    build:
-      context: .
-      dockerfile: gateway/Dockerfile
+    build: *gateway-build
     image: ai-gateway-gateway
     command: ["ai-gateway"]
     restart: unless-stopped
@@ -78,9 +84,7 @@ services:
 
   admin:
     profiles: [tools]
-    build:
-      context: .
-      dockerfile: gateway/Dockerfile
+    build: *gateway-build
     image: ai-gateway-gateway
     entrypoint: ["gateway-admin"]
     <<: *hardening

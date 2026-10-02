@@ -84,6 +84,21 @@ jobs:
       - run: uv sync --frozen
       - run: cp .env.example .env
       - run: docker compose --profile test up -d --build --wait
+        env:
+          GIT_COMMIT: ${{ github.sha }}
+          GIT_BRANCH: ${{ github.head_ref || github.ref_name }}
+      - name: Health check reports the build
+        env:
+          EXPECTED_COMMIT: ${{ github.sha }}
+        run: |
+          curl -sSf http://127.0.0.1:4401/healthz | python3 -c '
+          import json, os, sys
+          health = json.load(sys.stdin)
+          print(health)
+          assert health["status"] == "ok"
+          assert health["commit"] == os.environ["EXPECTED_COMMIT"]
+          assert health["schema_version"] >= 1
+          '
       - name: Acceptance check through the gateway
         shell: bash
         run: |

@@ -24,6 +24,10 @@ class GatewaySettings(BaseSettings):
     max_sessions: Annotated[int, Field(ge=1)] = 1000
     max_sessions_per_client: Annotated[int, Field(ge=1)] = 20
     catalog_refresh_s: Annotated[float, Field(gt=0)] = 60.0
+    git_commit: str = "unknown"
+    """Set from the image's GIT_COMMIT build argument; reported on /healthz."""
+    git_branch: str = "unknown"
+    """Set from the image's GIT_BRANCH build argument; reported on /healthz."""
 
     @field_validator("allowed_hosts", mode="before")
     @classmethod

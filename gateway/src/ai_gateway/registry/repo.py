@@ -63,6 +63,14 @@ class GatewayRegistry:
                 "UPDATE client_tokens SET last_used_at = %s WHERE id = %s", (used_at, token_id)
             )
 
+    async def schema_version(self) -> int:
+        """The newest applied migration, or 0 for an empty database."""
+        async with self._pool.connection() as connection:
+            cursor = await connection.execute(
+                "SELECT coalesce(max(version), 0) FROM schema_migrations"
+            )
+            return _first_column(await cursor.fetchone(), int)
+
     async def enabled_upstreams(self) -> list[UpstreamServer]:
         async with self._pool.connection() as connection:
             cursor = connection.cursor(row_factory=dict_row)

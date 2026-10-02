@@ -11,6 +11,10 @@ COPY servers/ servers/
 RUN uv sync --frozen --no-dev --package ai-gateway --no-editable --python /usr/local/bin/python
 
 FROM python:3.12-slim
+# Reported on /healthz. Pass them at build time; outside a git checkout they stay "unknown".
+ARG GIT_COMMIT=unknown
+ARG GIT_BRANCH=unknown
+ENV GATEWAY_GIT_COMMIT=$GIT_COMMIT GATEWAY_GIT_BRANCH=$GIT_BRANCH
 RUN useradd --system --uid 10001 --no-create-home --shell /usr/sbin/nologin app
 COPY --from=builder /app/.venv /app/.venv
 ENV PATH=/app/.venv/bin:$PATH PYTHONUNBUFFERED=1

@@ -5,6 +5,7 @@ import threading
 import time
 from collections.abc import AsyncGenerator, Awaitable, Callable, Iterator
 from contextlib import asynccontextmanager
+from importlib.metadata import version
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -235,3 +236,16 @@ async def test_raw_tokens_never_appear_in_logs(
 
     for token in tokens.values():
         assert token.plaintext.split("_", 2)[2] not in caplog.text
+
+
+async def test_healthz_reports_the_running_build(gateway: RunningGateway) -> None:
+    async with httpx2.AsyncClient() as http_client:
+        response = await http_client.get(gateway.url.removesuffix("/mcp") + "/healthz")
+
+    health = response.json()
+    assert response.status_code == 200
+    assert health["status"] == "ok"
+    assert (health["commit"], health["branch"]) == ("unknown", "unknown")
+    assert health["version"] == version("ai-gateway")
+    assert health["schema_version"] == 2
+    assert health["uptime_s"] >= 0
