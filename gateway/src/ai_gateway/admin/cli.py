@@ -79,7 +79,7 @@ def _parser() -> argparse.ArgumentParser:
 
     issue = commands.add_parser("token-issue", help="issue a token (printed once)")
     issue.add_argument("--client", required=True)
-    issue.add_argument("--expires-in-days", type=int)
+    issue.add_argument("--expires-in-days", type=_positive_int)
     issue.add_argument("--label", default="")
     issue.set_defaults(handler=_token_issue)
 
@@ -107,6 +107,13 @@ def _parser() -> argparse.ArgumentParser:
     seed.add_argument("--echo-url", default="http://echo:8000/mcp")
     seed.set_defaults(handler=_seed_test)
     return parser
+
+
+def _positive_int(value: str) -> int:
+    number = int(value)
+    if number < 1:
+        raise argparse.ArgumentTypeError(f"must be at least 1, got {number}")
+    return number
 
 
 def _verb(status: ClientStatus) -> str:
@@ -143,7 +150,9 @@ async def _scope_change(database_url: str, args: argparse.Namespace) -> None:
 
 async def _token_issue(database_url: str, args: argparse.Namespace) -> None:
     expires_at = (
-        datetime.now(UTC) + timedelta(days=args.expires_in_days) if args.expires_in_days else None
+        datetime.now(UTC) + timedelta(days=args.expires_in_days)
+        if args.expires_in_days is not None
+        else None
     )
     async with await AsyncConnection.connect(database_url) as connection:
         registry = AdminRegistry(connection)
