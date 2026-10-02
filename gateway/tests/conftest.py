@@ -14,7 +14,15 @@ from psycopg_pool import AsyncConnectionPool
 from ai_gateway.auth.tokens import IssuedToken, generate_token
 from ai_gateway.registry import MIGRATIONS_PACKAGE
 from ai_gateway.registry.repo import AdminRegistry
+from crm_server import CONNECTION_KWARGS as CRM_CONNECTION_KWARGS
+from crm_server import MIGRATIONS_PACKAGE as CRM_MIGRATIONS_PACKAGE
+from crm_server import ROLE as CRM_ROLE
+from crm_server import SCHEMA as CRM_SCHEMA
+from crm_server.seed import Dataset as CrmDataset
+from crm_server.seed import build_dataset as build_crm_dataset
+from crm_server.seed import insert_dataset as insert_crm_dataset
 from echo_server.server import build_app
+from harborline_setup.crm import grant_crm_access
 from harborline_setup.shared import restrict_database_access
 from harborline_setup.ticketing import grant_ticketing_access
 from mcp_common.migrate import apply_migrations
@@ -43,7 +51,7 @@ async def test_database_url(anyio_backend: str) -> str:
         await connection.execute("CREATE SCHEMA public")
         # The same model as harborline-setup: PUBLIC gets nothing, and the roles that need
         # the database and its public schema (the gateway's) are granted it by name.
-        await restrict_database_access(connection, [TICKETING_ROLE])
+        await restrict_database_access(connection, [TICKETING_ROLE, CRM_ROLE])
     await apply_migrations(url, MIGRATIONS_PACKAGE)
     return url
 
@@ -149,6 +157,50 @@ async def ticketing_pool(
     ticketing_app_url: str, ticketing_data: Dataset
 ) -> AsyncIterator[AsyncConnectionPool]:
     pool = AsyncConnectionPool(ticketing_app_url, kwargs=TICKETING_CONNECTION_KWARGS, open=False)
+    await pool.open()
+    try:
+        yield pool
+    finally:
+        await pool.close()
+
+
+@pytest.fixture
+def crm_app_url(test_database_url: str) -> str:
+    """The test database as the CRM server's own role, crm_app."""
+    url = os.environ.get("CRM_TEST_APP_DATABASE_URL")
+    if not url:
+        pytest.skip("CRM_TEST_APP_DATABASE_URL is not set")
+    return url
+
+
+@pytest.fixture(scope="session")
+async def crm_schema(test_database_url: str) -> None:
+    """A fresh crm schema, built the way harborline-setup builds it."""
+    async with await psycopg.AsyncConnection.connect(test_database_url, autocommit=True) as conn:
+        await conn.execute(f"DROP SCHEMA IF EXISTS {CRM_SCHEMA} CASCADE".encode())
+        await conn.execute(f"CREATE SCHEMA {CRM_SCHEMA}".encode())
+        await conn.execute(f"REVOKE ALL ON SCHEMA {CRM_SCHEMA} FROM PUBLIC".encode())
+    await apply_migrations(test_database_url, CRM_MIGRATIONS_PACKAGE, CRM_SCHEMA)
+    async with await psycopg.AsyncConnection.connect(test_database_url, autocommit=True) as conn:
+        await grant_crm_access(conn)
+
+
+@pytest.fixture
+async def crm_data(test_database_url: str, crm_schema: None) -> CrmDataset:
+    """The deterministic CRM seed, reloaded before every test."""
+    dataset = build_crm_dataset()
+    async with await psycopg.AsyncConnection.connect(test_database_url) as conn:
+        await conn.execute(f"SET search_path TO {CRM_SCHEMA}".encode())
+        await conn.execute(
+            "TRUNCATE activity_notes, deals, contacts, accounts RESTART IDENTITY CASCADE"
+        )
+        await insert_crm_dataset(conn, dataset)
+    return dataset
+
+
+@pytest.fixture
+async def crm_pool(crm_app_url: str, crm_data: CrmDataset) -> AsyncIterator[AsyncConnectionPool]:
+    pool = AsyncConnectionPool(crm_app_url, kwargs=CRM_CONNECTION_KWARGS, open=False)
     await pool.open()
     try:
         yield pool
