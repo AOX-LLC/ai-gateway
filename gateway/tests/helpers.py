@@ -2,11 +2,14 @@
 
 import threading
 import time
-from collections.abc import Iterator
-from contextlib import contextmanager
+from collections.abc import AsyncGenerator, Iterator
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 
+import httpx2
 import uvicorn
+from mcp.client import Client
+from mcp.client.streamable_http import streamable_http_client
 from pydantic import SecretStr
 from starlette.types import ASGIApp
 
@@ -52,3 +55,14 @@ def run_gateway(database_url: str, workdir: Path) -> Iterator[RunningGateway]:
     settings = GatewaySettings(database_url=SecretStr(database_url), pipeline_file=pipeline_file)
     with serve_in_thread(create_app(settings, events)) as base_url:
         yield RunningGateway(f"{base_url}/mcp", events)
+
+
+@asynccontextmanager
+async def connect(url: str, token: str) -> AsyncGenerator[Client]:
+    """An MCP client of the gateway (or of a server), with its bearer token."""
+    headers = {"Authorization": f"Bearer {token}"}
+    async with (
+        httpx2.AsyncClient(headers=headers) as http_client,
+        Client(streamable_http_client(url, http_client=http_client), mode="legacy") as client,
+    ):
+        yield client

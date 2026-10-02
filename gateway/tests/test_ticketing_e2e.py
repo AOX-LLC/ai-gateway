@@ -2,8 +2,7 @@
 client attribution as they run in the stack."""
 
 import json
-from collections.abc import AsyncGenerator, Awaitable, Callable, Iterator
-from contextlib import asynccontextmanager
+from collections.abc import Awaitable, Callable, Iterator
 from importlib.metadata import version
 from pathlib import Path
 from typing import Any, cast
@@ -12,8 +11,6 @@ from uuid import UUID
 import httpx2
 import psycopg
 import pytest
-from mcp.client import Client
-from mcp.client.streamable_http import streamable_http_client
 from mcp.shared.exceptions import MCPError
 from mcp.types import INVALID_PARAMS
 from pydantic import SecretStr
@@ -25,7 +22,7 @@ from ai_gateway.registry.tool_policies import load_tool_policies
 from mcp_common.attribution import CLIENT_META_KEY
 from mcp_common.migrate import load_migrations
 from mcp_common.schema_contract import check_input_schema
-from tests.helpers import RunningGateway, run_gateway, serve_in_thread
+from tests.helpers import RunningGateway, connect, run_gateway, serve_in_thread
 from ticketing_server import MIGRATIONS_PACKAGE as TICKETING_MIGRATIONS_PACKAGE
 from ticketing_server.seed import Dataset
 from ticketing_server.server import build_app
@@ -118,16 +115,6 @@ def gateway(
 ) -> Iterator[RunningGateway]:
     with run_gateway(test_database_url, tmp_path) as running:
         yield running
-
-
-@asynccontextmanager
-async def connect(url: str, token: str) -> AsyncGenerator[Client]:
-    headers = {"Authorization": f"Bearer {token}"}
-    async with (
-        httpx2.AsyncClient(headers=headers) as http_client,
-        Client(streamable_http_client(url, http_client=http_client), mode="legacy") as client,
-    ):
-        yield client
 
 
 async def _requested_by(url: str, ticket_id: str) -> str:
