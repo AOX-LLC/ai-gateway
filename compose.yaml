@@ -10,6 +10,12 @@ x-gateway-build: &gateway-build
     GIT_COMMIT: ${GIT_COMMIT:-}
     GIT_BRANCH: ${GIT_BRANCH:-}
 
+# One image serves the setup one-shot and every MCP server (all of Harborline Supply Co.,
+# a fictional company).
+x-servers-build: &servers-build
+  context: .
+  dockerfile: servers/Dockerfile
+
 x-hardening: &hardening
   read_only: true
   tmpfs:
@@ -61,6 +67,8 @@ services:
       GATEWAY_PIPELINE_FILE: ${GATEWAY_PIPELINE_FILE_IN_CONTAINER:-/app/config/pipeline.toml}
       GATEWAY_ALLOWED_HOSTS: ${GATEWAY_ALLOWED_HOSTS:-127.0.0.1:*,localhost:*}
       GATEWAY_LOG_LEVEL: ${GATEWAY_LOG_LEVEL:-INFO}
+      # The gateway presents this to the ticketing server (upstream_servers.credential_env).
+      TICKETING_SERVICE_TOKEN: ${TICKETING_SERVICE_TOKEN:?set it in .env}
     ports:
       - "127.0.0.1:4401:4401"
     volumes:
@@ -76,6 +84,49 @@ services:
         - python
         - -c
         - import urllib.request; urllib.request.urlopen("http://127.0.0.1:4401/healthz", timeout=3)
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    <<: *hardening
+
+  # Runs as the database owner: creates each server's role and schema, migrates and seeds
+  # them. The servers themselves connect only as their own least-privilege role.
+  servers-setup:
+    build: *servers-build
+    image: harborline-servers
+    command: ["harborline-setup"]
+    <<: *hardening
+    environment:
+      HARBORLINE_SETUP_DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      TICKETING_DB_PASSWORD: ${TICKETING_DB_PASSWORD:?set it in .env}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  ticketing:
+    build: *servers-build
+    image: harborline-servers
+    command: ["ticketing-server"]
+    restart: unless-stopped
+    environment:
+      TICKETING_BIND: 0.0.0.0
+      TICKETING_PORT: "4412"
+      TICKETING_DATABASE_URL: postgresql://ticketing_app:${TICKETING_DB_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      TICKETING_SERVICE_TOKEN: ${TICKETING_SERVICE_TOKEN:?set it in .env}
+      TICKETING_ALLOWED_HOSTS: ticketing:*,127.0.0.1:*,localhost:*
+    ports:
+      - "127.0.0.1:4412:4412"
+    depends_on:
+      servers-setup:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen("http://127.0.0.1:4412/healthz", timeout=3)
       interval: 10s
       timeout: 5s
       retries: 5
