@@ -38,11 +38,23 @@ FROM tickets
 WHERE id = %s
 """  # noqa: S608
 
-_PUBLIC_COMMENTS = """
+MAX_COMMENTS_RETURNED = 20
+
+# The newest comments, shown oldest first so they read as a conversation.
+_RECENT_PUBLIC_COMMENTS = """
 SELECT id, author, body, created_at
-FROM comments
-WHERE ticket_id = %s AND visibility = 'public'
+FROM (
+    SELECT id, author, body, created_at
+    FROM comments
+    WHERE ticket_id = %(ticket_id)s AND visibility = 'public'
+    ORDER BY id DESC
+    LIMIT %(limit)s
+) AS recent
 ORDER BY id
+"""
+
+_PUBLIC_COMMENT_COUNT = """
+SELECT count(*) FROM comments WHERE ticket_id = %s AND visibility = 'public'
 """
 
 
@@ -67,9 +79,17 @@ class TicketRepo:
             ticket = await cursor.fetchone()
             if ticket is None:
                 raise ticket_not_found(ticket_id)
-            await cursor.execute(_PUBLIC_COMMENTS, (ticket_id,))
+            await cursor.execute(
+                _RECENT_PUBLIC_COMMENTS, {"ticket_id": ticket_id, "limit": MAX_COMMENTS_RETURNED}
+            )
             comments = [PublicComment.model_validate(row) for row in await cursor.fetchall()]
-        return TicketDetail.model_validate({**ticket, "comments": comments})
+            await cursor.execute(_PUBLIC_COMMENT_COUNT, (ticket_id,))
+            total = await cursor.fetchone()
+        if total is None:
+            raise RuntimeError("count(*) returned no row")
+        return TicketDetail.model_validate(
+            {**ticket, "comments": comments, "comments_total": total["count"]}
+        )
 
     async def create_ticket(
         self, subject: str, description: str, priority: str, account_id: str, requested_by: str

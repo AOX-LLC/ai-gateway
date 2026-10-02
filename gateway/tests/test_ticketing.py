@@ -126,7 +126,36 @@ async def test_get_ticket_returns_the_ticket_with_public_comments_only(
     assert detail["id"] == ticket.id
     assert detail["description"] == ticket.description
     assert [c["body"] for c in detail["comments"]] == public
+    assert detail["comments_total"] == len(public)
     assert "internal_notes" not in detail
+
+
+async def test_get_ticket_returns_only_the_twenty_newest_public_comments(
+    client: Client, test_database_url: str
+) -> None:
+    before = await _rows(
+        test_database_url,
+        "SELECT count(*) FROM comments WHERE ticket_id = 'TKT-000001' AND visibility = 'public'",
+    )
+    async with await psycopg.AsyncConnection.connect(test_database_url) as connection:
+        await connection.execute("SET search_path TO ticketing")
+        for number in range(1, 26):
+            visibility = "internal" if number % 5 == 0 else "public"
+            await connection.execute(
+                "INSERT INTO comments (ticket_id, author, visibility, body, requested_by)"
+                " VALUES ('TKT-000001', 'a.b', %s, %s, 'direct')",
+                (visibility, f"bulk comment {number}"),
+            )
+
+    detail = _structured(await client.call_tool("get_ticket", {"ticket_id": "TKT-000001"}))
+
+    bodies = [c["body"] for c in detail["comments"]]
+    assert len(bodies) == 20
+    assert detail["comments_total"] == before[0][0] + 20  # 25 inserted, 5 of them internal
+    assert bodies[-1] == "bulk comment 24"
+    assert not any(body == "bulk comment 25" for body in bodies)  # 25 is internal
+    ids = [c["id"] for c in detail["comments"]]
+    assert ids == sorted(ids)
 
 
 async def test_get_ticket_for_an_unknown_id_is_a_tool_error(client: Client) -> None:

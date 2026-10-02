@@ -87,6 +87,9 @@ class TicketDetail(TicketSummary):
     description: str
     requested_by: str
     comments: list[PublicComment]
+    """The newest public comments (at most 20), oldest first."""
+    comments_total: int
+    """How many public comments the ticket has, so a client can tell when some are omitted."""
 
 
 class ListTicketsOutput(BaseModel):

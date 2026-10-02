@@ -61,7 +61,7 @@ def build_toolset(repo: TicketRepo) -> StrictToolset:
     )
     toolset.register(
         "get_ticket",
-        "Get one ticket with its public comments.",
+        "Get one ticket with its newest public comments (at most 20) and the total number of them.",
         GetTicketInput,
         TicketDetail,
         get_ticket,

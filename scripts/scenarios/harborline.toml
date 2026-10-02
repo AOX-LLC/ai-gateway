@@ -18,7 +18,7 @@ allowed_for = ["harborline-support-bot", "harborline-ops-bot"]
 [[call]]
 tool = "get_ticket"
 arguments = { ticket_id = "TKT-000001" }
-expect_text = "TKT-000001"
+expect_text = "comments_total"
 allowed_for = ["harborline-support-bot", "harborline-ops-bot"]
 
 [[call]]
