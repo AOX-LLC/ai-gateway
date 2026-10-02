@@ -1,3 +1,4 @@
+import anyio
 import psycopg
 import pytest
 
@@ -15,6 +16,29 @@ class CountingSource:
         self.reads += 1
         if self.is_down:
             raise psycopg.OperationalError("connection refused")
+        return self.version
+
+
+class HangingSource:
+    def __init__(self) -> None:
+        self.reads = 0
+
+    async def schema_version(self) -> int:
+        self.reads += 1
+        await anyio.sleep_forever()
+        raise AssertionError("sleep_forever returned")
+
+
+class GatedSource(CountingSource):
+    """Answers only once released, so callers can pile up behind one read."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.release = anyio.Event()
+
+    async def schema_version(self) -> int:
+        self.reads += 1
+        await self.release.wait()
         return self.version
 
 
@@ -47,6 +71,61 @@ async def test_an_unreadable_schema_version_is_null_and_not_retried_every_call()
 
     assert await cache.current() is None
     assert await cache.current() is None
+    assert source.reads == 1
+
+
+@pytest.mark.anyio
+async def test_a_hanging_read_is_null_after_its_timeout_and_cached() -> None:
+    source, clock = HangingSource(), Clock()
+    cache = SchemaVersionCache(source, read_timeout_s=0.05, clock=clock)
+
+    with anyio.fail_after(2):
+        first = await cache.current()
+        second = await cache.current()
+
+    assert (first, second) == (None, None)
+    assert source.reads == 1
+
+
+@pytest.mark.anyio
+async def test_the_default_read_timeout_is_two_seconds() -> None:
+    assert SchemaVersionCache(CountingSource()).read_timeout_s == 2.0
+
+
+@pytest.mark.anyio
+async def test_concurrent_callers_share_one_read() -> None:
+    source, clock = GatedSource(), Clock()
+    cache = SchemaVersionCache(source, clock=clock)
+    answers: list[str | None] = []
+
+    async def ask() -> None:
+        answers.append(await cache.current())
+
+    async with anyio.create_task_group() as task_group:
+        for _ in range(10):
+            task_group.start_soon(ask)
+        await anyio.wait_all_tasks_blocked()
+        source.release.set()
+
+    assert answers == ["0002"] * 10
+    assert source.reads == 1
+
+
+@pytest.mark.anyio
+async def test_callers_waiting_behind_a_hanging_read_all_get_null_after_one_timeout() -> None:
+    source, clock = HangingSource(), Clock()
+    cache = SchemaVersionCache(source, read_timeout_s=0.05, clock=clock)
+    answers: list[str | None] = []
+
+    async def ask() -> None:
+        answers.append(await cache.current())
+
+    with anyio.fail_after(2):
+        async with anyio.create_task_group() as task_group:
+            for _ in range(5):
+                task_group.start_soon(ask)
+
+    assert answers == [None] * 5
     assert source.reads == 1
 
 
