@@ -191,6 +191,26 @@ class AdminRegistry:
                 (namespace, tool, effect, notes),
             )
 
+    async def replace_tool_policies(
+        self, namespace: str, policies: Iterable[tuple[str, Effect, str]]
+    ) -> None:
+        """Make the namespace's policies exactly `policies` (tool, effect, notes), in one
+        transaction: a tool missing from the list loses its row and so fails closed."""
+        wanted = list(policies)
+        async with self._connection.transaction():
+            await self._connection.execute(
+                "DELETE FROM tool_policies WHERE namespace = %s AND NOT (tool = ANY(%s))",
+                (namespace, [tool for tool, _, _ in wanted]),
+            )
+            for tool, effect, notes in wanted:
+                await self._connection.execute(
+                    "INSERT INTO tool_policies (namespace, tool, effect, notes)"
+                    " VALUES (%s, %s, %s, %s)"
+                    " ON CONFLICT (namespace, tool) DO UPDATE SET effect = EXCLUDED.effect,"
+                    " notes = EXCLUDED.notes, reviewed_at = now()",
+                    (namespace, tool, effect, notes),
+                )
+
     async def count_live_tokens(self, client_id: UUID) -> int:
         cursor = await self._connection.execute(
             "SELECT count(*) FROM client_tokens WHERE client_id = %s AND revoked_at IS NULL"

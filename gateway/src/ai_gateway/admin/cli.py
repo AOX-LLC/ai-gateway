@@ -143,7 +143,8 @@ def _parser() -> argparse.ArgumentParser:
 
     demo = commands.add_parser(
         "seed-demo",
-        help="register the ticketing upstream, load tool policies, create the demo clients",
+        help="register the ticketing upstream, load tool policies (replacing each namespace's"
+        " set exactly), create the demo clients",
     )
     demo.add_argument("--tickets-url", default="http://ticketing:4412/mcp")
     demo.add_argument("--credential-env", default="TICKETING_SERVICE_TOKEN", metavar="NAME")
@@ -295,9 +296,10 @@ async def _seed_demo(database_url: str, args: argparse.Namespace) -> None:
             call_timeout_ms=10000,
             credential_env=args.credential_env,
         )
-        for policy in policies:
-            await registry.upsert_tool_policy(
-                policy.namespace, policy.tool, policy.effect, policy.notes
+        for namespace in sorted({policy.namespace for policy in policies}):
+            await registry.replace_tool_policies(
+                namespace,
+                [(p.tool, p.effect, p.notes) for p in policies if p.namespace == namespace],
             )
         for name, (description, scopes) in DEMO_CLIENTS.items():
             client_id = await registry.upsert_client(name, description)

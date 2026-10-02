@@ -158,3 +158,44 @@ async def test_seeding_again_removes_scopes_that_are_no_longer_listed(
     await _admin(monkeypatch, test_database_url, "seed-test")
 
     assert (await _scopes_by_client(test_database_url))["echo-test-narrow"] == ["echo__say"]
+
+
+async def test_seed_demo_removes_policies_that_are_no_longer_in_the_file(
+    monkeypatch: pytest.MonkeyPatch,
+    test_database_url: str,
+    clean_database: None,
+    admin_registry: AdminRegistry,
+    tmp_path: Path,
+) -> None:
+    await admin_registry.replace_tool_policies("tickets", [("get_ticket", "read", "")])
+    await admin_registry.replace_tool_policies("other", [("keep_me", "write", "")])
+    await admin_registry.upsert_tool_policy("tickets", "retired_tool", "read")
+    policies = tmp_path / "policies.toml"
+    policies.write_text(
+        '[tickets.get_ticket]\neffect = "read"\n\n[tickets.assign]\neffect = "write"\n'
+    )
+
+    await _admin(monkeypatch, test_database_url, "seed-demo", "--policies", str(policies))
+
+    rows = await _rows(
+        test_database_url, "SELECT namespace, tool, effect FROM tool_policies ORDER BY 1, 2"
+    )
+    assert rows == [
+        ("other", "keep_me", "write"),
+        ("tickets", "assign", "write"),
+        ("tickets", "get_ticket", "read"),
+    ]
+
+
+async def test_replacing_policies_is_all_or_nothing(
+    test_database_url: str, clean_database: None, admin_registry: AdminRegistry
+) -> None:
+    await admin_registry.replace_tool_policies("tickets", [("get_ticket", "read", "")])
+
+    with pytest.raises(psycopg.errors.CheckViolation):
+        await admin_registry.replace_tool_policies(
+            "tickets", [("assign", "write", ""), ("bad name!", "read", "")]
+        )
+
+    rows = await _rows(test_database_url, "SELECT tool FROM tool_policies")
+    assert rows == [("get_ticket",)]
