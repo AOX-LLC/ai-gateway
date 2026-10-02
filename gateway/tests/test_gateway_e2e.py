@@ -1,8 +1,6 @@
 """The whole gateway over HTTP: real database, real echo upstream, the SDK's own client."""
 
 import logging
-import threading
-import time
 from collections.abc import AsyncGenerator, Awaitable, Callable, Iterator
 from contextlib import asynccontextmanager
 from importlib.metadata import version
@@ -12,20 +10,16 @@ from uuid import UUID
 
 import httpx2
 import pytest
-import uvicorn
 from mcp.client import Client
 from mcp.client.streamable_http import streamable_http_client
 from mcp.shared.exceptions import MCPError
 from mcp.types import INVALID_PARAMS, TextContent
-from pydantic import SecretStr
 
-from ai_gateway.app import create_app
 from ai_gateway.auth.tokens import IssuedToken
 from ai_gateway.registry import MIGRATIONS_PACKAGE
 from ai_gateway.registry.repo import AdminRegistry
-from ai_gateway.seams.events import MemoryEventSink
-from ai_gateway.settings import GatewaySettings
 from mcp_common.migrate import load_migrations
+from tests.helpers import RunningGateway, run_gateway
 
 pytestmark = [pytest.mark.integration, pytest.mark.anyio]
 
@@ -44,12 +38,6 @@ _INITIALIZE = {
 _MCP_HEADERS = {"Accept": "application/json, text/event-stream"}
 
 
-class RunningGateway:
-    def __init__(self, url: str, events: MemoryEventSink) -> None:
-        self.url = url
-        self.events = events
-
-
 @pytest.fixture
 async def tokens(
     admin_registry: AdminRegistry, make_client: MakeClient, echo_url: str
@@ -65,29 +53,8 @@ async def tokens(
 def gateway(
     test_database_url: str, tokens: dict[str, IssuedToken], tmp_path: Path
 ) -> Iterator[RunningGateway]:
-    pipeline_file = tmp_path / "pipeline.toml"
-    pipeline_file.write_text('[layers]\nscope = "enforce"\n')
-    events = MemoryEventSink()
-    settings = GatewaySettings(
-        database_url=SecretStr(test_database_url), pipeline_file=pipeline_file
-    )
-    server = uvicorn.Server(
-        uvicorn.Config(create_app(settings, events), host="127.0.0.1", port=0, log_level="info")
-    )
-    thread = threading.Thread(target=server.run, daemon=True)
-    thread.start()
-    deadline = time.monotonic() + 15
-    while not server.started:
-        if time.monotonic() > deadline or not thread.is_alive():
-            server.should_exit = True
-            raise RuntimeError("gateway did not start")
-        time.sleep(0.02)
-    port = server.servers[0].sockets[0].getsockname()[1]
-    try:
-        yield RunningGateway(f"http://127.0.0.1:{port}/mcp", events)
-    finally:
-        server.should_exit = True
-        thread.join(timeout=15)
+    with run_gateway(test_database_url, tmp_path) as running:
+        yield running
 
 
 def _tampered(token: str) -> str:

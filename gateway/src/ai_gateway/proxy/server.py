@@ -110,6 +110,7 @@ class GatewayServer:
                     resolved.upstream,
                     approved_call.upstream_tool,
                     approved_call.arguments,
+                    ctx.client.name,
                 )
             except UpstreamCallError as error:
                 logger.warning("request %s: %s", ctx.request_id, error, exc_info=error.__cause__)

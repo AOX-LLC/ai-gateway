@@ -4,9 +4,15 @@ import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
+from pathlib import Path
 
 import uvicorn
+from pydantic import SecretStr
 from starlette.types import ASGIApp
+
+from ai_gateway.app import create_app
+from ai_gateway.seams.events import MemoryEventSink
+from ai_gateway.settings import GatewaySettings
 
 _SERVER_START_TIMEOUT_S = 10.0
 
@@ -29,3 +35,20 @@ def serve_in_thread(app: ASGIApp) -> Iterator[str]:
     finally:
         server.should_exit = True
         thread.join(timeout=_SERVER_START_TIMEOUT_S)
+
+
+class RunningGateway:
+    def __init__(self, url: str, events: MemoryEventSink) -> None:
+        self.url = url
+        self.events = events
+
+
+@contextmanager
+def run_gateway(database_url: str, workdir: Path) -> Iterator[RunningGateway]:
+    """The whole gateway on a free port, with only the scope layer, recording its events."""
+    pipeline_file = workdir / "pipeline.toml"
+    pipeline_file.write_text('[layers]\nscope = "enforce"\n')
+    events = MemoryEventSink()
+    settings = GatewaySettings(database_url=SecretStr(database_url), pipeline_file=pipeline_file)
+    with serve_in_thread(create_app(settings, events)) as base_url:
+        yield RunningGateway(f"{base_url}/mcp", events)

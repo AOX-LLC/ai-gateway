@@ -98,7 +98,7 @@ async def test_the_catalog_and_calls_authenticate_with_the_credential(
 
     async with running_catalog(catalog), _running_pool() as pool:
         await eventually(lambda: catalog.resolve("guarded__ping") is not None)
-        result = await pool.call_tool("session-a", uuid4(), upstream, "ping", {})
+        result = await pool.call_tool("session-a", uuid4(), upstream, "ping", {}, "some-client")
 
     assert result.structured_content == {"pong": True}
     assert CREDENTIAL not in caplog.text
