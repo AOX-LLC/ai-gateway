@@ -1,15 +1,19 @@
 """The request pipeline: configuration, ordering, modes, failing closed, and records."""
 
+import logging
 from collections.abc import Sequence
+from dataclasses import replace
 from typing import Any
 from uuid import uuid4
 
+import anyio
 import pytest
 from mcp.types import CallToolResult, TextContent, Tool
 
 from ai_gateway.pipeline.config import PipelineConfigError, parse_pipeline_config
 from ai_gateway.pipeline.layers.scope import ScopeLayer
 from ai_gateway.pipeline.runner import (
+    DEFAULT_EMIT_TIMEOUT_S,
     Blocked,
     Forwarded,
     Pipeline,
@@ -28,7 +32,7 @@ from ai_gateway.pipeline.types import (
     ToolCall,
     Verdict,
 )
-from ai_gateway.seams.events import MemoryEventSink
+from ai_gateway.seams.events import EventSink, GatewayEvent, MemoryEventSink
 
 
 class TraceLayer(BaseLayer):
@@ -87,12 +91,15 @@ def _catalog_tool(name: str) -> CatalogTool:
 
 
 def _pipeline(
-    modes: dict[str, str], calls: list[str], events: MemoryEventSink
+    modes: dict[str, str],
+    calls: list[str],
+    events: EventSink,
+    emit_timeout_s: float = DEFAULT_EMIT_TIMEOUT_S,
 ) -> tuple[Pipeline, FirstLayer, SecondLayer]:
     config = parse_pipeline_config({"layers": modes}, ORDER)
     first, second = FirstLayer(), SecondLayer()
     first.calls = second.calls = calls
-    return Pipeline([first, second], config, events), first, second
+    return Pipeline([first, second], config, events, emit_timeout_s), first, second
 
 
 def _layer_decisions(events: MemoryEventSink) -> list[dict[str, Any]]:
@@ -366,3 +373,115 @@ async def test_a_failing_filter_hides_every_tool_in_enforce_mode() -> None:
 
     assert listed == []
     assert _layer_decisions(events)[0]["verdict"] == "error"
+
+
+# A sink that fails or stalls must never change what the client gets
+
+
+class RaisingSink:
+    async def emit(self, event: GatewayEvent) -> None:
+        raise RuntimeError("sink is broken")
+
+
+class HangingSink:
+    async def emit(self, event: GatewayEvent) -> None:
+        await anyio.sleep_forever()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("sink", [RaisingSink(), HangingSink()], ids=["raising", "hanging"])
+async def test_a_failing_sink_leaves_a_forwarded_result_unchanged(sink: EventSink) -> None:
+    calls: list[str] = []
+    pipeline, _, _ = _pipeline({}, calls, sink, emit_timeout_s=0.05)
+
+    with anyio.fail_after(2):
+        outcome = await pipeline.call_tool(_context({"echo__say"}), _call(), _forwarder(calls))
+
+    assert isinstance(outcome, Forwarded)
+    assert outcome.result.content == [TextContent(type="text", text="hi")]
+    assert calls == ["first.before", "second.before", "upstream", "first.after", "second.after"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("sink", [RaisingSink(), HangingSink()], ids=["raising", "hanging"])
+async def test_a_failing_sink_leaves_a_block_unchanged(sink: EventSink) -> None:
+    calls: list[str] = []
+    pipeline, first, _ = _pipeline({}, calls, sink, emit_timeout_s=0.05)
+    first.deny_before = True
+
+    with anyio.fail_after(2):
+        outcome = await pipeline.call_tool(_context(set()), _call(), _forwarder(calls))
+
+    assert isinstance(outcome, Blocked)
+    assert calls == ["first.before"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("sink", [RaisingSink(), HangingSink()], ids=["raising", "hanging"])
+async def test_a_failing_sink_leaves_listing_and_unknown_tool_answers_unchanged(
+    sink: EventSink,
+) -> None:
+    pipeline, _, _ = _pipeline({}, [], sink, emit_timeout_s=0.05)
+    ctx = _context({"echo__say"})
+
+    with anyio.fail_after(2):
+        listed = await pipeline.list_tools(ctx, [_catalog_tool("echo__say")])
+        deny = await pipeline.reject_unknown_tool(ctx, "echo__nope")
+
+    assert [tool.exposed_name for tool in listed] == ["echo__say"]
+    assert deny.code is DenyCode.TOOL_UNAVAILABLE
+
+
+@pytest.mark.anyio
+async def test_a_record_that_cannot_be_built_does_not_fail_the_call(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An oversized payload fails GatewayEvent's own validation, before any sink runs."""
+    calls: list[str] = []
+    events = MemoryEventSink()
+    pipeline, _, _ = _pipeline({}, calls, events)
+    ctx = replace(_context({"echo__say"}), protocol_version="v" * 20_000)
+
+    with caplog.at_level(logging.ERROR, logger="ai_gateway.pipeline.runner"):
+        outcome = await pipeline.call_tool(ctx, _call(), _forwarder(calls))
+        listed = await pipeline.list_tools(ctx, [_catalog_tool("echo__say")])
+
+    assert isinstance(outcome, Forwarded)
+    assert [tool.exposed_name for tool in listed] == ["echo__say"]
+    assert events.events == []
+    assert "v" * 100 not in caplog.text
+
+
+@pytest.mark.anyio
+async def test_a_failing_sink_is_logged_without_the_event(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    calls: list[str] = []
+    pipeline, _, _ = _pipeline({}, calls, RaisingSink())
+    ctx = _context({"echo__say"})
+
+    with caplog.at_level(logging.ERROR, logger="ai_gateway.pipeline.runner"):
+        await pipeline.call_tool(ctx, _call(), _forwarder(calls))
+
+    assert "gateway.tool_call" in caplog.text
+    assert str(ctx.request_id) in caplog.text, "a missing record must be traceable to its request"
+    assert "arguments_sha256" not in caplog.text
+
+
+@pytest.mark.anyio
+async def test_cancellation_is_not_swallowed_while_a_record_is_being_written() -> None:
+    """A client that goes away cancels the request; recording must not absorb that."""
+    calls: list[str] = []
+    pipeline, _, _ = _pipeline({}, calls, HangingSink(), emit_timeout_s=30)
+    outcomes: list[object] = []
+
+    async def request() -> None:
+        outcomes.append(
+            await pipeline.call_tool(_context({"echo__say"}), _call(), _forwarder(calls))
+        )
+
+    with anyio.move_on_after(0.2) as scope:
+        await request()
+
+    assert scope.cancelled_caught
+    assert outcomes == []

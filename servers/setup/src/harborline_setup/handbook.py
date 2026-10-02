@@ -7,7 +7,12 @@ from psycopg import AsyncConnection, sql
 
 from handbook_server import MIGRATIONS_PACKAGE, ROLE, SCHEMA
 from handbook_server.embedding import Embedder
-from harborline_setup.handbook_seed import build_dataset, insert_dataset, is_seeded
+from harborline_setup.handbook_seed import (
+    build_dataset,
+    insert_dataset,
+    is_seeded,
+    sync_superseded,
+)
 from harborline_setup.shared import (
     ensure_role,
     ensure_schema,
@@ -34,7 +39,8 @@ async def setup_handbook(
     """Create the role, schema and extension, migrate, grant, and seed when empty.
 
     Every step is safe to repeat; the grants are applied on every run. The embedding model
-    and the documents folder are read only when there is something to seed."""
+    is read only when there is something to seed; the documents folder is read on every run,
+    to keep which documents are superseded in step with the files."""
     if not password:
         raise ValueError("HANDBOOK_DB_PASSWORD is empty")
     async with await AsyncConnection.connect(owner_url, autocommit=True) as connection:
@@ -48,7 +54,8 @@ async def setup_handbook(
     async with await AsyncConnection.connect(owner_url) as connection:
         await connection.execute(sql.SQL("SET search_path TO {}").format(sql.Identifier(SCHEMA)))
         if await is_seeded(connection):
-            logger.info("handbook is already seeded")
+            changed = await sync_superseded(connection, documents_path)
+            logger.info("handbook is already seeded; %d superseded markers updated", changed)
             return
         dataset = build_dataset(Embedder(model_path), documents_path)
         await insert_dataset(connection, dataset)

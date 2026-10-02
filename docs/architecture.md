@@ -79,9 +79,14 @@ upstream call, so no layer can skip the layers after it or call a tool twice.
 - **One decision record per request.** It holds each layer's mode, verdict, code and
   timing, the outcome, the upstream status, the argument hash, the tool's `effect` and
   `effect_source`, the negotiated protocol version and a fingerprint of the pipeline
-  configuration. It never holds arguments,
-  results or credentials. The scorecard is computed from these records, not from the
-  errors clients see.
+  configuration. It never holds arguments, results or credentials. The scorecard is
+  computed from these records, not from the errors clients see.
+- **Recording is best effort.** It never changes what the client gets. A record that cannot
+  be built, a sink that raises and a sink that does not answer within 2 seconds are logged
+  at ERROR on `ai_gateway.pipeline.runner`, with the request id, and the request goes on;
+  cancellation is not swallowed. A request can therefore end with no record, and that log
+  line is the only trace of it. The 2-second bound cannot interrupt a sink that blocks the
+  event loop without awaiting, so a sink must not.
 
 ### Configuration
 
@@ -229,7 +234,7 @@ schema and role:
 | CRM | 4411 | `crm` | Accounts `ACC-00001` to `ACC-00040`, contacts, deals and activity notes |
 | Ticketing | 4412 | `tickets` | Support tickets and comments for the same accounts |
 
-All three publish on `127.0.0.1` only.
+They publish no port on the host. See [Networks](#networks) below.
 
 ### Shared foundation (`servers/common`, module `mcp_common`)
 
@@ -297,7 +302,7 @@ Read-only, two tools, both with `read` policies:
 | Tool | Does |
 | --- | --- |
 | `search(query, category?, limit)` | Up to 10 documents (default 5), each with its best-matching passage (at most 400 characters), best first |
-| `get_document(document_id)` | A published document's title, category, date and full text |
+| `get_document(document_id)` | A published document's title, category, date and full text; a superseded one also names the edition that replaced it |
 
 - **Restricted documents are excluded in the database, before ranking.** The three
   restricted documents sit in base tables (`handbook.documents`, `handbook.chunks`) that
@@ -306,6 +311,15 @@ Read-only, two tools, both with `read` policies:
   rights (and which are security barriers). Restricted text is therefore unreachable by the
   server's role even with a bug in a query. The search SQL also repeats the condition inside
   each ranking step, so the exclusion happens before ranking and `LIMIT`, never afterwards.
+- **Superseded editions are not searched.** A document's `superseded_by` front matter names
+  the edition that replaces it (DOC-007, the 2025 returns policy, by DOC-008). The
+  `searchable_chunks` view leaves such a document out, so no ranking step can return it, but
+  `get_document` still serves it with `superseded_by` and a notice, because an old edition
+  can still be the rule (DOC-008 keeps the earlier rules for orders delivered before 1
+  February 2026). `harborline-setup` refuses a pointer to a missing, restricted or itself
+  superseded document, `published_documents` shows a pointer only when its target is
+  published, and the markers are synced from the files on every setup run, because the seed
+  itself runs only when the schema is empty.
 - **A restricted id looks like a missing one.** `get_document` reads the view, so a
   restricted id returns the same error, `Document 'DOC-xxx' was not found.`, as an id that
   does not exist.
@@ -413,7 +427,7 @@ it or copy its code.
 
 | Seam | Phase 1 | Later |
 | --- | --- | --- |
-| `EventSink` (`seams/events.py`) | Writes JSON lines to the log. Events already follow the audit log's record shape: dotted action, actor id `client:<uuid>`, subject, a small payload with no secret-named keys. | Phase 3 appends them to agent-core's hash-chained audit log. |
+| `EventSink` (`seams/events.py`) | Writes JSON lines to the log. Events already follow the audit log's record shape: dotted action, actor id `client:<uuid>`, subject, a small payload with no secret-named keys. | Phase 3 appends them to agent-core's hash-chained audit log. Phase 3 must decide again whether writing the audit record is fail-open: today a record that cannot be written is dropped, which is wrong for an audit trail of `write` tools. |
 | `ApprovalGate` (`seams/approvals.py`) | Protocol only | Phase 3's `approval` layer submits the call, waits for a person, and checks the approval matches the exact argument hash. |
 | Tracing | OpenTelemetry API only, so it records nothing until an SDK is configured. Span names are in `telemetry/attributes.py`. | Phase 5 configures a self-hosted exporter for the dashboard. |
 
@@ -456,8 +470,8 @@ Any option that crosses a network carries the bearer token, so it must use TLS o
 
 `GET /healthz` needs no token and, like everything else, is published on 127.0.0.1 only.
 The gateway answers 200 while the MCP endpoint is serving and 503 otherwise. The three
-servers (4410, 4411, 4412) use the same format and the same cache (`mcp_common.health`) and
-answer 200 while they can read their own schema version, 503 with `status: "unavailable"` when it cannot.
+servers (4410, 4411, 4412, reachable only inside the Compose network) use the same format
+and the same cache (`mcp_common.health`) and answer 200 while they can read their own schema version, 503 with `status: "unavailable"` when it cannot.
 Their `GIT_COMMIT`/`GIT_BRANCH` come from the build arguments of `servers/Dockerfile`, a
 server's `version` is its own package (`ticketing-server`, `crm-server`, `handbook-server`),
 and `schema_version` is the newest migration in its schema (its role may read that
@@ -481,6 +495,54 @@ itself).
 | Dashboard (Phase 5) | 127.0.0.1:4400 |
 | Gateway | 127.0.0.1:4401 |
 | PostgreSQL | 127.0.0.1:4402 |
-| MCP servers (Phase 2) | 127.0.0.1:4410–4412 (4412: ticketing) |
+| MCP servers (Phase 2) | none on the host; 4410 (handbook), 4411 (CRM) and 4412 (ticketing) inside the `backend` network |
 
-The test-only echo server has no published port.
+The test-only echo server has no published port either.
+
+## Networks
+
+Compose has two networks:
+
+| Network | Kind | Members |
+| --- | --- | --- |
+| `edge` | ordinary bridge | the gateway and PostgreSQL, the two services that publish a port |
+| `backend` | `internal: true` | the three MCP servers, `servers-setup`, `migrate`, `admin`, `direct-check`, the test upstream, and also the gateway and PostgreSQL |
+
+Docker gives an internal network no route to the outside world and publishes no port from
+it. That alone is not enough: Docker filters traffic that is forwarded off the network, not
+traffic addressed to the host itself, so a container on an internal bridge can still connect
+to any host service bound to `0.0.0.0` (SSH, a proxy someone starts later) at the bridge's own
+address. `backend` therefore also sets `com.docker.network.bridge.inhibit_ipv4: "true"`,
+which gives the host no address on it. So the MCP servers, which only need the database and
+the gateway, **cannot reach the Internet or the host's services**, and neither can anything
+else on `backend` alone: a server that a prompt injection or a bug turns against its operator
+has nowhere to send what it read. It also makes the handbook's "no network at run time"
+claim true by construction instead of by reading the code. The gateway and PostgreSQL are on
+both networks, because the host reaches them and they reach the servers.
+
+A server therefore publishes no host port, and the host cannot call it, not even by the
+container's address. Anything that needs to call a server directly runs inside the network:
+
+- `scripts/direct_check.sh` runs the Harborline scenario against each server from the
+  `direct-check` service.
+- `scripts/check_servers_have_no_internet.sh` is the proof, and CI runs it. From inside each
+  server it checks that PostgreSQL answers, that two public addresses cannot be connected to,
+  that an outside name does not resolve, that a throwaway listener on the host bound to
+  `0.0.0.0` cannot be reached at any of the host's addresses (the bridge's included), and that
+  the server publishes no host port. The same probe in the gateway container is the control:
+  it must reach the Internet and the listener, so a pass shows the probe can tell a blocked
+  route from an open one. Without `inhibit_ipv4` the listener check fails.
+- `gateway/tests/test_compose.py` asserts the layout in `compose.yaml`: the network is
+  internal and gives the host no address, each internal-only service names it and nothing
+  else, none publishes a port, only the gateway and PostgreSQL are on `edge`, and every
+  published port is bound to `127.0.0.1`.
+
+One path out remains and is accepted: PostgreSQL is on `edge`, and the owner role that
+`servers-setup`, `migrate` and `admin` use is a superuser, which can make the database server
+open outbound connections (for example with `COPY ... TO PROGRAM`). Those one-shots hold that
+credential and run only code in this repository; the three servers never hold it, they use
+their own least-privilege roles.
+
+A new service joins `backend` only unless it must be reached from the host or needs the
+Internet; a service that names no network would join Compose's default one, which has a route
+out.

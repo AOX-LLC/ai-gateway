@@ -1,6 +1,7 @@
 """Queries against the handbook schema, as the handbook_app role.
 
 The role can read two views and nothing else, and both leave restricted documents out. The
+searchable view also leaves out superseded documents, so no ranking step can return one. The
 queries also say `classification <> 'restricted'` themselves, inside every step that ranks
 or limits, so the exclusion happens before ranking and LIMIT and never afterwards: a
 filter applied after would leak through rank order, counts and truncated result sets.
@@ -67,7 +68,7 @@ LIMIT %(limit)s
 """
 
 _GET_DOCUMENT = """
-SELECT id, title, category, updated, body
+SELECT id, title, category, updated, body, superseded_by
 FROM published_documents
 WHERE id = %s AND classification <> 'restricted'
 """
@@ -127,4 +128,9 @@ class HandbookRepo:
             row = await cursor.fetchone()
         if row is None:
             raise document_not_found(document_id)
+        if row["superseded_by"] is not None:
+            row["superseded_notice"] = (
+                f"This document has been superseded. The current edition is "
+                f"{row['superseded_by']}; use that one unless an older rule is what you need."
+            )
         return DocumentOutput.model_validate(row)

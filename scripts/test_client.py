@@ -4,8 +4,7 @@
     GATEWAY_TOKEN=<revoked token> uv run scripts/test_client.py --expect-rejected
     GATEWAY_TOKEN=... uv run scripts/test_client.py \\
         --scenario scripts/scenarios/harborline.toml --as harborline-support-bot
-    TICKETING_SERVICE_TOKEN=... uv run scripts/test_client.py \\
-        --scenario scripts/scenarios/harborline.toml --direct ticketing   # or crm, handbook
+    scripts/direct_check.sh        # every server, directly, from inside the Compose network
 
 Passes (exit 0) only when tools/list returns exactly the --expect tools, each of them can
 be called, each --refused tool is refused, and requests without a valid token get 401.
@@ -15,9 +14,10 @@ expected text and the clients allowed to make it. Through the gateway (--as name
 that owns GATEWAY_TOKEN), tools/list must return exactly the allowed tools of every
 namespace, every allowed call must succeed and every other call must be refused with
 -32602. With --direct <server>, that server is called without the gateway, using its own
-service credential (TICKETING_, CRM_ or HANDBOOK_SERVICE_TOKEN); its tools/list must return
-exactly the scenario's tools for it, every call must succeed, and requests without the
-credential must get 401.
+service credential (TICKETING_, CRM_ or HANDBOOK_SERVICE_TOKEN); the servers publish no
+port, so it only works inside the Compose network, where scripts/direct_check.sh runs it.
+Its tools/list must return exactly the scenario's tools for it, every call must succeed, and
+requests without the credential must get 401.
 
 Tokens are read from the environment so they never appear in shell history or argv.
 """
@@ -61,9 +61,9 @@ class DirectServer:
 
 
 _DIRECT = {
-    "ticketing": DirectServer("tickets", "http://127.0.0.1:4412/mcp", "TICKETING_SERVICE_TOKEN"),
-    "crm": DirectServer("crm", "http://127.0.0.1:4411/mcp", "CRM_SERVICE_TOKEN"),
-    "handbook": DirectServer("handbook", "http://127.0.0.1:4410/mcp", "HANDBOOK_SERVICE_TOKEN"),
+    "ticketing": DirectServer("tickets", "http://ticketing:4412/mcp", "TICKETING_SERVICE_TOKEN"),
+    "crm": DirectServer("crm", "http://crm:4411/mcp", "CRM_SERVICE_TOKEN"),
+    "handbook": DirectServer("handbook", "http://handbook:4410/mcp", "HANDBOOK_SERVICE_TOKEN"),
 }
 
 

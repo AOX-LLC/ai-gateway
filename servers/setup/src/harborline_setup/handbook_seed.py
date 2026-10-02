@@ -12,7 +12,12 @@ from pathlib import Path
 from psycopg import AsyncConnection
 
 from handbook_server.embedding import Embedder, vector_literal
-from harborline_setup.handbook_documents import Document, chunk_document, load_documents
+from harborline_setup.handbook_documents import (
+    Document,
+    DocumentFileError,
+    chunk_document,
+    load_documents,
+)
 
 
 @dataclass(frozen=True)
@@ -85,10 +90,11 @@ async def insert_dataset(connection: AsyncConnection, dataset: Dataset) -> None:
     """Write the dataset in one transaction."""
     async with connection.transaction(), connection.cursor() as cursor:
         await cursor.executemany(
-            "INSERT INTO documents (id, title, category, classification, updated, body)"
-            " VALUES (%s, %s, %s, %s, %s, %s)",
+            "INSERT INTO documents"
+            " (id, title, category, classification, updated, body, superseded_by)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s)",
             [
-                (d.id, d.title, d.category, d.classification, d.updated, d.body)
+                (d.id, d.title, d.category, d.classification, d.updated, d.body, d.superseded_by)
                 for d in dataset.documents
             ],
         )
@@ -97,3 +103,33 @@ async def insert_dataset(connection: AsyncConnection, dataset: Dataset) -> None:
             " VALUES (%s, %s, %s, %s, %s::handbook.vector)",
             [(c.document_id, c.ordinal, c.heading, c.text, c.embedding) for c in dataset.chunks],
         )
+
+
+async def sync_superseded(connection: AsyncConnection, documents_path: Path) -> int:
+    """Make each stored document's `superseded_by` match its file, and return how many
+    changed. A schema seeded before the column existed has none of the values, and the seed
+    only runs when the schema is empty, so setup calls this on every repeat run."""
+    documents = load_documents(documents_path)
+    stored = await _stored_document_ids(connection)
+    for document in documents:
+        if document.superseded_by is not None and document.superseded_by not in stored:
+            raise DocumentFileError(
+                f"{document.id} is superseded by {document.superseded_by}, which is not in the"
+                " database: the seed runs only into an empty schema, so recreate the volume to"
+                " seed a document added since"
+            )
+    changed = 0
+    async with connection.transaction(), connection.cursor() as cursor:
+        for document in documents:
+            await cursor.execute(
+                "UPDATE documents SET superseded_by = %s"
+                " WHERE id = %s AND superseded_by IS DISTINCT FROM %s",
+                (document.superseded_by, document.id, document.superseded_by),
+            )
+            changed += cursor.rowcount
+    return changed
+
+
+async def _stored_document_ids(connection: AsyncConnection) -> set[str]:
+    cursor = await connection.execute("SELECT id FROM documents")
+    return {row[0] for row in await cursor.fetchall()}

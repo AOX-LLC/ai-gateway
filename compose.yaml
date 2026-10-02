@@ -19,6 +19,15 @@ x-servers-build: &servers-build
     GIT_COMMIT: ${GIT_COMMIT:-}
     GIT_BRANCH: ${GIT_BRANCH:-}
 
+# Two networks. `edge` is an ordinary bridge: the services that publish a port on 127.0.0.1
+# (the gateway and Postgres) are on it. `backend` is internal: Docker gives it no route to the
+# outside world and publishes no port from it, and (inhibit_ipv4, below) the host has no
+# address on it, so a service that sits only on `backend` reaches its neighbours and nothing
+# else, not the Internet and not the host's own listeners. The MCP servers, the one-shots and
+# the test upstream are there only, which is why the servers publish no port: a
+# prompt-injected or compromised server has nowhere to send what it read. The gateway and
+# Postgres are on both, so the host can reach them and they can reach the servers. Postgres
+# can itself open outbound connections for a superuser (see docs/architecture.md, Networks).
 x-hardening: &hardening
   read_only: true
   tmpfs:
@@ -37,6 +46,7 @@ services:
       GATEWAY_APP_DB_PASSWORD: ${GATEWAY_APP_DB_PASSWORD:?set it in .env}
     ports:
       - "127.0.0.1:4402:5432"
+    networks: [edge, backend]
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./db/init:/docker-entrypoint-initdb.d:ro
@@ -51,6 +61,7 @@ services:
     image: ai-gateway-gateway
     command: ["gateway-admin", "migrate"]
     <<: *hardening
+    networks: [backend]
     environment:
       GATEWAY_MIGRATE_DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
     depends_on:
@@ -76,6 +87,7 @@ services:
       HANDBOOK_SERVICE_TOKEN: ${HANDBOOK_SERVICE_TOKEN:?set it in .env}
     ports:
       - "127.0.0.1:4401:4401"
+    networks: [edge, backend]
     volumes:
       - ./config:/app/config:ro
     depends_on:
@@ -102,6 +114,7 @@ services:
     image: harborline-servers
     command: ["harborline-setup"]
     <<: *hardening
+    networks: [backend]
     environment:
       HARBORLINE_SETUP_DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       TICKETING_DB_PASSWORD: ${TICKETING_DB_PASSWORD:?set it in .env}
@@ -128,8 +141,7 @@ services:
       TICKETING_DATABASE_URL: postgresql://ticketing_app:${TICKETING_DB_PASSWORD}@postgres:5432/${POSTGRES_DB}
       TICKETING_SERVICE_TOKEN: ${TICKETING_SERVICE_TOKEN:?set it in .env}
       TICKETING_ALLOWED_HOSTS: ticketing:*,127.0.0.1:*,localhost:*
-    ports:
-      - "127.0.0.1:4412:4412"
+    networks: [backend]
     depends_on:
       servers-setup:
         condition: service_completed_successfully
@@ -156,8 +168,7 @@ services:
       CRM_DATABASE_URL: postgresql://crm_app:${CRM_DB_PASSWORD}@postgres:5432/${POSTGRES_DB}
       CRM_SERVICE_TOKEN: ${CRM_SERVICE_TOKEN:?set it in .env}
       CRM_ALLOWED_HOSTS: crm:*,127.0.0.1:*,localhost:*
-    ports:
-      - "127.0.0.1:4411:4411"
+    networks: [backend]
     depends_on:
       servers-setup:
         condition: service_completed_successfully
@@ -185,8 +196,7 @@ services:
       HANDBOOK_DATABASE_URL: postgresql://handbook_app:${HANDBOOK_DB_PASSWORD}@postgres:5432/${POSTGRES_DB}
       HANDBOOK_SERVICE_TOKEN: ${HANDBOOK_SERVICE_TOKEN:?set it in .env}
       HANDBOOK_ALLOWED_HOSTS: handbook:*,127.0.0.1:*,localhost:*
-    ports:
-      - "127.0.0.1:4410:4410"
+    networks: [backend]
     depends_on:
       servers-setup:
         condition: service_completed_successfully
@@ -208,10 +218,34 @@ services:
     image: ai-gateway-gateway
     entrypoint: ["gateway-admin"]
     <<: *hardening
+    networks: [backend]
     environment:
       GATEWAY_MIGRATE_DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
     depends_on:
       postgres:
+        condition: service_healthy
+
+  # Runs scripts/test_client.py in the servers' own network. The servers publish no port, so
+  # the host cannot call them directly; scripts/direct_check.sh runs this once per server.
+  direct-check:
+    profiles: [tools]
+    build: *servers-build
+    image: harborline-servers
+    entrypoint: ["python", "/scripts/test_client.py"]
+    <<: *hardening
+    networks: [backend]
+    environment:
+      TICKETING_SERVICE_TOKEN: ${TICKETING_SERVICE_TOKEN:?set it in .env}
+      CRM_SERVICE_TOKEN: ${CRM_SERVICE_TOKEN:?set it in .env}
+      HANDBOOK_SERVICE_TOKEN: ${HANDBOOK_SERVICE_TOKEN:?set it in .env}
+    volumes:
+      - ./scripts:/scripts:ro
+    depends_on:
+      ticketing:
+        condition: service_healthy
+      crm:
+        condition: service_healthy
+      handbook:
         condition: service_healthy
 
   echo:
@@ -224,6 +258,16 @@ services:
       ECHO_PORT: "8000"
       ECHO_ALLOWED_HOSTS: echo:*,127.0.0.1:*
     <<: *hardening
+    networks: [backend]
+
+networks:
+  edge: {}
+  backend:
+    internal: true
+    driver_opts:
+      # No address for the host on this bridge, so a container cannot reach the host's own
+      # listeners (SSH, any service bound to 0.0.0.0) through the bridge address.
+      com.docker.network.bridge.inhibit_ipv4: "true"
 
 volumes:
   postgres-data:

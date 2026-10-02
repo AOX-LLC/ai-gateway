@@ -156,6 +156,56 @@ def test_a_vector_literal_is_pgvectors_text_form() -> None:
     assert vector_literal([0.5, -1.0, 0.0]) == "[0.5,-1,0]"
 
 
+def test_only_the_2025_returns_policy_is_superseded_and_by_the_2026_edition() -> None:
+    superseded = {
+        d.id: d.superseded_by for d in load_documents(HANDBOOK_DOCUMENTS) if d.superseded_by
+    }
+
+    assert superseded == {"DOC-007": "DOC-008"}
+
+
+def _write_documents(folder: Path, front_matter: dict[str, str]) -> Path:
+    """A folder with DOC-001 to DOC-003, where DOC-001 carries the given extra front matter."""
+    for number, classification in ((1, "general"), (2, "general"), (3, "restricted")):
+        extra = "".join(f"{k}: {v}\n" for k, v in front_matter.items()) if number == 1 else ""
+        (folder / f"DOC-{number:03d}.md").write_text(
+            f"---\nid: DOC-{number:03d}\ntitle: Document {number}\ncategory: hr\n"
+            f"classification: {classification}\nupdated: 2026-01-01\n{extra}---\n\n"
+            f"# Document {number}\n\n## Section\n\nText.\n",
+            encoding="utf-8",
+        )
+    return folder
+
+
+@pytest.mark.parametrize(
+    ("pointer", "complaint"),
+    [
+        ("DOC-009", "does not exist"),
+        ("DOC-001", "cannot supersede itself"),
+        ("DOC-003", "restricted"),
+    ],
+)
+def test_a_supersession_that_names_a_missing_self_or_restricted_target_is_refused(
+    tmp_path: Path, pointer: str, complaint: str
+) -> None:
+    folder = _write_documents(tmp_path, {"superseded_by": pointer})
+
+    with pytest.raises(DocumentFileError, match=complaint):
+        load_documents(folder)
+
+
+def test_a_supersession_that_points_at_a_superseded_document_is_refused(tmp_path: Path) -> None:
+    folder = _write_documents(tmp_path, {"superseded_by": "DOC-002"})
+    second = folder / "DOC-002.md"
+    second.write_text(
+        second.read_text(encoding="utf-8").replace("updated:", "superseded_by: DOC-001\nupdated:"),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(DocumentFileError, match="itself superseded"):
+        load_documents(folder)
+
+
 # --- the tools -----------------------------------------------------------------------------------
 
 
@@ -280,6 +330,74 @@ class TestTools:
         assert found["updated"] == "2025-12-01"
         assert found["body"] == document.body
 
+    async def test_a_superseded_document_is_returned_with_a_pointer_to_the_current_edition(
+        self, client: Client, handbook_data: Dataset
+    ) -> None:
+        old = next(d for d in handbook_data.documents if d.id == "DOC-007")
+
+        found = _structured(await client.call_tool("get_document", {"document_id": "DOC-007"}))
+
+        assert found["superseded_by"] == "DOC-008"
+        assert "DOC-008" in found["superseded_notice"]
+        assert found["body"] == old.body
+
+    async def test_a_current_document_has_no_supersession_fields_set(self, client: Client) -> None:
+        found = _structured(await client.call_tool("get_document", {"document_id": "DOC-008"}))
+
+        assert found["superseded_by"] is None
+        assert found["superseded_notice"] is None
+
+    async def test_search_never_returns_a_superseded_document(self, client: Client) -> None:
+        queries = [
+            "customer returns policy 2025 edition",
+            "30-day return window and 15 percent restocking fee",
+            "returns without photographs",
+            *(pair["query"] for pair in tomllib.loads(EVAL_FILE.read_text("utf-8"))["pair"]),
+        ]
+        for query in queries:
+            found = _structured(await client.call_tool("search", {"query": query, "limit": 10}))
+            assert "DOC-007" not in [r["document_id"] for r in found["results"]], query
+
+    async def test_the_role_sees_no_chunk_of_a_superseded_document(
+        self, handbook_app_url: str
+    ) -> None:
+        async with await psycopg.AsyncConnection.connect(handbook_app_url) as connection:
+            await connection.execute("SET search_path TO handbook")
+            cursor = await connection.execute(
+                "SELECT count(*) FROM searchable_chunks WHERE document_id = 'DOC-007'"
+            )
+            chunks = await cursor.fetchone()
+            cursor = await connection.execute(
+                "SELECT superseded_by FROM published_documents WHERE id = 'DOC-007'"
+            )
+            pointer = await cursor.fetchone()
+
+        assert chunks == (0,)
+        assert pointer == ("DOC-008",)
+
+    async def test_the_view_does_not_name_a_restricted_target(
+        self, test_database_url: str, handbook_data: Dataset
+    ) -> None:
+        """A bad row must not reveal that a restricted document exists."""
+        async with await psycopg.AsyncConnection.connect(test_database_url) as connection:
+            await connection.execute("SET search_path TO handbook")
+            await connection.execute(
+                "UPDATE documents SET superseded_by = 'DOC-023' WHERE id = 'DOC-016'"
+            )
+            cursor = await connection.execute(
+                "SELECT superseded_by FROM published_documents WHERE id = 'DOC-016'"
+            )
+            row = await cursor.fetchone()
+            cursor = await connection.execute(
+                "SELECT count(*) FROM searchable_chunks WHERE document_id = 'DOC-016'"
+            )
+            chunks = await cursor.fetchone()
+            await connection.rollback()
+
+        assert row == (None,)
+        assert chunks is not None
+        assert chunks[0] > 0, "the document must stay searchable, like a current one"
+
     async def test_a_restricted_document_looks_exactly_like_one_that_does_not_exist(
         self, client: Client
     ) -> None:
@@ -357,7 +475,8 @@ class TestTools:
             )
             restricted_chunks = await cursor.fetchone()
 
-        published = [c for c in handbook_data.chunks if c.document_id not in RESTRICTED]
+        hidden_ids = RESTRICTED | {d.id for d in handbook_data.documents if d.superseded_by}
+        published = [c for c in handbook_data.chunks if c.document_id not in hidden_ids]
         assert hidden == (0,)
         assert restricted_chunks == (0,)
         assert chunks == (len(published),)
@@ -438,4 +557,5 @@ async def test_the_chunks_table_has_no_keyword_index_the_view_could_never_use(
         latest = await cursor.fetchone()
 
     assert not [name for name in indexes if "tsv" in name]
-    assert latest == (2,)
+    assert latest is not None
+    assert latest[0] >= 2  # migration 0002 dropped the index

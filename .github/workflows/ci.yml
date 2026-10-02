@@ -28,6 +28,29 @@ jobs:
       - run: uv run ruff format --check .
       - run: uv run mypy
 
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.12.10"
+          enable-cache: true
+      - run: uv sync --frozen
+      - name: Audit the locked Python dependencies
+        # Every package in uv.lock, development tools included (pip-audit itself too), against
+        # the PyPI advisory database. The advisories are live, so a new one can fail a build
+        # that changed nothing: upgrade the package, or, if no fix exists and the code is not
+        # affected, pass --ignore-vuln <id> here with a comment that says why and when to
+        # revisit. The workspace's own packages are not on PyPI, so they are left out.
+        run: |
+          uv export --frozen --all-packages --all-groups --no-hashes --no-emit-workspace \
+            -o "$RUNNER_TEMP/requirements-audit.txt"
+          uv run --frozen pip-audit -r "$RUNNER_TEMP/requirements-audit.txt" \
+            --no-deps --disable-pip --progress-spinner off
+
   test:
     runs-on: ubuntu-latest
     services:
@@ -137,8 +160,19 @@ jobs:
           EXPECTED_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
           EXPECTED_BRANCH: ${{ github.head_ref || github.ref_name }}
         run: |
-          for port in 4401 4410 4411 4412; do
-            curl -sSf "http://127.0.0.1:$port/healthz" | python3 -c '
+          # The gateway publishes a port; the servers do not (they sit on an internal
+          # network), so their health is read from inside their own containers.
+          health() {
+            case "$1" in
+              gateway) curl -sSf http://127.0.0.1:4401/healthz ;;
+              ticketing) docker compose exec -T ticketing python -c "$HEALTH_PROBE" 4412 ;;
+              crm) docker compose exec -T crm python -c "$HEALTH_PROBE" 4411 ;;
+              handbook) docker compose exec -T handbook python -c "$HEALTH_PROBE" 4410 ;;
+            esac
+          }
+          HEALTH_PROBE='import sys, urllib.request; sys.stdout.write(urllib.request.urlopen(f"http://127.0.0.1:{sys.argv[1]}/healthz", timeout=3).read().decode())'
+          for service in gateway ticketing crm handbook; do
+            health "$service" | python3 -c '
           import json, os, sys
           health = json.load(sys.stdin)
           print(health)
@@ -149,6 +183,10 @@ jobs:
           assert len(health["schema_version"]) == 4 and int(health["schema_version"]) >= 1
           '
           done
+      - name: The servers reach Postgres and nothing else
+        # Runs the same probe in a server (must fail to leave) and in the gateway (the
+        # control, which may leave), so a pass means something.
+        run: scripts/check_servers_have_no_internet.sh
       - name: Acceptance check through the gateway
         shell: bash
         run: |
@@ -180,16 +218,12 @@ jobs:
           # The gateway polls the registry every 5 seconds, so the tickets tools can take a
           # moment to show up: retry the first check for at most about 60 seconds.
           retry() { for _ in $(seq 1 30); do "$@" && return 0; sleep 2; done; "$@"; }
-          for port in 4410 4411 4412; do curl -sSf "http://127.0.0.1:$port/healthz"; echo; done
           GATEWAY_TOKEN="$SUPPORT" retry uv run scripts/test_client.py \
             --scenario scripts/scenarios/harborline.toml --as harborline-support-bot
           GATEWAY_TOKEN="$OPS" uv run scripts/test_client.py \
             --scenario scripts/scenarios/harborline.toml --as harborline-ops-bot
-          set -a; . ./.env; set +a
-          for server in ticketing crm handbook; do
-            uv run scripts/test_client.py \
-              --scenario scripts/scenarios/harborline.toml --direct "$server"
-          done
+          # The servers publish no port: the scenario runs inside their network.
+          scripts/direct_check.sh
       - name: Show stack logs
         if: failure()
         run: docker compose --profile test logs --no-color

@@ -3,7 +3,8 @@
 Setup-only: the documents live in `servers/handbook/documents/`, outside every Python
 package and every image, and only the setup container has them mounted. The running
 handbook server never imports this module. Each document is `DOC-###.md`: YAML front matter
-(id, title, category, classification, updated), then a `#` title and `##` sections.
+(id, title, category, classification, updated, and optionally superseded_by), then a `#`
+title and `##` sections.
 Everything here is fictional (see servers/handbook/data/README.md).
 """
 
@@ -41,6 +42,8 @@ class Front(BaseModel):
     category: Category
     classification: Classification
     updated: date
+    superseded_by: DocumentId | None = None
+    """The id of the edition that replaces this one."""
 
 
 @dataclass(frozen=True)
@@ -51,6 +54,7 @@ class Document:
     classification: str
     updated: date
     body: str
+    superseded_by: str | None = None
 
 
 @dataclass(frozen=True)
@@ -75,7 +79,13 @@ def parse_document(source: str, name: str = "document") -> Document:
     if not body:
         raise DocumentFileError(f"{name}: no body")
     return Document(
-        front.id, front.title, front.category, front.classification, front.updated, body
+        front.id,
+        front.title,
+        front.category,
+        front.classification,
+        front.updated,
+        body,
+        front.superseded_by,
     )
 
 
@@ -92,7 +102,31 @@ def load_documents(folder: Path) -> list[Document]:
     ids = [document.id for document in documents]
     if len(ids) != len(set(ids)):
         raise DocumentFileError(f"duplicate document ids in {ids}")
+    _check_supersession(documents)
     return documents
+
+
+def _check_supersession(documents: list[Document]) -> None:
+    """Every `superseded_by` names a published document that is itself current, so a reader
+    who follows it lands on the edition that applies and never on a restricted one."""
+    by_id = {document.id: document for document in documents}
+    for document in documents:
+        if document.superseded_by is None:
+            continue
+        target = by_id.get(document.superseded_by)
+        if target is None:
+            raise DocumentFileError(
+                f"{document.id} is superseded by {document.superseded_by}, which does not exist"
+            )
+        if target.id == document.id:
+            raise DocumentFileError(f"{document.id} cannot supersede itself")
+        if target.classification == "restricted":
+            raise DocumentFileError(f"{document.id} is superseded by a restricted document")
+        if target.superseded_by is not None:
+            raise DocumentFileError(
+                f"{document.id} is superseded by {target.id}, which is itself superseded"
+                f" by {target.superseded_by}; name the current edition"
+            )
 
 
 def chunk_document(document: Document) -> list[Chunk]:
