@@ -21,11 +21,13 @@ x-servers-build: &servers-build
 
 # Two networks. `edge` is an ordinary bridge: the services that publish a port on 127.0.0.1
 # (the gateway and Postgres) are on it. `backend` is internal: Docker gives it no route to the
-# outside world and publishes no port from it, so a service that sits only on `backend` can
-# reach its neighbours and nothing else. The MCP servers, the one-shots and the test upstream
-# are there only, which is why the servers publish no port: a prompt-injected or compromised
-# server has nowhere to send what it read. The gateway is on both, so it can be reached from
-# the host and can reach the servers.
+# outside world and publishes no port from it, and (inhibit_ipv4, below) the host has no
+# address on it, so a service that sits only on `backend` reaches its neighbours and nothing
+# else, not the Internet and not the host's own listeners. The MCP servers, the one-shots and
+# the test upstream are there only, which is why the servers publish no port: a
+# prompt-injected or compromised server has nowhere to send what it read. The gateway and
+# Postgres are on both, so the host can reach them and they can reach the servers. Postgres
+# can itself open outbound connections for a superuser (see docs/architecture.md, Networks).
 x-hardening: &hardening
   read_only: true
   tmpfs:
@@ -262,6 +264,10 @@ networks:
   edge: {}
   backend:
     internal: true
+    driver_opts:
+      # No address for the host on this bridge, so a container cannot reach the host's own
+      # listeners (SSH, any service bound to 0.0.0.0) through the bridge address.
+      com.docker.network.bridge.inhibit_ipv4: "true"
 
 volumes:
   postgres-data:

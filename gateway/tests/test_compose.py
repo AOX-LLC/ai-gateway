@@ -30,13 +30,25 @@ def compose() -> dict[str, Any]:
     return loaded
 
 
-def test_the_backend_network_is_internal_and_the_edge_network_is_not(
+def test_the_backend_network_is_internal_and_gives_the_host_no_address_on_it(
     compose: dict[str, Any],
 ) -> None:
+    """Internal blocks the way out to the Internet; without the bridge address, a container
+    also cannot reach the host's own services (SSH, anything bound to 0.0.0.0)."""
     networks = compose["networks"]
 
-    assert networks["backend"] == {"internal": True}
+    assert networks["backend"]["internal"] is True
+    assert networks["backend"]["driver_opts"] == {"com.docker.network.bridge.inhibit_ipv4": "true"}
     assert not (networks["edge"] or {}).get("internal")
+
+
+def test_only_the_gateway_and_postgres_are_on_the_edge_network(compose: dict[str, Any]) -> None:
+    """The edge network has a route out, so a new service must not join it unnoticed."""
+    on_edge = {
+        name for name, svc in compose["services"].items() if "edge" in svc.get("networks", [])
+    }
+
+    assert on_edge == {"gateway", "postgres"}
 
 
 @pytest.mark.parametrize("service", INTERNAL_ONLY)
