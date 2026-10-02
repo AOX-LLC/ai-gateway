@@ -9,8 +9,8 @@ check can be set to enforce, monitor or off through configuration, with no code 
 That is what makes the project's headline result possible: a red-team scorecard showing
 the attack success rate with each defense layer on and off.
 
-This document describes Phase 1, the skeleton, Phase 2a, the first MCP server behind it, and
-the seams later phases build on.
+This document describes Phase 1, the skeleton, Phase 2, the three MCP servers behind it
+(ticketing, CRM and the handbook), and the seams later phases build on.
 
 ## At a glance
 
@@ -22,7 +22,7 @@ the seams later phases build on.
 | Authentication | Bearer tokens, stored as SHA-256 hashes and compared in constant time. It runs before the chain, and no configuration can turn it off. |
 | Authorization | Tool-level scopes per client, enforced by the `scope` layer |
 | Data store | PostgreSQL, accessed through psycopg 3 and plain SQL migrations |
-| MCP servers | Low-level `mcp.server.Server` with strict tool schemas, one Postgres schema and role each, a service credential in front. See [MCP servers](#mcp-servers-phase-2a). |
+| MCP servers | Low-level `mcp.server.Server` with strict tool schemas, one Postgres schema and role each, a service credential in front. See [MCP servers](#mcp-servers-phase-2). |
 | Tool effects | `read` or `write`, from a reviewed policy table. A tool with no policy is a write. |
 
 ## Request flow
@@ -217,14 +217,19 @@ its credential.
 A call that may have reached an upstream is never retried, because later phases add tools
 that write.
 
-## MCP servers (Phase 2a)
+## MCP servers (Phase 2)
 
-Harborline Supply Co. is fictional, and so is everything its servers hold. Phase 2 is split:
+Harborline Supply Co. is fictional, and so is everything its servers hold. Three servers
+run behind the gateway, from one image (`servers/Dockerfile`), each with its own Postgres
+schema and role:
 
-| Part | Holds |
-| --- | --- |
-| **2a** (this document) | The shared foundation (`mcp-common`), the gateway changes below, and the **ticketing** server on port 4412, namespace `tickets` |
-| **2b** (later) | The CRM server (4410, shares the fictional accounts `ACC-00001` to `ACC-00040`) and the handbook server (4411) |
+| Server | Port | Gateway namespace | Holds |
+| --- | --- | --- | --- |
+| Handbook | 4410 | `handbook` | 30 fictional handbook documents, searched by meaning and keywords |
+| CRM | 4411 | `crm` | Accounts `ACC-00001` to `ACC-00040`, contacts, deals and activity notes |
+| Ticketing | 4412 | `tickets` | Support tickets and comments for the same accounts |
+
+All three publish on `127.0.0.1` only.
 
 ### Shared foundation (`servers/common`, module `mcp_common`)
 
@@ -266,6 +271,68 @@ Tools, in the gateway namespace `tickets`:
 - **Seed.** Deterministic (`random.Random(20261002)`, a fixed base time, fixed word lists):
   12 staff, 80 tickets, 250 comments. See `servers/ticketing/data/README.md`.
 
+### The CRM server
+
+Read-only, three tools, all with `read` policies:
+
+| Tool | Does |
+| --- | --- |
+| `search_accounts(query, tier?, region?, limit, offset)` | Up to 20 account summaries whose name, industry or description contains the query; a name match ranks first |
+| `get_account(account_id)` | The account's public fields, its contacts, its 10 newest activity notes and `notes_total` |
+| `list_deals(account_id?, stage?, limit, offset)` | Up to 20 deals, newest close date first, **without the floor price**; money is integer cents |
+
+- **Internal columns are walled off twice.** `credit_limit_internal`, `risk_rating_internal`,
+  `internal_notes` and a deal's `floor_price_cents` are never selected and have no output
+  field. And `crm_app` has column-level `SELECT` on the public columns only, so even
+  `SELECT *` or a query bug is refused by the database. Grants are re-applied by
+  `harborline-setup` on every run and start by revoking everything, so a widened grant is
+  narrowed again.
+- **Seed.** Deterministic (`random.Random(20261002)`, a fixed base time): 40 accounts, 120
+  contacts, 60 deals, 200 notes. See `servers/crm/data/README.md`.
+
+### The handbook server
+
+Read-only, two tools, both with `read` policies:
+
+| Tool | Does |
+| --- | --- |
+| `search(query, category?, limit)` | Up to 10 documents (default 5), each with its best-matching passage (at most 400 characters), best first |
+| `get_document(document_id)` | A published document's title, category, date and full text |
+
+- **Restricted documents are excluded in the database, before ranking.** The three
+  restricted documents sit in base tables (`handbook.documents`, `handbook.chunks`) that
+  `handbook_app` cannot `SELECT`. It can read only two views, `published_documents` and
+  `searchable_chunks`, whose `WHERE classification <> 'restricted'` runs with the owner's
+  rights (and which are security barriers). Restricted text is therefore unreachable by the
+  server's role even with a bug in a query. The search SQL also repeats the condition inside
+  each ranking step, so the exclusion happens before ranking and `LIMIT`, never afterwards.
+- **A restricted id looks like a missing one.** `get_document` reads the view, so a
+  restricted id returns the same error, `Document 'DOC-xxx' was not found.`, as an id that
+  does not exist.
+- **Hybrid search.** The top 20 chunks by cosine distance to the query's embedding and the
+  top 20 by `ts_rank` of `websearch_to_tsquery` are fused with reciprocal rank fusion
+  (`k = 60`); each document is then represented by its best chunk. The vector column
+  (`vector(256)`) has no index: a couple of hundred chunks are scanned exactly. Documents
+  are cut at `##` headings into chunks of about 800 characters, overlapping by about 120
+  within a long section, every chunk carrying its heading.
+- **Embedding model: `minishlab/potion-base-8M`.** A static model2vec model: MIT licence,
+  256 dimensions, about 30 MB, no GPU, no PyTorch, deterministic, and it embeds a query in
+  well under a millisecond. It is pinned to revision `bf8b056651a2`, downloaded at image
+  build time by `scripts/fetch_model.py` and verified against SHA-256 values committed in
+  `scripts/potion-base-8M.sha256`, then loaded from `/opt/models/potion-base-8M`
+  (`HANDBOOK_MODEL_PATH`) with the hub switched off: **no network at run time**. Setup
+  embeds the chunks once; the server embeds only each query. The tests and CI fetch the same
+  files into a cache directory with the same script. `servers/handbook/evals/retrieval.toml`
+  holds 15 query and expected-document pairs; a test requires recall@3 of at least 0.8.
+- **Documents.** Written for this repository, in
+  `servers/handbook/src/handbook_server/documents`; see `servers/handbook/data/README.md`.
+
+### The fictional-data notice
+
+Every CRM and handbook result carries a `notice` field (`mcp_common.notice`) stating the
+data is fictional. The ticketing results, from Phase 2a, do not carry it yet; they say so in
+the server's instructions instead.
+
 ### Schema and role isolation
 
 Each server owns one Postgres schema and one role, and no role can see another's data:
@@ -273,22 +340,26 @@ Each server owns one Postgres schema and one role, and no role can see another's
 | Role | Schema | Rights |
 | --- | --- | --- |
 | `gateway_app` | `public` (the registry) | read, and update `client_tokens.last_used_at` |
+| `crm_app` | `crm` | `SELECT` on the public columns only (not credit limit, risk rating, internal notes or floor price), and on `schema_migrations`. No writes of any kind. |
+| `handbook_app` | `handbook` | `SELECT` on two views and on `schema_migrations`; no base table. No writes of any kind. The pgvector extension lives in this schema. |
 | `ticketing_app` | `ticketing` | read all tables; insert only the columns `create_ticket` and `add_comment` set (not `internal_notes`, not a comment's `visibility`, which defaults to `public`); update only `tickets.status`, `assignee` and `updated_at`; use the two sequences. No delete, truncate, create or temporary tables. |
 
-`REVOKE ALL ON SCHEMA ticketing FROM PUBLIC` keeps every other role out. `harborline-setup`
+`REVOKE ALL ON SCHEMA <schema> FROM PUBLIC` keeps every other role out, and the three server roles cannot read each other's schemas, the registry or `public`. `harborline-setup`
 also revokes `CONNECT` and `TEMPORARY` on the database and `USAGE` on `public` from `PUBLIC`,
-then grants `CONNECT` to `gateway_app` and `ticketing_app` and `USAGE` on `public` to
-`gateway_app` by name, so `ticketing_app` has nothing in `public`. (Other databases of the
+then grants `CONNECT` to `gateway_app` and each server role and `USAGE` on `public` to
+`gateway_app` by name, so no server role has anything in `public`. Because of that,
+setup creates the pgvector extension **inside the `handbook` schema** (`CREATE EXTENSION IF
+NOT EXISTS vector WITH SCHEMA handbook`, as the owner) rather than in `public`. (Other databases of the
 cluster keep their own defaults; this stack uses one.) Tests assert each of these, including
 the column-level grants.
 
 The `harborline-setup` one-shot (the `servers-setup` Compose service) runs as the database
-owner and is safe to repeat. It creates the role if missing, then `ALTER ROLE ... PASSWORD`
+owner and is safe to repeat. For each of the three servers it creates the role if missing, then `ALTER ROLE ... PASSWORD`
 with a quoted literal (so it also rotates the password), creates the schema, runs the
 schema's migrations, **applies the role's grants on every run** (not in a migration, so they
 never depend on when the role was created) and seeds the schema when empty. A role cannot only
 live in `db/init`, which runs once on a fresh volume, so existing volumes get it from this
-step. The ticketing process itself connects only as `ticketing_app`.
+step. Each server process connects only as its own role.
 
 ### Tool effects: read or write, fail closed
 
@@ -324,14 +395,6 @@ uses `direct` when the key is absent or not a valid client name. **It is attribu
 Anything that can reach a server directly can write any value there, so a server must never
 use it to decide what a caller may do. Authorization is the gateway's scope check.
 
-### Rule for 2b
-
-> Handbook search must exclude restricted documents inside the SQL query (WHERE clause),
-> before ranking and LIMIT — never by filtering results afterwards.
-
-Filtering afterwards leaks through rank order, counts and truncated result sets, and it
-puts restricted text in server memory.
-
 ## Seams for later phases
 
 The seams that the shared `agent-core` library will fill (approval queue, audit log,
@@ -362,8 +425,9 @@ it or copy its code.
 - **`gateway_app`:** the gateway itself connects as `gateway_app`. It may read the
   registry and update `client_tokens.last_used_at`, and nothing else. It has no access to
   any server's schema.
-- **`ticketing_app`:** the ticketing server connects as `ticketing_app`, described under
-  [MCP servers](#mcp-servers-phase-2a). It has no access to the registry.
+- **`ticketing_app`, `crm_app`, `handbook_app`:** each server connects as its own role,
+  described under [MCP servers](#mcp-servers-phase-2). None has access to the registry or to
+  another server's schema.
 
 ## Reaching the gateway from another machine
 
@@ -382,12 +446,14 @@ Any option that crosses a network carries the bearer token, so it must use TLS o
 ## Health check
 
 `GET /healthz` needs no token and, like everything else, is published on 127.0.0.1 only.
-The gateway answers 200 while the MCP endpoint is serving and 503 otherwise. The ticketing
-server (4412) uses the same format and the same cache (`mcp_common.health`) and answers 200
-while it can read its own schema version, 503 with `status: "unavailable"` when it cannot.
-Its `GIT_COMMIT`/`GIT_BRANCH` come from the build arguments of `servers/Dockerfile`, its
-`version` is the `ticketing-server` package, and `schema_version` is the newest migration in
-the `ticketing` schema (its role may read `ticketing.schema_migrations`, nothing more there).
+The gateway answers 200 while the MCP endpoint is serving and 503 otherwise. The three
+servers (4410, 4411, 4412) use the same format and the same cache (`mcp_common.health`) and
+answer 200 while they can read their own schema version, 503 with `status: "unavailable"` when it cannot.
+Their `GIT_COMMIT`/`GIT_BRANCH` come from the build arguments of `servers/Dockerfile`, a
+server's `version` is its own package (`ticketing-server`, `crm-server`, `handbook-server`),
+and `schema_version` is the newest migration in its schema (its role may read that
+schema's `schema_migrations`; for CRM and handbook that is all it can read of the table
+itself).
 
 | Field | Meaning |
 | --- | --- |
