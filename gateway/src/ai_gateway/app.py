@@ -19,7 +19,7 @@ from ai_gateway.pipeline.config import load_pipeline_config
 from ai_gateway.pipeline.registry import LAYER_ORDER
 from ai_gateway.pipeline.runner import Pipeline
 from ai_gateway.proxy.catalog import Catalog
-from ai_gateway.proxy.http import ProtocolVersionGuard, SessionCleanup
+from ai_gateway.proxy.http import ProtocolVersionGuard, SessionAdmission, SessionCleanup
 from ai_gateway.proxy.server import GatewayServer
 from ai_gateway.proxy.sessions import UpstreamSessionPool
 from ai_gateway.registry.repo import GatewayRegistry
@@ -70,8 +70,12 @@ def create_app(settings: GatewaySettings, events: EventSink | None = None) -> Fa
             )
             endpoint.app = BearerAuthMiddleware(
                 AuthContextMiddleware(
-                    SessionCleanup(
-                        ProtocolVersionGuard(StreamableHTTPASGIApp(session_manager)), sessions
+                    SessionAdmission(
+                        SessionCleanup(
+                            ProtocolVersionGuard(StreamableHTTPASGIApp(session_manager)), sessions
+                        ),
+                        max_sessions_per_client=settings.max_sessions_per_client,
+                        idle_timeout_s=settings.session_idle_timeout_s,
                     )
                 ),
                 TokenVerifier(registry),

@@ -22,6 +22,7 @@ class GatewaySettings(BaseSettings):
     log_level: str = "INFO"
     session_idle_timeout_s: Annotated[float, Field(gt=0)] = 900.0
     max_sessions: Annotated[int, Field(ge=1)] = 1000
+    max_sessions_per_client: Annotated[int, Field(ge=1)] = 20
     catalog_refresh_s: Annotated[float, Field(gt=0)] = 60.0
 
     @field_validator("allowed_hosts", mode="before")
