@@ -279,8 +279,10 @@ class Pipeline:
         details: dict[str, JsonValue],
     ) -> None:
         # Recording is best effort. A record that cannot be built, a sink that raises and a
-        # sink that stalls must not change what the client gets: by now the upstream may
-        # already have run, and a failed write would otherwise look like a failed call.
+        # sink that awaits for too long must not change what the client gets: by now the
+        # upstream may already have run, and a failed write would otherwise look like a
+        # failed call. The bound cannot interrupt a sink that blocks the event loop without
+        # awaiting; sinks must not.
         try:
             payload: dict[str, JsonValue] = {
                 "request_id": str(ctx.request_id),
@@ -300,6 +302,7 @@ class Pipeline:
             with anyio.fail_after(self._emit_timeout_s):
                 await self._events.emit(event)
         except Exception:
-            # Catching broadly is deliberate. The traceback is logged; the event is not,
-            # because the record is the thing that failed.
-            logger.exception("could not record a %s event", action)
+            # Catching broadly is deliberate. The traceback and the request id are logged, so
+            # a missing record can be matched to its request; the event is not, because the
+            # record is the thing that failed.
+            logger.exception("could not record a %s event for request %s", action, ctx.request_id)
