@@ -8,9 +8,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-declare -A PORTS=([ticketing]=4412 [crm]=4411 [handbook]=4410)
 for server in ticketing crm handbook; do
   docker compose run --rm -T --no-deps direct-check \
     --scenario /scripts/scenarios/harborline.toml \
-    --direct "$server" --url "http://$server:${PORTS[$server]}/mcp"
+    --direct "$server"
 done
