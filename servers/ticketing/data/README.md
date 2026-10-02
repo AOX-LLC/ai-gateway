@@ -24,8 +24,10 @@ Emails are on `.example` domains and phone numbers are in the `555-01xx` block.
 | `tickets.internal_notes` | Staff notes |
 | `comments` rows with `visibility = 'internal'` | Staff-only comments |
 
-Every internal value starts with `[INTERNAL-ONLY]`, so a test can scan any output for the
-marker and for each full value. The tools never select these columns or rows.
+Every **seeded** internal value starts with `[INTERNAL-ONLY]`, so a test can scan any output
+for the marker and for each full value. Internal values in *extra records* (below) carry no
+marker unless the file adds one; the tests still scan for each full value, which is the
+check that matters. The tools never select these columns or rows.
 
 ## Free-text fields: where hostile content may be planted later
 
@@ -34,6 +36,8 @@ marker and for each full value. The tools never select these columns or rows.
 | `tickets.description` | `get_ticket` |
 | `comments.body` where `visibility = 'public'` | `get_ticket` |
 | `tickets.subject` | `list_tickets`, `get_ticket` |
+| `comments.author` | `get_ticket` (free text in extra records) |
+| `tickets.requested_by` | `get_ticket` (the client name the gateway reported, or `direct`; free text if a server is called directly) |
 
 Phase 6 plants prompt-injection and exfiltration content here. Nothing in this repository
 does it yet.

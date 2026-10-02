@@ -390,7 +390,7 @@ the `ticketing` schema (its role may read `ticketing.schema_migrations`, nothing
 | `commit_source` | `process_start`: the commit is fixed for the life of the process |
 | `branch` | Set by the `GIT_BRANCH` build argument; `null` when not given |
 | `version` | The `ai-gateway` package version |
-| `schema_version` | The newest applied migration of the registry, zero-padded (`"0003"`). Re-read at most every 30 s by one caller at a time, with the read bounded to 2 s; `null` if it cannot be read in time |
+| `schema_version` | The newest applied migration of the registry, zero-padded (`"0004"`). Re-read at most every 30 s by one caller at a time, with the read bounded to 2 s; `null` if it cannot be read in time |
 | `uptime_s` | Seconds since the process started |
 
 ## Ports
