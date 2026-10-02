@@ -134,9 +134,10 @@ jobs:
           echo "::add-mask::$SUPPORT"
           OPS=$(python3 -c 'import json; print(json.load(open("seed.json"))["echo-test-wide"])')
           echo "::add-mask::$OPS"
-          # The gateway polls the registry every 5 seconds.
-          sleep 8
-          GATEWAY_TOKEN="$SUPPORT" uv run scripts/test_client.py --expect echo__say --refused echo__shout
+          # The gateway polls the registry every 5 seconds, so a new client or upstream can
+          # take a moment to show up: retry the first check for at most about 60 seconds.
+          retry() { for _ in $(seq 1 30); do "$@" && return 0; sleep 2; done; "$@"; }
+          GATEWAY_TOKEN="$SUPPORT" retry uv run scripts/test_client.py --expect echo__say --refused echo__shout
           GATEWAY_TOKEN="$OPS" uv run scripts/test_client.py --expect echo__say --expect echo__shout
           LOOKUP_ID=$(echo "$SUPPORT" | cut -d_ -f2)
           docker compose run --rm -T admin token-revoke "$LOOKUP_ID"
@@ -151,10 +152,11 @@ jobs:
           echo "::add-mask::$SUPPORT"
           OPS=$(python3 -c 'import json; print(json.load(open("demo.json"))["harborline-ops-bot"])')
           echo "::add-mask::$OPS"
-          # The gateway polls the registry every 5 seconds.
-          sleep 8
+          # The gateway polls the registry every 5 seconds, so the tickets tools can take a
+          # moment to show up: retry the first check for at most about 60 seconds.
+          retry() { for _ in $(seq 1 30); do "$@" && return 0; sleep 2; done; "$@"; }
           curl -sSf http://127.0.0.1:4412/healthz
-          GATEWAY_TOKEN="$SUPPORT" uv run scripts/test_client.py \
+          GATEWAY_TOKEN="$SUPPORT" retry uv run scripts/test_client.py \
             --scenario scripts/scenarios/harborline.toml --as harborline-support-bot
           GATEWAY_TOKEN="$OPS" uv run scripts/test_client.py \
             --scenario scripts/scenarios/harborline.toml --as harborline-ops-bot
