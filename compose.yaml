@@ -71,6 +71,42 @@ services:
         condition: service_healthy
     restart: "no"
 
+  # Creates the telemetry schema's three roles, migrates and grants (as the database owner).
+  telemetry-setup:
+    build: *gateway-build
+    image: ai-gateway-gateway
+    command: ["gateway-admin", "telemetry-setup"]
+    <<: *hardening
+    networks: [backend]
+    mem_limit: 192m
+    environment:
+      GATEWAY_MIGRATE_DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      TELEMETRY_WRITER_DB_PASSWORD: ${TELEMETRY_WRITER_DB_PASSWORD:?set it in .env}
+      TELEMETRY_READER_DB_PASSWORD: ${TELEMETRY_READER_DB_PASSWORD:?set it in .env}
+      TELEMETRY_PURGER_DB_PASSWORD: ${TELEMETRY_PURGER_DB_PASSWORD:?set it in .env}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  # Deletes telemetry past its retention (spans 7 days, everything else 30 by default), hourly,
+  # as a role that can delete rows and read nothing but their times.
+  telemetry-purge:
+    build: *gateway-build
+    image: ai-gateway-gateway
+    command: ["telemetry-purge", "--every", "3600"]
+    restart: unless-stopped
+    <<: *hardening
+    networks: [backend]
+    mem_limit: 128m
+    environment:
+      TELEMETRY_PURGE_DATABASE_URL: postgresql://telemetry_purger:${TELEMETRY_PURGER_DB_PASSWORD:?set it in .env}@postgres:5432/${POSTGRES_DB}
+      TELEMETRY_RETENTION_SPAN_DAYS: ${TELEMETRY_RETENTION_SPAN_DAYS:-7}
+      TELEMETRY_RETENTION_DAYS: ${TELEMETRY_RETENTION_DAYS:-30}
+    depends_on:
+      telemetry-setup:
+        condition: service_completed_successfully
+
   gateway:
     build: *gateway-build
     image: ai-gateway-gateway
@@ -83,6 +119,9 @@ services:
       GATEWAY_PIPELINE_FILE: ${GATEWAY_PIPELINE_FILE_IN_CONTAINER:-/app/config/pipeline.toml}
       GATEWAY_ALLOWED_HOSTS: ${GATEWAY_ALLOWED_HOSTS:-127.0.0.1:*,localhost:*}
       GATEWAY_LOG_LEVEL: ${GATEWAY_LOG_LEVEL:-INFO}
+      # Spans and decision records are stored through this append-only role. If the database
+      # cannot be reached the gateway still serves; /healthz then reports degraded telemetry.
+      GATEWAY_TELEMETRY_DATABASE_URL: postgresql://telemetry_writer:${TELEMETRY_WRITER_DB_PASSWORD:?set it in .env}@postgres:5432/${POSTGRES_DB}
       # The gateway presents these to the servers (upstream_servers.credential_env).
       TICKETING_SERVICE_TOKEN: ${TICKETING_SERVICE_TOKEN:?set it in .env}
       CRM_SERVICE_TOKEN: ${CRM_SERVICE_TOKEN:?set it in .env}
@@ -97,6 +136,8 @@ services:
       postgres:
         condition: service_healthy
       migrate:
+        condition: service_completed_successfully
+      telemetry-setup:
         condition: service_completed_successfully
     healthcheck:
       test:

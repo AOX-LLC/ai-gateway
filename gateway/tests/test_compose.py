@@ -20,6 +20,8 @@ INTERNAL_ONLY = [
     "admin",
     "direct-check",
     "echo",
+    "telemetry-setup",
+    "telemetry-purge",
 ]
 
 
