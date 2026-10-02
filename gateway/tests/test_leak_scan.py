@@ -6,7 +6,6 @@ text of every restricted handbook document and chunk. A value counts as leaked i
 anywhere in a tool's result, in the structured data or in the text a model would read.
 """
 
-import json
 import re
 from collections.abc import AsyncIterator
 
@@ -25,6 +24,7 @@ from handbook_server.repo import HandbookRepo
 from handbook_server.tools import INSTRUCTIONS as HANDBOOK_INSTRUCTIONS
 from handbook_server.tools import build_toolset as build_handbook_toolset
 from harborline_setup.handbook_seed import Dataset as HandbookDataset
+from tests.helpers import leaked, rendered, restricted_fingerprints, text_windows
 from ticketing_server.repo import TicketRepo
 from ticketing_server.seed import INTERNAL_MARKER as TICKETING_MARKER
 from ticketing_server.seed import Dataset as TicketingDataset
@@ -38,9 +38,10 @@ CODE_PHRASES = ["HERON-LANTERN-7", "PELICAN-VESPER-31", "KESTREL-TALLOW-58"]
 
 
 def _everything(result: CallToolResult) -> str:
-    """A result as a model or a client would see it: the structured data and the text."""
+    """A result as a model or a client would see it: the structured data as JSON and every
+    string in it decoded, and the text blocks."""
     text = "\n".join(b.text for b in result.content if isinstance(b, TextContent))
-    return f"{json.dumps(result.structured_content)}\n{text}"
+    return f"{rendered(result.structured_content)}\n{text}"
 
 
 def _assert_no_leak(outputs: list[str], values: list[str]) -> None:
@@ -143,6 +144,11 @@ async def test_no_handbook_read_tool_returns_restricted_text(
         outputs.append(_everything(await handbook_client.call_tool("get_document", arguments)))
 
     _assert_no_leak(outputs, handbook_data.restricted_texts())
+    fingerprints = restricted_fingerprints(handbook_data.restricted_texts())
+    headings = handbook_data.restricted_headings()
+    assert headings, "some heading is specific to a restricted document"
+    assert len(fingerprints) > 100, "windows of every restricted chunk"
+    assert leaked("\n".join(outputs), fingerprints, headings) == []
     assert [phrase for phrase in CODE_PHRASES if phrase in "\n".join(outputs)] == []
     assert len(handbook_data.restricted_texts()) >= 3 * 5  # body, title and chunks of each
 
@@ -153,3 +159,16 @@ def test_the_scan_itself_notices_a_planted_value() -> None:
     with pytest.raises(AssertionError):
         _assert_no_leak(["a harmless output", "oops: internal value 7 leaked"], values)
     _assert_no_leak(["a harmless output"], values)
+
+
+def test_the_windows_catch_a_snippet_of_a_chunk_longer_than_the_snippet_limit() -> None:
+    chunk = " ".join(f"word{n}" for n in range(120))  # well over 400 characters
+    snippet = " ".join(chunk[:400].split()) + "…"
+    fingerprints = restricted_fingerprints([chunk])
+
+    assert chunk not in snippet
+    assert leaked(f'{{"snippet": "{snippet}"}}', fingerprints) != []
+    assert leaked("a\nA heading\nb", [], ["A heading"]) == ["A heading"]
+    assert leaked("a sentence that begins A heading and goes on", [], ["A heading"]) == []
+    assert leaked("nothing of the kind here", fingerprints) == []
+    assert all(len(window) <= 60 for window in text_windows(chunk))

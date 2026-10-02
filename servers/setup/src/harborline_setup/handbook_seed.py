@@ -42,6 +42,14 @@ class Dataset:
         values += [c.text for c in self.chunks if c.document_id in restricted]
         return values
 
+    def restricted_headings(self) -> list[str]:
+        """The headings of the restricted documents' chunks that no published chunk shares.
+        A heading such as "Purpose" is in published documents too, so seeing it in an output
+        proves nothing; the rest are specific to a restricted document."""
+        restricted = self.restricted_ids()
+        published = {c.heading for c in self.chunks if c.document_id not in restricted}
+        return sorted({c.heading for c in self.chunks if c.document_id in restricted} - published)
+
 
 def embedding_text(document: Document, heading: str, text: str) -> str:
     """What is embedded for a chunk: the document title and the heading give a short passage

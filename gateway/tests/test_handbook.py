@@ -33,7 +33,7 @@ from harborline_setup.handbook_documents import (
 from harborline_setup.handbook_seed import Dataset
 from mcp_common.notice import FICTIONAL_NOTICE
 from mcp_common.schema_contract import check_input_schema
-from tests.helpers import HANDBOOK_DOCUMENTS
+from tests.helpers import HANDBOOK_DOCUMENTS, leaked, rendered, restricted_fingerprints
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 EVAL_FILE = REPO_ROOT / "servers" / "handbook" / "evals" / "retrieval.toml"
@@ -305,6 +305,8 @@ class TestTools:
     async def test_no_search_ever_returns_a_restricted_document_or_its_text(
         self, client: Client, handbook_data: Dataset
     ) -> None:
+        fingerprints = restricted_fingerprints(handbook_data.restricted_texts())
+        headings = handbook_data.restricted_headings()
         probes = [
             "wire transfer verification callback",
             "incident escalation roster",
@@ -319,8 +321,9 @@ class TestTools:
                     arguments["category"] = category
                 found = _structured(await client.call_tool("search", arguments))
                 assert RESTRICTED.isdisjoint(r["document_id"] for r in found["results"]), query
-                text = str(found)
+                text = rendered(found)
                 assert not [phrase for phrase in CODE_PHRASES if phrase in text], query
+                assert not leaked(text, fingerprints, headings), query
 
     async def test_the_view_hides_restricted_documents_from_the_role(
         self, handbook_app_url: str, handbook_data: Dataset
@@ -376,15 +379,16 @@ async def test_retrieval_recall_at_3_meets_the_threshold_and_no_probe_leaks(
 
     assert recall >= threshold
 
-    restricted_texts = handbook_data.restricted_texts()
+    fingerprints = restricted_fingerprints(handbook_data.restricted_texts())
+    headings = handbook_data.restricted_headings()
     for probe in spec["restricted_probe"]:
         found = _structured(
             await client.call_tool("search", {"query": probe["query"], "limit": 10})
         )
-        everything = str(found)
+        everything = rendered(found)
         assert probe["target"] not in [r["document_id"] for r in found["results"]]
         assert RESTRICTED.isdisjoint(r["document_id"] for r in found["results"])
-        assert not [text for text in restricted_texts if text in everything]
+        assert not leaked(everything, fingerprints, headings)
 
 
 # --- the restricted text is not part of the server --------------------------------------------
