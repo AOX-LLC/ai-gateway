@@ -1,8 +1,11 @@
 """The handbook documents, chunking and tools, against the seeded database as handbook_app."""
 
 import re
+import subprocess
+import sys
 import tomllib
 from collections.abc import AsyncIterator
+from datetime import date
 from itertools import pairwise
 from pathlib import Path
 from typing import Any
@@ -14,7 +17,11 @@ from mcp.shared.exceptions import MCPError
 from mcp.types import INVALID_PARAMS, CallToolResult, TextContent
 from psycopg_pool import AsyncConnectionPool
 
-from handbook_server.documents import (
+from handbook_server.embedding import Embedder, vector_literal
+from handbook_server.models import SNIPPET_MAX_CHARS
+from handbook_server.repo import HandbookRepo, snippet
+from handbook_server.tools import INSTRUCTIONS, build_toolset
+from harborline_setup.handbook_documents import (
     CHUNK_OVERLAP,
     CHUNK_TARGET,
     Document,
@@ -23,13 +30,10 @@ from handbook_server.documents import (
     load_documents,
     parse_document,
 )
-from handbook_server.embedding import Embedder, vector_literal
-from handbook_server.models import SNIPPET_MAX_CHARS
-from handbook_server.repo import HandbookRepo, snippet
-from handbook_server.seed import Dataset
-from handbook_server.tools import INSTRUCTIONS, build_toolset
+from harborline_setup.handbook_seed import Dataset
 from mcp_common.notice import FICTIONAL_NOTICE
 from mcp_common.schema_contract import check_input_schema
+from tests.helpers import HANDBOOK_DOCUMENTS
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 EVAL_FILE = REPO_ROOT / "servers" / "handbook" / "evals" / "retrieval.toml"
@@ -41,7 +45,7 @@ CODE_PHRASES = ["HERON-LANTERN-7", "PELICAN-VESPER-31", "KESTREL-TALLOW-58"]
 
 
 def test_there_are_thirty_documents_and_three_are_restricted() -> None:
-    documents = load_documents()
+    documents = load_documents(HANDBOOK_DOCUMENTS)
 
     assert [d.id for d in documents] == [f"DOC-{n:03d}" for n in range(1, 31)]
     assert {d.id for d in documents if d.classification == "restricted"} == RESTRICTED
@@ -49,7 +53,7 @@ def test_there_are_thirty_documents_and_three_are_restricted() -> None:
 
 
 def test_every_title_is_plain_text_without_quotes() -> None:
-    documents = {d.id: d for d in load_documents()}
+    documents = {d.id: d for d in load_documents(HANDBOOK_DOCUMENTS)}
 
     assert documents["DOC-016"].title == "Shipping service levels: quick reference"
     for document in documents.values():
@@ -89,7 +93,7 @@ def test_chunks_are_cut_at_the_second_level_headings_and_carry_them() -> None:
 def test_a_long_section_is_cut_with_an_overlap_and_every_chunk_keeps_the_heading() -> None:
     sentences = [f"Sentence number {n} says something about the policy." for n in range(60)]
     text = " ".join(sentences)
-    document = Document("DOC-001", "T", "hr", "general", __import__("datetime").date(2026, 1, 1),
+    document = Document("DOC-001", "T", "hr", "general", date(2026, 1, 1),
                         f"# T\n\n## Long section\n\n{text}\n")  # fmt: skip
 
     chunks = chunk_document(document)
@@ -107,7 +111,7 @@ def test_a_long_section_is_cut_with_an_overlap_and_every_chunk_keeps_the_heading
 
 
 def test_every_packaged_document_is_chunked_with_its_headings() -> None:
-    for document in load_documents():
+    for document in load_documents(HANDBOOK_DOCUMENTS):
         chunks = chunk_document(document)
         headings = re.findall(r"^## (.+)$", document.body, re.MULTILINE)
         assert chunks, document.id
@@ -381,3 +385,24 @@ async def test_retrieval_recall_at_3_meets_the_threshold_and_no_probe_leaks(
         assert probe["target"] not in [r["document_id"] for r in found["results"]]
         assert RESTRICTED.isdisjoint(r["document_id"] for r in found["results"])
         assert not [text for text in restricted_texts if text in everything]
+
+
+# --- the restricted text is not part of the server --------------------------------------------
+
+
+def test_the_handbook_server_carries_no_documents_and_never_imports_the_loader() -> None:
+    import handbook_server
+
+    package = Path(handbook_server.__file__).parent
+    assert not list(package.rglob("*.md"))
+
+    check = (
+        "import sys, handbook_server.server, handbook_server.tools, handbook_server.repo;"
+        " loaded = [m for m in sys.modules if m.startswith('harborline_setup')];"
+        " assert not loaded, loaded;"
+        " assert 'yaml' not in sys.modules"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", check], capture_output=True, text=True, check=False
+    )
+    assert result.returncode == 0, result.stderr

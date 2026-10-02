@@ -9,3 +9,4 @@
 .pytest_cache
 .ruff_cache
 .model-cache
+servers/handbook/documents

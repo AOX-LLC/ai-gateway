@@ -12,6 +12,7 @@ from crm_server.seed import ACCOUNT_COUNT, CONTACT_COUNT, DEAL_COUNT, NOTE_COUNT
 from harborline_setup.crm import setup_crm
 from harborline_setup.handbook import setup_handbook
 from harborline_setup.ticketing import setup_ticketing
+from tests.helpers import HANDBOOK_DOCUMENTS
 from ticketing_server.seed import COMMENT_COUNT, TICKET_COUNT
 
 pytestmark = [pytest.mark.integration, pytest.mark.anyio]
@@ -293,10 +294,10 @@ async def test_handbook_setup_builds_everything_once_and_is_safe_to_repeat(
     url, role = scratch_database
     password = f"scratch-{uuid4().hex}"
 
-    await setup_handbook(url, password, model_path, role)
+    await setup_handbook(url, password, model_path, HANDBOOK_DOCUMENTS, role)
     first_counts = await _handbook_counts(url)
     first_privileges = await _handbook_privileges(url, role)
-    await setup_handbook(url, password, model_path, role)
+    await setup_handbook(url, password, model_path, HANDBOOK_DOCUMENTS, role)
 
     assert first_counts[0] == 30
     assert first_counts[1] >= 30
@@ -318,7 +319,7 @@ async def test_handbook_setup_puts_the_vector_extension_in_the_handbook_schema(
 ) -> None:
     url, role = scratch_database
 
-    await setup_handbook(url, f"scratch-{uuid4().hex}", model_path, role)
+    await setup_handbook(url, f"scratch-{uuid4().hex}", model_path, HANDBOOK_DOCUMENTS, role)
 
     async with await psycopg.AsyncConnection.connect(url) as connection:
         cursor = await connection.execute(
@@ -333,7 +334,7 @@ async def test_handbook_setup_narrows_a_grant_widened_onto_a_base_table(
 ) -> None:
     url, role = scratch_database
     password = f"scratch-{uuid4().hex}"
-    await setup_handbook(url, password, model_path, role)
+    await setup_handbook(url, password, model_path, HANDBOOK_DOCUMENTS, role)
     async with await psycopg.AsyncConnection.connect(url, autocommit=True) as connection:
         await connection.execute(
             sql.SQL("GRANT SELECT ON handbook.documents, handbook.chunks TO {}").format(
@@ -342,7 +343,7 @@ async def test_handbook_setup_narrows_a_grant_widened_onto_a_base_table(
         )
     assert (await _handbook_privileges(url, role))["documents"] is True
 
-    await setup_handbook(url, password, model_path, role)
+    await setup_handbook(url, password, model_path, HANDBOOK_DOCUMENTS, role)
 
     privileges = await _handbook_privileges(url, role)
     assert privileges["documents"] is False
@@ -354,4 +355,4 @@ async def test_handbook_setup_refuses_an_empty_password(
     test_database_url: str, model_path: Path
 ) -> None:
     with pytest.raises(ValueError, match="HANDBOOK_DB_PASSWORD"):
-        await setup_handbook(test_database_url, "", model_path)
+        await setup_handbook(test_database_url, "", model_path, HANDBOOK_DOCUMENTS)

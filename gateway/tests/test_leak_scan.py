@@ -22,9 +22,9 @@ from crm_server.tools import INSTRUCTIONS as CRM_INSTRUCTIONS
 from crm_server.tools import build_toolset as build_crm_toolset
 from handbook_server.embedding import Embedder
 from handbook_server.repo import HandbookRepo
-from handbook_server.seed import Dataset as HandbookDataset
 from handbook_server.tools import INSTRUCTIONS as HANDBOOK_INSTRUCTIONS
 from handbook_server.tools import build_toolset as build_handbook_toolset
+from harborline_setup.handbook_seed import Dataset as HandbookDataset
 from ticketing_server.repo import TicketRepo
 from ticketing_server.seed import INTERNAL_MARKER as TICKETING_MARKER
 from ticketing_server.seed import Dataset as TicketingDataset

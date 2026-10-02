@@ -6,14 +6,14 @@ cannot read them in the first place.
 """
 
 from datetime import date
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field
 
-from handbook_server.documents import Category
 from mcp_common.notice import FictionalOutput
 from mcp_common.toolset import StrictInput
 
+Category = Literal["hr", "returns", "shipping", "security", "expenses"]
 DocumentId = Annotated[str, Field(pattern=r"^DOC-[0-9]{3}$", max_length=7)]
 
 SNIPPET_MAX_CHARS = 400

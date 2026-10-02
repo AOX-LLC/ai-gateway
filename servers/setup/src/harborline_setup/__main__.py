@@ -5,6 +5,7 @@ TICKETING_DB_PASSWORD               the password to give the ticketing_app role
 CRM_DB_PASSWORD                     the password to give the crm_app role
 HANDBOOK_DB_PASSWORD                the password to give the handbook_app role
 HANDBOOK_MODEL_PATH                 the directory holding the embedding model
+HANDBOOK_DOCUMENTS_PATH             the directory holding the handbook's Markdown documents
 HARBORLINE_TICKETING_EXTRA_RECORDS  optional JSON file of extra tickets and comments
 HARBORLINE_CRM_EXTRA_RECORDS        optional JSON file of extra accounts and notes
 """
@@ -26,6 +27,7 @@ _REQUIRED = [
     "CRM_DB_PASSWORD",
     "HANDBOOK_DB_PASSWORD",
     "HANDBOOK_MODEL_PATH",
+    "HANDBOOK_DOCUMENTS_PATH",
 ]
 
 
@@ -45,7 +47,10 @@ async def _run() -> None:
         owner_url, os.environ["CRM_DB_PASSWORD"], _optional_path("HARBORLINE_CRM_EXTRA_RECORDS")
     )
     await setup_handbook(
-        owner_url, os.environ["HANDBOOK_DB_PASSWORD"], Path(os.environ["HANDBOOK_MODEL_PATH"])
+        owner_url,
+        os.environ["HANDBOOK_DB_PASSWORD"],
+        Path(os.environ["HANDBOOK_MODEL_PATH"]),
+        Path(os.environ["HANDBOOK_DOCUMENTS_PATH"]),
     )
 
 

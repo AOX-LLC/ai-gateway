@@ -7,7 +7,7 @@ from psycopg import AsyncConnection, sql
 
 from handbook_server import MIGRATIONS_PACKAGE, ROLE, SCHEMA
 from handbook_server.embedding import Embedder
-from handbook_server.seed import build_dataset, insert_dataset, is_seeded
+from harborline_setup.handbook_seed import build_dataset, insert_dataset, is_seeded
 from harborline_setup.shared import ensure_role, ensure_schema, restrict_database_access
 from mcp_common.migrate import apply_migrations
 
@@ -23,11 +23,13 @@ _GRANTS = [
 ]
 
 
-async def setup_handbook(owner_url: str, password: str, model_path: Path, role: str = ROLE) -> None:
+async def setup_handbook(
+    owner_url: str, password: str, model_path: Path, documents_path: Path, role: str = ROLE
+) -> None:
     """Create the role, schema and extension, migrate, grant, and seed when empty.
 
     Every step is safe to repeat; the grants are applied on every run. The embedding model
-    is read only when there is something to seed."""
+    and the documents folder are read only when there is something to seed."""
     if not password:
         raise ValueError("HANDBOOK_DB_PASSWORD is empty")
     async with await AsyncConnection.connect(owner_url, autocommit=True) as connection:
@@ -43,7 +45,7 @@ async def setup_handbook(owner_url: str, password: str, model_path: Path, role: 
         if await is_seeded(connection):
             logger.info("handbook is already seeded")
             return
-        dataset = build_dataset(Embedder(model_path))
+        dataset = build_dataset(Embedder(model_path), documents_path)
         await insert_dataset(connection, dataset)
         logger.info("seeded %d documents, %d chunks", len(dataset.documents), len(dataset.chunks))
 

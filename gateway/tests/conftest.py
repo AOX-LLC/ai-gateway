@@ -29,15 +29,15 @@ from handbook_server import MIGRATIONS_PACKAGE as HANDBOOK_MIGRATIONS_PACKAGE
 from handbook_server import ROLE as HANDBOOK_ROLE
 from handbook_server import SCHEMA as HANDBOOK_SCHEMA
 from handbook_server.embedding import Embedder
-from handbook_server.seed import Dataset as HandbookDataset
-from handbook_server.seed import build_dataset as build_handbook_dataset
-from handbook_server.seed import insert_dataset as insert_handbook_dataset
 from harborline_setup.crm import grant_crm_access
 from harborline_setup.handbook import grant_handbook_access, prepare_schema
+from harborline_setup.handbook_seed import Dataset as HandbookDataset
+from harborline_setup.handbook_seed import build_dataset as build_handbook_dataset
+from harborline_setup.handbook_seed import insert_dataset as insert_handbook_dataset
 from harborline_setup.shared import restrict_database_access
 from harborline_setup.ticketing import grant_ticketing_access
 from mcp_common.migrate import apply_migrations
-from tests.helpers import serve_in_thread
+from tests.helpers import HANDBOOK_DOCUMENTS, serve_in_thread
 from ticketing_server import CONNECTION_KWARGS as TICKETING_CONNECTION_KWARGS
 from ticketing_server import MIGRATIONS_PACKAGE as TICKETING_MIGRATIONS_PACKAGE
 from ticketing_server import ROLE as TICKETING_ROLE
@@ -244,7 +244,7 @@ def embedder(model_path: Path) -> Embedder:
 
 @pytest.fixture(scope="session")
 def handbook_dataset(embedder: Embedder) -> HandbookDataset:
-    return build_handbook_dataset(embedder)
+    return build_handbook_dataset(embedder, HANDBOOK_DOCUMENTS)
 
 
 @pytest.fixture

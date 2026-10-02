@@ -107,6 +107,11 @@ services:
       TICKETING_DB_PASSWORD: ${TICKETING_DB_PASSWORD:?set it in .env}
       CRM_DB_PASSWORD: ${CRM_DB_PASSWORD:?set it in .env}
       HANDBOOK_DB_PASSWORD: ${HANDBOOK_DB_PASSWORD:?set it in .env}
+      HANDBOOK_DOCUMENTS_PATH: /handbook-documents
+    # The handbook's documents, restricted ones included, are in no image: .dockerignore keeps
+    # them out of the build, and only this one-shot sees them, mounted read-only.
+    volumes:
+      - ./servers/handbook/documents:/handbook-documents:ro
     depends_on:
       postgres:
         condition: service_healthy

@@ -7,8 +7,10 @@ handbook, and nothing in it refers to a real person, brand, address or phone num
 ## How it is made
 
 The 30 documents are plain Markdown files in
-`src/handbook_server/documents/DOC-001.md` to `DOC-030.md`, written by hand rather than
-generated, so every run reads the same text. Each starts with front matter holding `id`,
+`servers/handbook/documents/DOC-001.md` to `DOC-030.md`, written by hand rather than
+generated, so every run reads the same text. The folder is outside every Python package and
+excluded from the Docker build context, so no image contains the documents (restricted ones
+included); `harborline-setup` reads them from a read-only mount at `HANDBOOK_DOCUMENTS_PATH`. Each starts with front matter holding `id`,
 `title`, `category`, `classification` and `updated`, followed by a `#` title and three to
 five `##` sections (250 to 450 words in all). Emails are on `.example` domains and phone
 numbers are in the `555-0100` to `555-0199` block.

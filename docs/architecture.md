@@ -324,8 +324,14 @@ Read-only, two tools, both with `read` policies:
   embeds the chunks once; the server embeds only each query. The tests and CI fetch the same
   files into a cache directory with the same script. `servers/handbook/evals/retrieval.toml`
   holds 15 query and expected-document pairs; a test requires recall@3 of at least 0.8.
-- **Documents.** Written for this repository, in
-  `servers/handbook/src/handbook_server/documents`; see `servers/handbook/data/README.md`.
+- **Documents.** Written for this repository, in the plain repository folder
+  `servers/handbook/documents/`, which is in no Python package and in no image:
+  `.dockerignore` keeps it out of the build context, so the restricted text is not on the
+  server's filesystem to read, import or leak. Only the `servers-setup` one-shot has it,
+  mounted read-only at `HANDBOOK_DOCUMENTS_PATH`; the loader, chunker and seed live in
+  `harborline_setup`, which no server imports. CI greps the built image for the restricted
+  documents' code phrases (`scripts/check_image_has_no_restricted_text.sh`) and fails if
+  any is found. See `servers/handbook/data/README.md`.
 
 ### The fictional-data notice
 

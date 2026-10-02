@@ -1,4 +1,4 @@
-"""The handbook seed: the packaged documents, chunked and embedded.
+"""The handbook seed: the documents, chunked and embedded.
 
 Harborline Supply Co. does not exist; the documents were written for this repository. The
 seed is deterministic: the documents are files, the chunking is a fixed rule and the model
@@ -7,11 +7,12 @@ computes the embeddings here, once; the server embeds only each query.
 """
 
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from psycopg import AsyncConnection
 
-from handbook_server.documents import Document, chunk_document, load_documents
 from handbook_server.embedding import Embedder, vector_literal
+from harborline_setup.handbook_documents import Document, chunk_document, load_documents
 
 
 @dataclass(frozen=True)
@@ -48,8 +49,8 @@ def embedding_text(document: Document, heading: str, text: str) -> str:
     return f"{document.title}. {heading}. {text}"
 
 
-def build_dataset(embedder: Embedder) -> Dataset:
-    documents = load_documents()
+def build_dataset(embedder: Embedder, documents_path: Path) -> Dataset:
+    documents = load_documents(documents_path)
     pending = [(document, chunk) for document in documents for chunk in chunk_document(document)]
     vectors = embedder.embed(
         [embedding_text(document, chunk.heading, chunk.text) for document, chunk in pending]

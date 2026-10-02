@@ -23,9 +23,9 @@ from crm_server.server import build_app as build_crm_app
 from crm_server.settings import CrmSettings
 from handbook_server import MIGRATIONS_PACKAGE as HANDBOOK_MIGRATIONS_PACKAGE
 from handbook_server.embedding import ModelNotFoundError
-from handbook_server.seed import Dataset as HandbookDataset
 from handbook_server.server import build_app as build_handbook_app
 from handbook_server.settings import HandbookSettings
+from harborline_setup.handbook_seed import Dataset as HandbookDataset
 from mcp_common.credentials import MissingCredentialError, WeakCredentialError
 from mcp_common.migrate import load_migrations
 from mcp_common.notice import FICTIONAL_NOTICE

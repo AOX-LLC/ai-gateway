@@ -17,6 +17,9 @@ from ai_gateway.app import create_app
 from ai_gateway.seams.events import MemoryEventSink
 from ai_gateway.settings import GatewaySettings
 
+HANDBOOK_DOCUMENTS = Path(__file__).resolve().parents[2] / "servers" / "handbook" / "documents"
+"""The handbook's Markdown documents: a plain repository folder, in no package or image."""
+
 _SERVER_START_TIMEOUT_S = 10.0
 
 

@@ -1,22 +1,24 @@
 """Read the handbook's Markdown documents and cut them into chunks for search.
 
-Each document is `documents/DOC-###.md`: YAML front matter (id, title, category,
-classification, updated), then a `#` title and `##` sections. Everything here is
-fictional (see data/README.md).
+Setup-only: the documents live in `servers/handbook/documents/`, outside every Python
+package and every image, and only the setup container has them mounted. The running
+handbook server never imports this module. Each document is `DOC-###.md`: YAML front matter
+(id, title, category, classification, updated), then a `#` title and `##` sections.
+Everything here is fictional (see servers/handbook/data/README.md).
 """
 
 import re
 from dataclasses import dataclass
 from datetime import date
-from importlib.resources import files
-from typing import Annotated, Any, Literal
+from pathlib import Path
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
 
-Category = Literal["hr", "returns", "shipping", "security", "expenses"]
+from handbook_server.models import Category, DocumentId
+
 Classification = Literal["general", "restricted"]
-DocumentId = Annotated[str, Field(pattern=r"^DOC-[0-9]{3}$", max_length=7)]
 
 CHUNK_TARGET = 800
 """Characters a chunk aims at; a section shorter than this stays whole."""
@@ -77,9 +79,10 @@ def parse_document(source: str, name: str = "document") -> Document:
     )
 
 
-def load_documents() -> list[Document]:
-    """Every packaged document, in id order."""
-    folder = files("handbook_server").joinpath("documents")
+def load_documents(folder: Path) -> list[Document]:
+    """Every document in `folder`, in id order."""
+    if not folder.is_dir():
+        raise DocumentFileError(f"no handbook documents folder at {folder}")
     documents = [
         parse_document(entry.read_text(encoding="utf-8"), entry.name)
         for entry in folder.iterdir()
