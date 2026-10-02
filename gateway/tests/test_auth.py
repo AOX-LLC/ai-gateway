@@ -55,6 +55,11 @@ class InMemoryRegistry:
         self.uses.append(token_id)
 
 
+def _tampered(token: str) -> str:
+    """The same token with its last character changed: well-formed, wrong secret."""
+    return token[:-1] + ("A" if token[-1] != "A" else "B")
+
+
 @pytest.fixture
 def registry() -> InMemoryRegistry:
     return InMemoryRegistry()
@@ -106,7 +111,7 @@ async def test_wrong_secret_and_unknown_token_fail(
 ) -> None:
     token = generate_token()
     registry.add(token)
-    forged = token.plaintext[:-1] + ("A" if token.plaintext[-1] != "A" else "B")
+    forged = _tampered(token.plaintext)
     unknown = generate_token()
 
     assert await verifier.verify(forged) == AuthFailure(
@@ -198,7 +203,7 @@ async def test_every_bad_token_gets_the_same_response(
         revoked.plaintext,
         expired.plaintext,
         disabled.plaintext,
-        good.plaintext[:-2] + "zz",
+        _tampered(good.plaintext),
         generate_token().plaintext,
         "garbage",
     ]

@@ -335,3 +335,34 @@ async def test_unknown_tools_get_the_same_answer_as_out_of_scope_tools() -> None
 
     assert isinstance(out_of_scope, Blocked)
     assert unknown == out_of_scope.deny
+
+
+@pytest.mark.anyio
+async def test_absurdly_long_unknown_names_are_still_refused_and_recorded() -> None:
+    events = MemoryEventSink()
+    pipeline = Pipeline.build(parse_pipeline_config({}, (ScopeLayer,)), events, (ScopeLayer,))
+
+    deny = await pipeline.reject_unknown_tool(_context(set()), "x" * 5000)
+
+    assert deny.code is DenyCode.TOOL_UNAVAILABLE
+    assert len(deny.public_message) < 120
+    assert events.events[-1].subject_id == "x" * 61 + "..."
+
+
+@pytest.mark.anyio
+async def test_a_failing_filter_hides_every_tool_in_enforce_mode() -> None:
+    class BrokenFilter(BaseLayer):
+        name = "broken"
+
+        async def filter_tools(
+            self, ctx: CallContext, tools: Sequence[CatalogTool]
+        ) -> Sequence[CatalogTool]:
+            raise RuntimeError("filter bug")
+
+    events = MemoryEventSink()
+    pipeline = Pipeline.build(parse_pipeline_config({}, (BrokenFilter,)), events, (BrokenFilter,))
+
+    listed = await pipeline.list_tools(_context({"echo__say"}), [_catalog_tool("echo__say")])
+
+    assert listed == []
+    assert _layer_decisions(events)[0]["verdict"] == "error"
