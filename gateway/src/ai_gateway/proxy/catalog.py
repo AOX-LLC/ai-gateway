@@ -4,9 +4,10 @@ tools/list is answered from this cache only and never waits on an upstream. Each
 has its own background task that refreshes it on a short-lived connection, under its own
 timeout: every refresh interval when it is healthy, with exponential backoff when it is
 not. A hung upstream therefore delays only itself. Newly registered upstreams are noticed
-within seconds. A failed refresh makes the
-upstream unavailable: its tools disappear until it answers again, so clients never see
-stale descriptions for a server that may have changed.
+within seconds.
+
+A failed refresh makes the upstream unavailable: its tools disappear until it answers
+again, so clients never see stale descriptions for a server that may have changed.
 """
 
 import logging
@@ -80,14 +81,17 @@ class Catalog:
         """
         async with anyio.create_task_group() as task_group:
             self._task_group = task_group
-            await self.sync_with_registry()
-            with anyio.move_on_after(self.startup_wait_s):
-                for state in list(self._states.values()):
-                    await state.first_attempt_done.wait()
-            task_status.started()
-            while True:
-                await anyio.sleep(self.registry_poll_s)
+            try:
                 await self.sync_with_registry()
+                with anyio.move_on_after(self.startup_wait_s):
+                    for state in list(self._states.values()):
+                        await state.first_attempt_done.wait()
+                task_status.started()
+                while True:
+                    await anyio.sleep(self.registry_poll_s)
+                    await self.sync_with_registry()
+            finally:
+                self._task_group = None
 
     async def sync_with_registry(self) -> None:
         """Start a refresh task for each new or changed upstream; stop removed ones."""
