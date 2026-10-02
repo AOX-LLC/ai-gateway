@@ -10,6 +10,7 @@ import os
 import sys
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from uuid import UUID
 
 import anyio
@@ -20,6 +21,7 @@ from ai_gateway.proxy.naming import split_exposed
 from ai_gateway.registry import MIGRATIONS_PACKAGE
 from ai_gateway.registry.models import ClientStatus
 from ai_gateway.registry.repo import AdminRegistry, ClientNotFoundError
+from ai_gateway.registry.tool_policies import ToolPolicyFileError, load_tool_policies
 from mcp_common.migrate import apply_migrations
 
 _DATABASE_URL_ENV = "GATEWAY_MIGRATE_DATABASE_URL"
@@ -35,6 +37,30 @@ TEST_CLIENTS = {
     "harborline-ops-bot": (
         "Operations assistant for the fictional Harborline Supply Co. (test data)",
         ["echo__say", "echo__shout"],
+    ),
+}
+
+# Fictional demo data: the ticketing server's tools and the two clients that use them.
+DEMO_TICKETS_NAMESPACE = "tickets"
+DEMO_TICKETS_SCOPES_SUPPORT = [
+    "tickets__get_ticket",
+    "tickets__list_tickets",
+    "tickets__create_ticket",
+    "tickets__add_comment",
+]
+DEMO_TICKETS_SCOPES_OPS = [
+    *DEMO_TICKETS_SCOPES_SUPPORT,
+    "tickets__change_status",
+    "tickets__assign",
+]
+DEMO_CLIENTS = {
+    "harborline-support-bot": (
+        "Support assistant for the fictional Harborline Supply Co. (demo data)",
+        DEMO_TICKETS_SCOPES_SUPPORT,
+    ),
+    "harborline-ops-bot": (
+        "Operations assistant for the fictional Harborline Supply Co. (demo data)",
+        DEMO_TICKETS_SCOPES_OPS,
     ),
 }
 
@@ -116,6 +142,15 @@ def _parser() -> argparse.ArgumentParser:
     policy.add_argument("effect", choices=["read", "write"])
     policy.add_argument("--notes", default="")
     policy.set_defaults(handler=_tool_policy_set)
+
+    demo = commands.add_parser(
+        "seed-demo",
+        help="register the ticketing upstream, load tool policies, create the demo clients",
+    )
+    demo.add_argument("--tickets-url", default="http://ticketing:4412/mcp")
+    demo.add_argument("--credential-env", default="TICKETING_SERVICE_TOKEN", metavar="NAME")
+    demo.add_argument("--policies", type=Path, default=Path("config/tool_policies.toml"))
+    demo.set_defaults(handler=_seed_demo)
 
     seed = commands.add_parser(
         "seed-test", help="register the echo upstream and two fictional test clients"
@@ -235,6 +270,35 @@ async def _seed_test(database_url: str, args: argparse.Namespace) -> None:
             await registry.grant_scopes(client_id, scopes)
             await registry.revoke_all_tokens(client_id)
             token = await _issue(registry, client_id, "seed-test", expires_at=None)
+            tokens[name] = token.plaintext
+    print(json.dumps(tokens, indent=2))
+
+
+async def _seed_demo(database_url: str, args: argparse.Namespace) -> None:
+    """Idempotent: re-running revokes the previous demo tokens and prints new ones."""
+    try:
+        policies = load_tool_policies(args.policies)
+    except ToolPolicyFileError as error:
+        raise AdminError(str(error)) from error
+    tokens = {}
+    async with await AsyncConnection.connect(database_url) as connection:
+        registry = AdminRegistry(connection)
+        await registry.upsert_upstream(
+            DEMO_TICKETS_NAMESPACE,
+            args.tickets_url,
+            connect_timeout_ms=5000,
+            call_timeout_ms=10000,
+            credential_env=args.credential_env,
+        )
+        for policy in policies:
+            await registry.upsert_tool_policy(
+                policy.namespace, policy.tool, policy.effect, policy.notes
+            )
+        for name, (description, scopes) in DEMO_CLIENTS.items():
+            client_id = await registry.upsert_client(name, description)
+            await registry.grant_scopes(client_id, scopes)
+            await registry.revoke_all_tokens(client_id)
+            token = await _issue(registry, client_id, "seed-demo", expires_at=None)
             tokens[name] = token.plaintext
     print(json.dumps(tokens, indent=2))
 
