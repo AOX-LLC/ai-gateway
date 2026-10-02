@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
+import anyio
 import httpx2
 import pytest
 from mcp.client import Client
@@ -18,8 +19,10 @@ from mcp.types import INVALID_PARAMS, TextContent
 from ai_gateway.auth.tokens import IssuedToken
 from ai_gateway.registry import MIGRATIONS_PACKAGE
 from ai_gateway.registry.repo import AdminRegistry
+from echo_server.server import cancellations
 from mcp_common.migrate import load_migrations
 from tests.helpers import RunningGateway, run_gateway
+from tests.test_upstreams import eventually
 
 pytestmark = [pytest.mark.integration, pytest.mark.anyio]
 
@@ -235,3 +238,22 @@ async def test_healthz_reports_the_running_build(gateway: RunningGateway) -> Non
     assert health["version"] == version("ai-gateway")
     assert health["schema_version"] == f"{newest_migration:04d}"
     assert health["uptime_s"] >= 0
+
+
+async def test_a_client_that_cancels_mid_call_cancels_the_upstream_call(
+    gateway: RunningGateway, make_client: MakeClient
+) -> None:
+    """Cancellation travels client -> gateway -> upstream over real HTTP at both hops."""
+    _, token = await make_client("cancel-bot", ["echo__wait"])
+    cancelled_before = cancellations.count
+    started_before = cancellations.started
+
+    async with connect(gateway.url, token.plaintext) as client:
+        with anyio.move_on_after(1.0) as client_scope:
+            await client.call_tool("echo__wait", {"seconds": 30})
+        assert client_scope.cancelled_caught
+        # The upstream call timeout is 5 s, so a prompt cancel can only be propagation.
+        await eventually(lambda: cancellations.count > cancelled_before, timeout_s=2.0)
+
+    assert cancellations.started == started_before + 1
+    assert cancellations.count == cancelled_before + 1
