@@ -311,9 +311,15 @@ Whether a call can change anything is the gateway's decision, never the upstream
 ### Client identity in `_meta`: attribution, not authorization
 
 On every forwarded `tools/call` the gateway sends only its own `_meta`:
-`{"io.aox.ai-gateway/client": "<authenticated client name>"}`. Whatever `_meta` the client
-sent, including that same key, is dropped and never forwarded, so a client cannot claim to
-be another one. A server may record the name, for example as a ticket's `requested_by`, and
+`{"io.aox.ai-gateway/client": "<authenticated client name>"}`. Every key the client sent in
+`_meta`, including that same key, is dropped and never forwarded, so a client cannot claim
+to be another one.
+
+One exception is not a key the gateway forwards but trace context: the MCP SDK's
+OpenTelemetry integration reads a client-supplied `traceparent` on the way in and injects
+trace context on the way out, so a client can choose which trace the upstream call joins.
+It carries no identity and no authority. Phase 5, which configures tracing, should start a
+new trace at the gateway instead of continuing the client's. A server may record the name, for example as a ticket's `requested_by`, and
 uses `direct` when the key is absent or not a valid client name. **It is attribution only.**
 Anything that can reach a server directly can write any value there, so a server must never
 use it to decide what a caller may do. Authorization is the gateway's scope check.
