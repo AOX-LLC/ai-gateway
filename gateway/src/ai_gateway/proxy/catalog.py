@@ -1,8 +1,9 @@
 """The tool catalog: every enabled upstream's tools under their exposed names, cached.
 
 tools/list is answered from this cache only and never waits on an upstream. A background
-task refreshes each upstream on a short-lived connection, every refresh interval when
-it is healthy and with exponential backoff when it is not. A failed refresh makes the
+task notices newly registered upstreams within seconds, and refreshes each upstream on a
+short-lived connection: every refresh interval when it is healthy, with exponential
+backoff when it is not. A failed refresh makes the
 upstream unavailable: its tools disappear until it answers again, so clients never see
 stale descriptions for a server that may have changed.
 """
@@ -52,6 +53,8 @@ class Catalog:
     source: UpstreamSource
     open_client: UpstreamClientFactory = open_upstream_client
     refresh_interval_s: float = 60.0
+    registry_poll_s: float = 5.0
+    """How often to look for newly registered or removed upstreams. A cheap query."""
     clock: Callable[[], float] = time.monotonic
     _states: dict[str, _UpstreamState] = field(default_factory=dict, init=False)
 
@@ -156,7 +159,8 @@ class Catalog:
         return [state for state in self._states.values() if state.is_available]
 
     def _seconds_until_next_due(self) -> float:
-        if not self._states:
-            return self.refresh_interval_s
-        earliest = min(state.next_refresh_at for state in self._states.values())
-        return max(0.5, earliest - self.clock())
+        earliest = min(
+            (state.next_refresh_at for state in self._states.values()),
+            default=self.clock() + self.registry_poll_s,
+        )
+        return min(self.registry_poll_s, max(0.5, earliest - self.clock()))

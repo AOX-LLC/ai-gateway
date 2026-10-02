@@ -286,3 +286,10 @@ async def test_an_unreachable_upstream_is_unavailable() -> None:
             await pool.call_tool("session-a", uuid4(), ECHO, "say", {"text": "hi"})
 
     assert raised.value.status is UpstreamStatus.UNAVAILABLE
+
+
+def test_new_upstreams_are_noticed_within_the_registry_poll_interval() -> None:
+    clock = ManualClock()
+    catalog = Catalog(StaticSource(), clock=clock, registry_poll_s=5, refresh_interval_s=60)
+
+    assert catalog._seconds_until_next_due() == 5
