@@ -47,6 +47,7 @@ jobs:
     env:
       GATEWAY_TEST_DATABASE_URL: postgresql://ai_gateway_owner:ci-only-password@localhost:5432/ai_gateway_test
       GATEWAY_TEST_APP_DATABASE_URL: postgresql://gateway_app:ci-only-app-password@localhost:5432/ai_gateway_test
+      TICKETING_TEST_APP_DATABASE_URL: postgresql://ticketing_app:ci-only-ticketing-password@localhost:5432/ai_gateway_test
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -62,6 +63,12 @@ jobs:
           docker exec ${{ job.services.postgres.id }}
           psql -U ai_gateway_owner -d ai_gateway_test -v ON_ERROR_STOP=1
           -c "CREATE ROLE gateway_app LOGIN PASSWORD 'ci-only-app-password'"
+      - name: Create the ticketing server's least-privilege role
+        # Before the tests, so the ticketing migration's grant block runs and is tested.
+        run: >-
+          docker exec ${{ job.services.postgres.id }}
+          psql -U ai_gateway_owner -d ai_gateway_test -v ON_ERROR_STOP=1
+          -c "CREATE ROLE ticketing_app LOGIN PASSWORD 'ci-only-ticketing-password'"
       - run: uv run pytest -ra --junitxml=pytest.xml
       - name: Fail if any test was skipped
         run: |
@@ -83,6 +90,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # On a pull request the default checkout is GitHub's temporary merge commit.
+          # Build and test the commit that was actually pushed.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
@@ -128,6 +138,26 @@ jobs:
           LOOKUP_ID=$(echo "$SUPPORT" | cut -d_ -f2)
           docker compose run --rm -T admin token-revoke "$LOOKUP_ID"
           GATEWAY_TOKEN="$SUPPORT" uv run scripts/test_client.py --expect-rejected
+      - name: Ticketing scenario through the gateway and directly
+        shell: bash
+        run: |
+          set -euo pipefail
+          trap 'rm -f demo.json' EXIT
+          docker compose run --rm -T admin seed-demo > demo.json
+          SUPPORT=$(python3 -c 'import json; print(json.load(open("demo.json"))["harborline-support-bot"])')
+          echo "::add-mask::$SUPPORT"
+          OPS=$(python3 -c 'import json; print(json.load(open("demo.json"))["harborline-ops-bot"])')
+          echo "::add-mask::$OPS"
+          # The gateway polls the registry every 5 seconds.
+          sleep 8
+          curl -sSf http://127.0.0.1:4412/healthz
+          GATEWAY_TOKEN="$SUPPORT" uv run scripts/test_client.py \
+            --scenario scripts/scenarios/harborline.toml --as harborline-support-bot
+          GATEWAY_TOKEN="$OPS" uv run scripts/test_client.py \
+            --scenario scripts/scenarios/harborline.toml --as harborline-ops-bot
+          set -a; . ./.env; set +a
+          uv run scripts/test_client.py \
+            --scenario scripts/scenarios/harborline.toml --direct ticketing
       - name: Show stack logs
         if: failure()
         run: docker compose --profile test logs --no-color
