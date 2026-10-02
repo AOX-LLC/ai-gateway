@@ -35,7 +35,18 @@ async def test_database_url(anyio_backend: str) -> str:
     async with await psycopg.AsyncConnection.connect(url, autocommit=True) as connection:
         await connection.execute("DROP SCHEMA public CASCADE")
         await connection.execute("CREATE SCHEMA public")
+        # A recreated schema loses the default grant; the gateway's role needs it.
+        await connection.execute("GRANT USAGE ON SCHEMA public TO PUBLIC")
     await apply_migrations(url)
+    return url
+
+
+@pytest.fixture
+def app_database_url(test_database_url: str) -> str:
+    """The test database as the gateway's own least-privilege role, gateway_app."""
+    url = os.environ.get("GATEWAY_TEST_APP_DATABASE_URL")
+    if not url:
+        pytest.skip("GATEWAY_TEST_APP_DATABASE_URL is not set")
     return url
 
 
