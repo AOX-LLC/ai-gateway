@@ -124,3 +124,29 @@ async def test_setup_restores_grants_that_were_revoked(
     await setup_ticketing(url, password, None, role)
 
     assert (await _privileges(url, role))["select"] is True
+
+
+async def test_setup_stores_a_scram_verifier_and_the_role_can_log_in(
+    scratch_database: tuple[str, str],
+) -> None:
+    url, role = scratch_database
+    password = f"scratch-{uuid4().hex}"
+
+    await setup_ticketing(url, password, None, role)
+
+    async with await psycopg.AsyncConnection.connect(url) as owner:
+        cursor = await owner.execute(
+            "SELECT rolpassword FROM pg_authid WHERE rolname = %s", (role,)
+        )
+        row = await cursor.fetchone()
+    assert row is not None
+    assert row[0].startswith("SCRAM-SHA-256$")
+    assert password not in row[0]
+    as_role = make_conninfo(url, user=role, password=password)
+    async with await psycopg.AsyncConnection.connect(as_role) as connection:
+        cursor = await connection.execute("SELECT current_user")
+        assert await cursor.fetchone() == (role,)
+    with pytest.raises(psycopg.OperationalError):
+        await psycopg.AsyncConnection.connect(
+            make_conninfo(url, user=role, password=f"not-{password}")
+        )

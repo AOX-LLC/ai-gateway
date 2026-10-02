@@ -61,10 +61,15 @@ async def _ensure_role(connection: AsyncConnection, password: str, role: str) ->
     cursor = await connection.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (role,))
     if await cursor.fetchone() is None:
         await connection.execute(sql.SQL("CREATE ROLE {} LOGIN").format(sql.Identifier(role)))
-    # DDL cannot take bind parameters; Literal quotes the value safely on the client.
+    # Send a SCRAM verifier, never the password: the plaintext would otherwise appear in
+    # the server's logs and statistics if statements are logged. DDL cannot take bind
+    # parameters; Literal quotes the value safely on the client.
+    verifier = connection.pgconn.encrypt_password(
+        password.encode(), role.encode(), b"scram-sha-256"
+    ).decode()
     await connection.execute(
         sql.SQL("ALTER ROLE {} WITH LOGIN PASSWORD {}").format(
-            sql.Identifier(role), sql.Literal(password)
+            sql.Identifier(role), sql.Literal(verifier)
         )
     )
     await connection.execute(
