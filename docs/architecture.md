@@ -234,6 +234,21 @@ machine, these options keep that binding. None of them is built into this reposi
 
 Any option that crosses a network carries the bearer token, so it must use TLS or SSH.
 
+## Health check
+
+`GET /healthz` needs no token and, like everything else, is published on 127.0.0.1 only.
+It answers 200 while the MCP endpoint is serving and 503 otherwise.
+
+| Field | Meaning |
+| --- | --- |
+| `status` | `ok` or `unavailable` |
+| `commit` | The commit the image was built from, set by the `GIT_COMMIT` build argument; `null` when not given |
+| `commit_source` | `process_start`: the commit is fixed for the life of the process |
+| `branch` | Set by the `GIT_BRANCH` build argument; `null` when not given |
+| `version` | The `ai-gateway` package version |
+| `schema_version` | The newest applied migration, zero-padded (`"0002"`). Re-read at most every 30 s; `null` if it cannot be read |
+| `uptime_s` | Seconds since the process started |
+
 ## Ports
 
 | Service | Address |

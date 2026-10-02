@@ -24,10 +24,16 @@ class GatewaySettings(BaseSettings):
     max_sessions: Annotated[int, Field(ge=1)] = 1000
     max_sessions_per_client: Annotated[int, Field(ge=1)] = 20
     catalog_refresh_s: Annotated[float, Field(gt=0)] = 60.0
-    git_commit: str = "unknown"
-    """Set from the image's GIT_COMMIT build argument; reported on /healthz."""
-    git_branch: str = "unknown"
-    """Set from the image's GIT_BRANCH build argument; reported on /healthz."""
+    git_commit: str | None = None
+    """Set from the image's GIT_COMMIT build argument; None when it was not given."""
+    git_branch: str | None = None
+    """Set from the image's GIT_BRANCH build argument; None when it was not given."""
+
+    @field_validator("git_commit", "git_branch", mode="before")
+    @classmethod
+    def _empty_means_unknown(cls, value: object) -> object:
+        # An image built without the argument carries an empty string.
+        return None if value == "" else value
 
     @field_validator("allowed_hosts", mode="before")
     @classmethod

@@ -1,9 +1,7 @@
 """Assemble the gateway: FastAPI app, MCP endpoint, and the tasks behind it."""
 
-import time
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
 from importlib.metadata import version
 
 import anyio
@@ -18,6 +16,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from ai_gateway.auth.middleware import BearerAuthMiddleware
 from ai_gateway.auth.verifier import TokenVerifier
+from ai_gateway.health import BuildIdentity, SchemaVersionCache
 from ai_gateway.pipeline.config import load_pipeline_config
 from ai_gateway.pipeline.registry import LAYER_ORDER
 from ai_gateway.pipeline.runner import Pipeline
@@ -32,33 +31,13 @@ from ai_gateway.settings import GatewaySettings
 MCP_PATH = "/mcp"
 
 
-@dataclass
-class _Identity:
-    """What /healthz reports about the running build, read once at startup."""
-
-    commit: str
-    branch: str
-    version: str
-    started_at: float
-    schema_version: int | None = None
-
-    def to_payload(self, status: str) -> dict[str, str | int | float | None]:
-        return {
-            "status": status,
-            "commit": self.commit,
-            "branch": self.branch,
-            "version": self.version,
-            "schema_version": self.schema_version,
-            "uptime_s": round(time.monotonic() - self.started_at, 1),
-        }
-
-
 class _McpEndpoint:
     """The MCP endpoint's ASGI app. It only exists while the lifespan runs, because the
     SDK's session manager needs a running task group."""
 
     def __init__(self) -> None:
         self.app: ASGIApp | None = None
+        self.schema_versions: SchemaVersionCache | None = None
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if self.app is None:
@@ -75,11 +54,8 @@ def create_app(settings: GatewaySettings, events: EventSink | None = None) -> Fa
     pipeline_config = load_pipeline_config(settings.pipeline_file, LAYER_ORDER)
     pipeline = Pipeline.build(pipeline_config, event_sink)
     endpoint = _McpEndpoint()
-    identity = _Identity(
-        commit=settings.git_commit,
-        branch=settings.git_branch,
-        version=version("ai-gateway"),
-        started_at=time.monotonic(),
+    identity = BuildIdentity(
+        commit=settings.git_commit, branch=settings.git_branch, version=version("ai-gateway")
     )
 
     @asynccontextmanager
@@ -87,9 +63,10 @@ def create_app(settings: GatewaySettings, events: EventSink | None = None) -> Fa
         async with AsyncConnectionPool(
             settings.database_url.get_secret_value(), min_size=1, max_size=10, open=False
         ) as db_pool:
+            # Raises when the database is unreachable, so the gateway refuses to start.
             await db_pool.open(wait=True, timeout=30)
             registry = GatewayRegistry(db_pool)
-            identity.schema_version = await registry.schema_version()
+            endpoint.schema_versions = SchemaVersionCache(registry)
             catalog = Catalog(registry, refresh_interval_s=settings.catalog_refresh_s)
             sessions = UpstreamSessionPool(idle_timeout_s=settings.session_idle_timeout_s)
             session_manager = StreamableHTTPSessionManager(
@@ -121,6 +98,7 @@ def create_app(settings: GatewaySettings, events: EventSink | None = None) -> Fa
                         yield
                     finally:
                         endpoint.app = None
+                        endpoint.schema_versions = None
                 task_group.cancel_scope.cancel()
 
     app = FastAPI(
@@ -130,9 +108,12 @@ def create_app(settings: GatewaySettings, events: EventSink | None = None) -> Fa
     @app.get("/healthz")
     async def healthz() -> JSONResponse:
         """Healthy only while the MCP endpoint is serving, so Compose notices when it is not."""
+        schema_version = (
+            await endpoint.schema_versions.current() if endpoint.schema_versions else None
+        )
         if endpoint.app is None:
-            return JSONResponse(identity.to_payload("unavailable"), status_code=503)
-        return JSONResponse(identity.to_payload("ok"))
+            return JSONResponse(identity.payload("unavailable", schema_version), status_code=503)
+        return JSONResponse(identity.payload("ok", schema_version))
 
     app.router.routes.append(Route(MCP_PATH, endpoint=endpoint, methods=["GET", "POST", "DELETE"]))
     return app
