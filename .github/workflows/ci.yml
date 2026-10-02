@@ -48,6 +48,10 @@ jobs:
       GATEWAY_TEST_DATABASE_URL: postgresql://ai_gateway_owner:ci-only-password@localhost:5432/ai_gateway_test
       GATEWAY_TEST_APP_DATABASE_URL: postgresql://gateway_app:ci-only-app-password@localhost:5432/ai_gateway_test
       TICKETING_TEST_APP_DATABASE_URL: postgresql://ticketing_app:ci-only-ticketing-password@localhost:5432/ai_gateway_test
+      CRM_TEST_APP_DATABASE_URL: postgresql://crm_app:ci-only-crm-password@localhost:5432/ai_gateway_test
+      HANDBOOK_TEST_APP_DATABASE_URL: postgresql://handbook_app:ci-only-handbook-password@localhost:5432/ai_gateway_test
+      # Where the tests find the embedding model (they fetch it there if it is missing).
+      HANDBOOK_MODEL_PATH: ${{ github.workspace }}/.model-cache/potion-base-8M
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -69,6 +73,25 @@ jobs:
           docker exec ${{ job.services.postgres.id }}
           psql -U ai_gateway_owner -d ai_gateway_test -v ON_ERROR_STOP=1
           -c "CREATE ROLE ticketing_app LOGIN PASSWORD 'ci-only-ticketing-password'"
+      - name: Create the CRM server's least-privilege role
+        run: >-
+          docker exec ${{ job.services.postgres.id }}
+          psql -U ai_gateway_owner -d ai_gateway_test -v ON_ERROR_STOP=1
+          -c "CREATE ROLE crm_app LOGIN PASSWORD 'ci-only-crm-password'"
+      - name: Create the handbook server's least-privilege role
+        run: >-
+          docker exec ${{ job.services.postgres.id }}
+          psql -U ai_gateway_owner -d ai_gateway_test -v ON_ERROR_STOP=1
+          -c "CREATE ROLE handbook_app LOGIN PASSWORD 'ci-only-handbook-password'"
+      - name: Cache the embedding model
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .model-cache
+          # The script holds the pinned revision, and the hash list the hash of every file.
+          key: potion-base-8M-${{ hashFiles('scripts/fetch_model.py', 'scripts/potion-base-8M.sha256') }}
+      - name: Fetch the embedding model
+        # Verifies every file against its pinned hash, whether it came from the cache or not.
+        run: python3 scripts/fetch_model.py --dest "$HANDBOOK_MODEL_PATH"
       - run: uv run pytest -ra --junitxml=pytest.xml
       - name: Fail if any test was skipped
         run: |
@@ -112,7 +135,7 @@ jobs:
           EXPECTED_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
           EXPECTED_BRANCH: ${{ github.head_ref || github.ref_name }}
         run: |
-          for port in 4401 4412; do
+          for port in 4401 4410 4411 4412; do
             curl -sSf "http://127.0.0.1:$port/healthz" | python3 -c '
           import json, os, sys
           health = json.load(sys.stdin)
@@ -142,7 +165,7 @@ jobs:
           LOOKUP_ID=$(echo "$SUPPORT" | cut -d_ -f2)
           docker compose run --rm -T admin token-revoke "$LOOKUP_ID"
           GATEWAY_TOKEN="$SUPPORT" uv run scripts/test_client.py --expect-rejected
-      - name: Ticketing scenario through the gateway and directly
+      - name: Harborline scenario through the gateway and directly
         shell: bash
         run: |
           set -euo pipefail
@@ -155,14 +178,16 @@ jobs:
           # The gateway polls the registry every 5 seconds, so the tickets tools can take a
           # moment to show up: retry the first check for at most about 60 seconds.
           retry() { for _ in $(seq 1 30); do "$@" && return 0; sleep 2; done; "$@"; }
-          curl -sSf http://127.0.0.1:4412/healthz
+          for port in 4410 4411 4412; do curl -sSf "http://127.0.0.1:$port/healthz"; echo; done
           GATEWAY_TOKEN="$SUPPORT" retry uv run scripts/test_client.py \
             --scenario scripts/scenarios/harborline.toml --as harborline-support-bot
           GATEWAY_TOKEN="$OPS" uv run scripts/test_client.py \
             --scenario scripts/scenarios/harborline.toml --as harborline-ops-bot
           set -a; . ./.env; set +a
-          uv run scripts/test_client.py \
-            --scenario scripts/scenarios/harborline.toml --direct ticketing
+          for server in ticketing crm handbook; do
+            uv run scripts/test_client.py \
+              --scenario scripts/scenarios/harborline.toml --direct "$server"
+          done
       - name: Show stack logs
         if: failure()
         run: docker compose --profile test logs --no-color

@@ -63,3 +63,6 @@ Desktop.ini
 .vscode/
 *.swp
 *.swo
+
+# Embedding model fetched for the tests (scripts/fetch_model.py)
+.model-cache/
