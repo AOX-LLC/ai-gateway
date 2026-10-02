@@ -13,13 +13,13 @@ from harborline_setup.handbook_seed import (
     is_seeded,
     sync_superseded,
 )
-from harborline_setup.shared import (
+from mcp_common.migrate import apply_migrations
+from mcp_common.roles import (
     ensure_role,
     ensure_schema,
     restrict_database_access,
     revoke_role_access,
 )
-from mcp_common.migrate import apply_migrations
 
 logger = logging.getLogger(__name__)
 

@@ -1,4 +1,6 @@
-"""Steps every server's setup shares: its role, its schema, and the database's default access."""
+"""Steps the setup of every schema shares: its role, its schema, and the database's defaults.
+
+Used by harborline-setup for the servers and by gateway-admin for the telemetry schema."""
 
 from psycopg import AsyncConnection, sql
 

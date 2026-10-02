@@ -34,9 +34,9 @@ from harborline_setup.handbook import grant_handbook_access, prepare_schema
 from harborline_setup.handbook_seed import Dataset as HandbookDataset
 from harborline_setup.handbook_seed import build_dataset as build_handbook_dataset
 from harborline_setup.handbook_seed import insert_dataset as insert_handbook_dataset
-from harborline_setup.shared import restrict_database_access
 from harborline_setup.ticketing import grant_ticketing_access
 from mcp_common.migrate import apply_migrations
+from mcp_common.roles import restrict_database_access
 from tests.helpers import HANDBOOK_DOCUMENTS, serve_in_thread
 from ticketing_server import CONNECTION_KWARGS as TICKETING_CONNECTION_KWARGS
 from ticketing_server import MIGRATIONS_PACKAGE as TICKETING_MIGRATIONS_PACKAGE
