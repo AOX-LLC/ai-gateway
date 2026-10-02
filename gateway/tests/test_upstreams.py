@@ -7,6 +7,7 @@ from uuid import uuid4
 
 import anyio
 import httpx2
+import psycopg
 import pytest
 from mcp.client import Client
 from mcp.shared.exceptions import MCPError
@@ -293,3 +294,48 @@ def test_new_upstreams_are_noticed_within_the_registry_poll_interval() -> None:
     catalog = Catalog(StaticSource(), clock=clock, registry_poll_s=5, refresh_interval_s=60)
 
     assert catalog._seconds_until_next_due() == 5
+
+
+class FlakyRegistry(StaticSource):
+    def __init__(self, *upstreams: UpstreamServer) -> None:
+        super().__init__(*upstreams)
+        self.is_down = False
+
+    async def enabled_upstreams(self) -> list[UpstreamServer]:
+        if self.is_down:
+            raise psycopg.OperationalError("server closed the connection unexpectedly")
+        return self.upstreams
+
+
+@pytest.mark.anyio
+async def test_a_registry_outage_keeps_the_last_catalog() -> None:
+    registry = FlakyRegistry(ECHO)
+    catalog = Catalog(registry, open_client=FakeUpstream().open)
+    await catalog.refresh_due()
+
+    registry.is_down = True
+    await catalog.refresh_due()
+
+    assert [tool.exposed_name for tool in catalog.tools()] == ["echo__say", "echo__shout"]
+
+
+@pytest.mark.anyio
+async def test_an_upstream_registered_later_is_picked_up_at_the_next_poll() -> None:
+    clock = ManualClock()
+    second = UpstreamServer(
+        id=uuid4(),
+        namespace="crm",
+        url="http://crm.test/mcp",
+        connect_timeout_s=1,
+        call_timeout_s=1,
+    )
+    registry = StaticSource(ECHO)
+    catalog = Catalog(registry, open_client=FakeUpstream().open, clock=clock, registry_poll_s=5)
+    await catalog.refresh_due()
+
+    registry.upstreams.append(second)
+    clock.now += catalog._seconds_until_next_due()
+    await catalog.refresh_due()
+
+    assert catalog._seconds_until_next_due() <= 5
+    assert catalog.resolve("crm__say") is not None

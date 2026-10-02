@@ -17,6 +17,7 @@ from typing import Protocol
 import anyio
 from anyio.abc import TaskStatus
 from mcp.types import Tool
+from psycopg import Error as DatabaseError
 
 from ai_gateway.pipeline.types import CatalogTool
 from ai_gateway.proxy.naming import expose
@@ -87,9 +88,14 @@ class Catalog:
                 task_group.start_soon(self._refresh, state)
 
     async def _sync_with_registry(self) -> None:
-        upstreams = {
-            upstream.namespace: upstream for upstream in await self.source.enabled_upstreams()
-        }
+        try:
+            registered = await self.source.enabled_upstreams()
+        except DatabaseError:
+            # Keep serving the last known catalog; the next poll tries again. Letting this
+            # escape would end the background task and take the MCP endpoint down with it.
+            logger.warning("could not read the upstream registry; keeping the last catalog")
+            return
+        upstreams = {upstream.namespace: upstream for upstream in registered}
         for namespace in self._states.keys() - upstreams.keys():
             logger.info("upstream %s was removed or disabled", namespace)
             del self._states[namespace]
