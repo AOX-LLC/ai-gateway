@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 TABLES = ["requests", "layer_verdicts", "auth_failures", "spans"]
 """The tables whose old rows the purge deletes."""
 APPEND_ONLY_TABLES = [*TABLES, "pipeline_configs"]
+TELEMETRY_TABLES = APPEND_ONLY_TABLES
 DASHBOARD_VIEWS = [
     "dash_requests",
     "dash_layer_verdicts",

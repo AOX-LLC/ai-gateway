@@ -1,63 +1,22 @@
 """The telemetry schema: what each role can and cannot do, and what a row can hold."""
 
-import os
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import psycopg
 import pytest
 from psycopg import errors, sql
-from psycopg.conninfo import conninfo_to_dict
 from psycopg.types.json import Jsonb
 
-from ai_gateway.telemetry import MIGRATIONS_PACKAGE, SCHEMA
+from ai_gateway.telemetry import MIGRATIONS_PACKAGE
 from ai_gateway.telemetry.setup import TelemetryPasswords, grant_telemetry_access, setup_telemetry
 from mcp_common.migrate import load_migrations
+from tests.conftest import password_of
 
 pytestmark = [pytest.mark.integration, pytest.mark.anyio]
 
 NOW = datetime(2026, 10, 2, 12, 0, tzinfo=UTC)
 SHA = "a" * 64
-
-
-def _url(variable: str) -> str:
-    url = os.environ.get(variable)
-    if not url:
-        pytest.skip(f"{variable} is not set")
-    return url
-
-
-@pytest.fixture
-def writer_url() -> str:
-    return _url("TELEMETRY_WRITER_TEST_DATABASE_URL")
-
-
-@pytest.fixture
-def reader_url() -> str:
-    return _url("TELEMETRY_READER_TEST_DATABASE_URL")
-
-
-@pytest.fixture
-def purger_url() -> str:
-    return _url("TELEMETRY_PURGER_TEST_DATABASE_URL")
-
-
-def _password(url: str) -> str:
-    return str(conninfo_to_dict(url)["password"])
-
-
-@pytest.fixture
-async def telemetry(
-    test_database_url: str, writer_url: str, reader_url: str, purger_url: str
-) -> None:
-    """A fresh telemetry schema, set up the way `gateway-admin telemetry-setup` sets it up.
-    The roles use the passwords the rest of the suite logs in with."""
-    async with await psycopg.AsyncConnection.connect(test_database_url, autocommit=True) as conn:
-        await conn.execute(f"DROP SCHEMA IF EXISTS {SCHEMA} CASCADE".encode())
-    await setup_telemetry(
-        test_database_url,
-        TelemetryPasswords(_password(writer_url), _password(reader_url), _password(purger_url)),
-    )
 
 
 async def _as(url: str) -> psycopg.AsyncConnection:
@@ -94,7 +53,9 @@ async def test_setup_is_safe_to_repeat(
 ) -> None:
     await setup_telemetry(
         test_database_url,
-        TelemetryPasswords(_password(writer_url), _password(reader_url), _password(purger_url)),
+        TelemetryPasswords(
+            password_of(writer_url), password_of(reader_url), password_of(purger_url)
+        ),
     )
 
     async with await _as(test_database_url) as connection:
@@ -104,7 +65,7 @@ async def test_setup_is_safe_to_repeat(
 
 
 @pytest.mark.parametrize("empty", ["writer", "reader", "purger"])
-async def test_setup_refuses_an_empty_password(test_database_url: str, empty: str) -> None:
+async def test_setup_refuses_an_emptypassword_of(test_database_url: str, empty: str) -> None:
     passwords = {"writer": "w", "reader": "r", "purger": "p", **{empty: ""}}
 
     with pytest.raises(ValueError, match="empty"):

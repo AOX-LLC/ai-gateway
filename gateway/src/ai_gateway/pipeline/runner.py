@@ -131,6 +131,10 @@ class Pipeline:
         self._events = events
         self._emit_timeout_s = emit_timeout_s
 
+    def describe(self) -> list[dict[str, str]]:
+        """The layers and their modes, in pipeline order, for the telemetry store."""
+        return [{"name": layer.name, "mode": mode.value} for layer, mode in self._layers]
+
     @classmethod
     def build(
         cls,

@@ -108,12 +108,22 @@ class RunningGateway:
 
 
 @contextmanager
-def run_gateway(database_url: str, workdir: Path) -> Iterator[RunningGateway]:
-    """The whole gateway on a free port, with only the scope layer, recording its events."""
+def run_gateway(
+    database_url: str, workdir: Path, telemetry_database_url: str | None = None
+) -> Iterator[RunningGateway]:
+    """The whole gateway on a free port, with only the scope layer, recording its events (and,
+    given a telemetry database, storing them there too)."""
     pipeline_file = workdir / "pipeline.toml"
     pipeline_file.write_text('[layers]\nscope = "enforce"\n')
     events = MemoryEventSink()
-    settings = GatewaySettings(database_url=SecretStr(database_url), pipeline_file=pipeline_file)
+    settings = GatewaySettings(
+        database_url=SecretStr(database_url),
+        pipeline_file=pipeline_file,
+        telemetry_database_url=(
+            SecretStr(telemetry_database_url) if telemetry_database_url else None
+        ),
+        telemetry_flush_interval_s=0.05,
+    )
     with serve_in_thread(create_app(settings, events)) as base_url:
         yield RunningGateway(f"{base_url}/mcp", events)
 

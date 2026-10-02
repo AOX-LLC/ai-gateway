@@ -174,7 +174,11 @@ async def test_nothing_of_the_clients_own_meta_reaches_the_ticketing_server(
 
     calls = [r for r in upstream_requests if r.get("method") == "tools/call"]
     assert len(calls) == 1
-    assert calls[0]["params"]["_meta"] == {CLIENT_META_KEY: "harborline-support-bot"}
+    forwarded = dict(calls[0]["params"]["_meta"])
+    # The gateway's own trace context may ride along when a tracer is recording; the client's
+    # own `_meta` never does (see the traceparent test below).
+    forwarded.pop("traceparent", None)
+    assert forwarded == {CLIENT_META_KEY: "harborline-support-bot"}
     assert "client-chosen-token" not in json.dumps(calls)
 
 
