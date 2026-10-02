@@ -1,6 +1,10 @@
 # Worktrees
 .worktrees/
 
+# Local agent notes and memory
+.claude/agent-memory/
+CLAUDE.local.md
+
 # Environment files — keep the example tracked
 .env
 .env.*
