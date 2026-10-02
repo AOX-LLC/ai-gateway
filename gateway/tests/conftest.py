@@ -15,7 +15,8 @@ from ai_gateway.auth.tokens import IssuedToken, generate_token
 from ai_gateway.registry import MIGRATIONS_PACKAGE
 from ai_gateway.registry.repo import AdminRegistry
 from echo_server.server import build_app
-from harborline_setup.ticketing import grant_ticketing_access, restrict_database_access
+from harborline_setup.shared import restrict_database_access
+from harborline_setup.ticketing import grant_ticketing_access
 from mcp_common.migrate import apply_migrations
 from tests.helpers import serve_in_thread
 from ticketing_server import CONNECTION_KWARGS as TICKETING_CONNECTION_KWARGS
