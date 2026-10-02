@@ -33,6 +33,7 @@ services:
       dockerfile: gateway/Dockerfile
     image: ai-gateway-gateway
     command: ["gateway-admin", "migrate"]
+    <<: *hardening
     environment:
       GATEWAY_MIGRATE_DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
     depends_on:
@@ -82,6 +83,7 @@ services:
       dockerfile: gateway/Dockerfile
     image: ai-gateway-gateway
     entrypoint: ["gateway-admin"]
+    <<: *hardening
     environment:
       GATEWAY_MIGRATE_DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
     depends_on:
