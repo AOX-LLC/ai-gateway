@@ -7,11 +7,16 @@ from uuid import uuid4
 
 import anyio
 import pytest
+from mcp.client import Client
 from pydantic import BaseModel
 
 from ai_gateway.proxy.catalog import Catalog
 from ai_gateway.proxy.sessions import UpstreamSessionPool
-from ai_gateway.proxy.upstream_client import UpstreamCredentialError, upstream_headers
+from ai_gateway.proxy.upstream_client import (
+    UpstreamCredentialError,
+    open_upstream_client,
+    upstream_headers,
+)
 from ai_gateway.registry.models import UpstreamServer
 from mcp_common.http_app import build_mcp_app
 from mcp_common.toolset import CallInfo, NoArguments, StrictToolset
@@ -116,18 +121,38 @@ async def test_a_wrong_credential_leaves_the_upstream_unavailable(
     assert "not-the-credential" not in caplog.text
 
 
+class _Attempts:
+    """Counts connection attempts, so a test can wait until the catalog has retried."""
+
+    def __init__(self) -> None:
+        self.count = 0
+
+    @asynccontextmanager
+    async def open(self, upstream: UpstreamServer) -> AsyncGenerator[Client]:
+        self.count += 1
+        async with open_upstream_client(upstream) as client:
+            yield client
+
+
+async def _retried_warnings(upstream: UpstreamServer, caplog: pytest.LogCaptureFixture) -> int:
+    """Run the catalog until it has retried the upstream several times; count its warnings."""
+    caplog.set_level(logging.WARNING)
+    attempts = _Attempts()
+    catalog = Catalog(StaticSource(upstream), open_client=attempts.open, initial_backoff_s=0.01)
+    async with running_catalog(catalog):
+        await eventually(lambda: attempts.count >= 4)
+        assert catalog.tools() == []
+    return len([r for r in caplog.records if "is unavailable" in r.getMessage()])
+
+
 async def test_a_missing_credential_variable_makes_the_upstream_unavailable_with_one_warning(
     guarded_url: str, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     monkeypatch.delenv(ENV_NAME, raising=False)
-    caplog.set_level(logging.WARNING)
-    catalog = Catalog(StaticSource(_upstream(guarded_url)), refresh_interval_s=0.05)
 
-    async with running_catalog(catalog):
-        assert catalog.tools() == []
+    warnings = await _retried_warnings(_upstream(guarded_url), caplog)
 
-    warnings = [r for r in caplog.records if "is unavailable" in r.getMessage()]
-    assert len(warnings) == 1
+    assert warnings == 1
     assert ENV_NAME in caplog.text
 
 
@@ -148,11 +173,8 @@ async def test_an_upstream_with_a_disallowed_credential_env_is_unavailable_with_
 ) -> None:
     secret = "not-to-be-sent-anywhere"  # noqa: S105
     monkeypatch.setenv("GATEWAY_DATABASE_URL", secret)
-    caplog.set_level(logging.WARNING)
-    catalog = Catalog(StaticSource(_upstream(guarded_url, "GATEWAY_DATABASE_URL")))
 
-    async with running_catalog(catalog):
-        assert catalog.tools() == []
+    warnings = await _retried_warnings(_upstream(guarded_url, "GATEWAY_DATABASE_URL"), caplog)
 
-    assert len([r for r in caplog.records if "is unavailable" in r.getMessage()]) == 1
+    assert warnings == 1
     assert secret not in caplog.text

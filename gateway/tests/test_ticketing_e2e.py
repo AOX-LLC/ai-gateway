@@ -1,6 +1,7 @@
 """The ticketing server behind the gateway, over real HTTP, with the credential and
 client attribution as they run in the stack."""
 
+import json
 from collections.abc import AsyncGenerator, Awaitable, Callable, Iterator
 from contextlib import asynccontextmanager
 from importlib.metadata import version
@@ -16,6 +17,7 @@ from mcp.client.streamable_http import streamable_http_client
 from mcp.shared.exceptions import MCPError
 from mcp.types import INVALID_PARAMS
 from pydantic import SecretStr
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from ai_gateway.auth.tokens import IssuedToken
 from ai_gateway.registry.repo import AdminRegistry
@@ -45,14 +47,50 @@ SUPPORT_SCOPES = [
 OPS_SCOPES = [*SUPPORT_SCOPES, "tickets__change_status", "tickets__assign"]
 
 
+class _RecordingApp:
+    """Wraps an ASGI app and keeps the JSON body of every POST it receives, so a test can
+    see exactly what reached the server."""
+
+    def __init__(self, app: ASGIApp, bodies: list[dict[str, Any]]) -> None:
+        self._app = app
+        self._bodies = bodies
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or scope["method"] != "POST":
+            await self._app(scope, receive, send)
+            return
+        chunks: list[bytes] = []
+
+        async def recording_receive() -> Message:
+            message = await receive()
+            if message["type"] == "http.request":
+                chunks.append(message.get("body", b""))
+            return message
+
+        try:
+            await self._app(scope, recording_receive, send)
+        finally:
+            body = json.loads(b"".join(chunks) or b"null")
+            if isinstance(body, dict):
+                self._bodies.append(body)
+
+
 @pytest.fixture
-def ticketing_url(ticketing_app_url: str, ticketing_data: Dataset) -> Iterator[str]:
+def upstream_requests() -> list[dict[str, Any]]:
+    """Every JSON-RPC request body the ticketing server received."""
+    return []
+
+
+@pytest.fixture
+def ticketing_url(
+    ticketing_app_url: str, ticketing_data: Dataset, upstream_requests: list[dict[str, Any]]
+) -> Iterator[str]:
     settings = TicketingSettings(
         database_url=SecretStr(ticketing_app_url),
         service_token=SecretStr(SERVICE_TOKEN),
         allowed_hosts=["127.0.0.1:*"],
     )
-    with serve_in_thread(build_app(settings)) as base_url:
+    with serve_in_thread(_RecordingApp(build_app(settings), upstream_requests)) as base_url:
         yield f"{base_url}/mcp"
 
 
@@ -124,6 +162,31 @@ async def test_the_gateway_not_the_client_decides_who_is_recorded_as_asking(
         assert result.structured_content is not None
         ticket_id = result.structured_content["ticket_id"]
         assert await _requested_by(ticketing_app_url, ticket_id) == "harborline-support-bot"
+
+
+async def test_nothing_of_the_clients_own_meta_reaches_the_ticketing_server(
+    gateway: RunningGateway,
+    tokens: dict[str, IssuedToken],
+    upstream_requests: list[dict[str, Any]],
+) -> None:
+    hostile = cast(
+        Any,
+        {
+            CLIENT_META_KEY: "harborline-ops-bot",
+            "progressToken": "client-chosen-token",
+            "io.example/custom": {"anything": "else"},
+            "io.example/progress": 1,
+            "x": None,
+        },
+    )
+
+    async with connect(gateway.url, tokens["support"].plaintext) as client:
+        await client.call_tool("tickets__list_tickets", {"limit": 1}, meta=hostile)
+
+    calls = [r for r in upstream_requests if r.get("method") == "tools/call"]
+    assert len(calls) == 1
+    assert calls[0]["params"]["_meta"] == {CLIENT_META_KEY: "harborline-support-bot"}
+    assert "client-chosen-token" not in json.dumps(calls)
 
 
 async def test_a_client_cannot_reach_a_tool_outside_its_scope_even_for_a_write(

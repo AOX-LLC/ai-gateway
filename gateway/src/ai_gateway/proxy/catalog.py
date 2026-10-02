@@ -64,6 +64,8 @@ class Catalog:
     refresh_interval_s: float = 60.0
     registry_poll_s: float = 5.0
     """How often to look for newly registered or removed upstreams. A cheap query."""
+    initial_backoff_s: float = 1.0
+    """The wait after a first failed refresh; it doubles with each further failure."""
     startup_wait_s: float = 10.0
     """How long startup waits for the first refresh of each upstream before serving."""
     _states: dict[str, _UpstreamState] = field(default_factory=dict, init=False)
@@ -190,7 +192,9 @@ class Catalog:
             # Whatever went wrong, a server that cannot list its tools is unavailable.
             # Catching broadly is deliberate: this background task must keep running.
             state.consecutive_failures += 1
-            backoff_s = min(_MAX_BACKOFF_S, 2.0 ** (state.consecutive_failures - 1))
+            backoff_s = min(
+                _MAX_BACKOFF_S, self.initial_backoff_s * 2.0 ** (state.consecutive_failures - 1)
+            )
             if state.is_available or state.consecutive_failures == 1:
                 logger.warning(
                     "upstream %s is unavailable; retrying in %.0fs",
