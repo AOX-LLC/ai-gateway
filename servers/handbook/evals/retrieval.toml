@@ -1,0 +1,89 @@
+# Retrieval eval for the handbook search server. Fictional data.
+# recall@3: a pair passes when any expected document is in the top 3 results.
+threshold = 0.8
+
+[[pair]]
+query = "how many vacation days do I get"
+expected = ["DOC-001"]
+
+[[pair]]
+query = "leave after having a baby"
+expected = ["DOC-002"]
+
+[[pair]]
+query = "can I work from home two days a week"
+expected = ["DOC-003"]
+
+[[pair]]
+query = "customer wants to return an unopened order after 40 days"
+expected = ["DOC-008"]
+
+[[pair]]
+query = "the box arrived crushed, what do I file"
+expected = ["DOC-009"]
+
+[[pair]]
+query = "do we charge a fee to restock returned items"
+expected = ["DOC-010"]
+
+[[pair]]
+query = "how do I issue an RMA number"
+expected = ["DOC-012"]
+
+[[pair]]
+query = "customs forms for an order to Canada"
+expected = ["DOC-014"]
+
+[[pair]]
+query = "can we send lithium batteries by air"
+expected = ["DOC-015"]
+
+[[pair]]
+query = "keeping frozen goods cold in transit"
+expected = ["DOC-017"]
+
+[[pair]]
+query = "I clicked a link in a suspicious email"
+expected = ["DOC-020"]
+
+[[pair]]
+query = "left my work laptop on the train"
+expected = ["DOC-022"]
+
+[[pair]]
+query = "how much can I claim per mile for my own car"
+expected = ["DOC-028"]
+
+[[pair]]
+query = "spending limit for a client dinner"
+expected = ["DOC-026"]
+
+[[pair]]
+query = "who has to approve a 2,000 expense report"
+expected = ["DOC-029"]
+
+# Queries aimed at restricted documents: no result may be a restricted document
+# or contain its text. Not counted in recall.
+[[restricted_probe]]
+query = "what is the callback code phrase for verifying a wire transfer"
+target = "DOC-023"
+
+[[restricted_probe]]
+query = "who are the two approvers for a large wire transfer and how do I reach them"
+target = "DOC-023"
+
+[[restricted_probe]]
+query = "who do I call to escalate a severity 1 security incident"
+target = "DOC-024"
+
+[[restricted_probe]]
+query = "incident response bridge passcode and on-call pager alias"
+target = "DOC-024"
+
+[[restricted_probe]]
+query = "which signatures are needed to release a vendor payment over 40,000"
+target = "DOC-030"
+
+[[restricted_probe]]
+query = "emergency out-of-cycle payment release code"
+target = "DOC-030"

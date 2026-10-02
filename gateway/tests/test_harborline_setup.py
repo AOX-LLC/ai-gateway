@@ -1,5 +1,6 @@
 """harborline-setup: idempotent role, schema, migration and seed, run as the owner."""
 
+from pathlib import Path
 from uuid import uuid4
 
 import psycopg
@@ -7,7 +8,11 @@ import pytest
 from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
+from crm_server.seed import ACCOUNT_COUNT, CONTACT_COUNT, DEAL_COUNT, NOTE_COUNT
+from harborline_setup.crm import setup_crm
+from harborline_setup.handbook import setup_handbook
 from harborline_setup.ticketing import setup_ticketing
+from tests.helpers import HANDBOOK_DOCUMENTS
 from ticketing_server.seed import COMMENT_COUNT, TICKET_COUNT
 
 pytestmark = [pytest.mark.integration, pytest.mark.anyio]
@@ -162,3 +167,289 @@ async def test_setup_takes_the_default_database_access_away_from_public(
             {"r": role},
         )
         assert await cursor.fetchone() == (False, False, False, True, False)
+
+
+# --- the CRM step ---------------------------------------------------------------------------
+
+
+async def _crm_counts(url: str) -> tuple[int, int, int, int]:
+    async with await psycopg.AsyncConnection.connect(url) as connection:
+        counts = []
+        for table in ("accounts", "contacts", "deals", "activity_notes"):
+            cursor = await connection.execute(f"SELECT count(*) FROM crm.{table}".encode())  # noqa: S608
+            row = await cursor.fetchone()
+            assert row is not None
+            counts.append(int(row[0]))
+    return counts[0], counts[1], counts[2], counts[3]
+
+
+async def _crm_privileges(url: str, role: str) -> dict[str, bool]:
+    async with await psycopg.AsyncConnection.connect(url) as connection:
+        cursor = await connection.execute(
+            "SELECT has_schema_privilege(%(r)s, 'crm', 'USAGE'),"
+            " has_column_privilege(%(r)s, 'crm.accounts', 'name', 'SELECT'),"
+            " has_column_privilege(%(r)s, 'crm.accounts', 'internal_notes', 'SELECT'),"
+            " has_column_privilege(%(r)s, 'crm.accounts', 'credit_limit_internal', 'SELECT'),"
+            " has_column_privilege(%(r)s, 'crm.deals', 'floor_price_cents', 'SELECT'),"
+            " has_column_privilege(%(r)s, 'crm.deals', 'amount_cents', 'SELECT'),"
+            " has_table_privilege(%(r)s, 'crm.accounts', 'INSERT'),"
+            " has_table_privilege(%(r)s, 'crm.activity_notes', 'UPDATE')",
+            {"r": role},
+        )
+        row = await cursor.fetchone()
+    assert row is not None
+    names = [
+        "usage", "select_name", "select_internal_notes", "select_credit_limit",
+        "select_floor_price", "select_amount", "insert", "update",
+    ]  # fmt: skip
+    return dict(zip(names, row, strict=True))
+
+
+async def test_crm_setup_builds_everything_once_and_is_safe_to_repeat(
+    scratch_database: tuple[str, str],
+) -> None:
+    url, role = scratch_database
+    password = f"scratch-{uuid4().hex}"
+
+    await setup_crm(url, password, None, role)
+    first_counts = await _crm_counts(url)
+    first_privileges = await _crm_privileges(url, role)
+    await setup_crm(url, password, None, role)
+
+    assert first_counts == (ACCOUNT_COUNT, CONTACT_COUNT, DEAL_COUNT, NOTE_COUNT)
+    assert await _crm_counts(url) == first_counts
+    expected = {
+        "usage": True,
+        "select_name": True,
+        "select_internal_notes": False,
+        "select_credit_limit": False,
+        "select_floor_price": False,
+        "select_amount": True,
+        "insert": False,
+        "update": False,
+    }
+    assert first_privileges == expected
+    assert await _crm_privileges(url, role) == expected
+
+
+async def test_crm_setup_narrows_a_grant_that_was_widened(
+    scratch_database: tuple[str, str],
+) -> None:
+    url, role = scratch_database
+    password = f"scratch-{uuid4().hex}"
+    await setup_crm(url, password, None, role)
+    async with await psycopg.AsyncConnection.connect(url, autocommit=True) as connection:
+        await connection.execute(
+            sql.SQL("GRANT SELECT, INSERT ON crm.accounts TO {}").format(sql.Identifier(role))
+        )
+    assert (await _crm_privileges(url, role))["select_internal_notes"] is True
+
+    await setup_crm(url, password, None, role)
+
+    privileges = await _crm_privileges(url, role)
+    assert privileges["select_internal_notes"] is False
+    assert privileges["insert"] is False
+    assert privileges["select_name"] is True
+
+
+async def test_crm_setup_refuses_an_empty_password(test_database_url: str) -> None:
+    with pytest.raises(ValueError, match="CRM_DB_PASSWORD"):
+        await setup_crm(test_database_url, "", None)
+
+
+# --- the handbook step ----------------------------------------------------------------------
+
+
+async def _handbook_counts(url: str) -> tuple[int, int]:
+    async with await psycopg.AsyncConnection.connect(url) as connection:
+        cursor = await connection.execute("SELECT count(*) FROM handbook.documents")
+        documents = await cursor.fetchone()
+        cursor = await connection.execute("SELECT count(*) FROM handbook.chunks")
+        chunks = await cursor.fetchone()
+    assert documents is not None
+    assert chunks is not None
+    return int(documents[0]), int(chunks[0])
+
+
+async def _handbook_privileges(url: str, role: str) -> dict[str, bool]:
+    async with await psycopg.AsyncConnection.connect(url) as connection:
+        cursor = await connection.execute(
+            "SELECT has_schema_privilege(%(r)s, 'handbook', 'USAGE'),"
+            " has_table_privilege(%(r)s, 'handbook.published_documents', 'SELECT'),"
+            " has_table_privilege(%(r)s, 'handbook.searchable_chunks', 'SELECT'),"
+            " has_table_privilege(%(r)s, 'handbook.documents', 'SELECT'),"
+            " has_table_privilege(%(r)s, 'handbook.chunks', 'SELECT'),"
+            " has_table_privilege(%(r)s, 'handbook.searchable_chunks', 'INSERT')",
+            {"r": role},
+        )
+        row = await cursor.fetchone()
+    assert row is not None
+    names = ["usage", "documents_view", "chunks_view", "documents", "chunks", "insert"]
+    return dict(zip(names, row, strict=True))
+
+
+async def test_handbook_setup_builds_everything_once_and_is_safe_to_repeat(
+    scratch_database: tuple[str, str], model_path: Path
+) -> None:
+    url, role = scratch_database
+    password = f"scratch-{uuid4().hex}"
+
+    await setup_handbook(url, password, model_path, HANDBOOK_DOCUMENTS, role)
+    first_counts = await _handbook_counts(url)
+    first_privileges = await _handbook_privileges(url, role)
+    await setup_handbook(url, password, model_path, HANDBOOK_DOCUMENTS, role)
+
+    assert first_counts[0] == 30
+    assert first_counts[1] >= 30
+    assert await _handbook_counts(url) == first_counts
+    expected = {
+        "usage": True,
+        "documents_view": True,
+        "chunks_view": True,
+        "documents": False,
+        "chunks": False,
+        "insert": False,
+    }
+    assert first_privileges == expected
+    assert await _handbook_privileges(url, role) == expected
+
+
+async def test_handbook_setup_puts_the_vector_extension_in_the_handbook_schema(
+    scratch_database: tuple[str, str], model_path: Path
+) -> None:
+    url, role = scratch_database
+
+    await setup_handbook(url, f"scratch-{uuid4().hex}", model_path, HANDBOOK_DOCUMENTS, role)
+
+    async with await psycopg.AsyncConnection.connect(url) as connection:
+        cursor = await connection.execute(
+            "SELECT n.nspname FROM pg_extension e JOIN pg_namespace n ON n.oid = e.extnamespace"
+            " WHERE e.extname = 'vector'"
+        )
+        assert await cursor.fetchall() == [("handbook",)]
+
+
+async def test_handbook_setup_narrows_a_grant_widened_onto_a_base_table(
+    scratch_database: tuple[str, str], model_path: Path
+) -> None:
+    url, role = scratch_database
+    password = f"scratch-{uuid4().hex}"
+    await setup_handbook(url, password, model_path, HANDBOOK_DOCUMENTS, role)
+    async with await psycopg.AsyncConnection.connect(url, autocommit=True) as connection:
+        await connection.execute(
+            sql.SQL("GRANT SELECT ON handbook.documents, handbook.chunks TO {}").format(
+                sql.Identifier(role)
+            )
+        )
+    assert (await _handbook_privileges(url, role))["documents"] is True
+
+    await setup_handbook(url, password, model_path, HANDBOOK_DOCUMENTS, role)
+
+    privileges = await _handbook_privileges(url, role)
+    assert privileges["documents"] is False
+    assert privileges["chunks"] is False
+    assert privileges["documents_view"] is True
+
+
+async def test_handbook_setup_refuses_an_empty_password(
+    test_database_url: str, model_path: Path
+) -> None:
+    with pytest.raises(ValueError, match="HANDBOOK_DB_PASSWORD"):
+        await setup_handbook(test_database_url, "", model_path, HANDBOOK_DOCUMENTS)
+
+
+# --- grants widened below table level are narrowed again -------------------------------------
+
+
+async def _as_owner(url: str, *statements: str, role: str) -> None:
+    async with await psycopg.AsyncConnection.connect(url, autocommit=True) as connection:
+        for statement in statements:
+            await connection.execute(sql.SQL(statement).format(sql.Identifier(role)))
+
+
+async def _holds(url: str, role: str, query: str) -> bool:
+    async with await psycopg.AsyncConnection.connect(url) as connection:
+        cursor = await connection.execute(query.encode(), {"r": role})
+        row = await cursor.fetchone()
+    assert row is not None
+    return bool(row[0])
+
+
+async def test_ticketing_setup_narrows_column_sequence_and_schema_grants(
+    scratch_database: tuple[str, str],
+) -> None:
+    url, role = scratch_database
+    password = f"scratch-{uuid4().hex}"
+    await setup_ticketing(url, password, None, role)
+    checks = {
+        "update the subject column": (
+            "SELECT has_column_privilege(%(r)s, 'ticketing.tickets', 'subject', 'UPDATE')"
+        ),
+        "read the ticket number sequence": (
+            "SELECT has_sequence_privilege(%(r)s, 'ticketing.ticket_number', 'SELECT')"
+        ),
+        "create in the schema": "SELECT has_schema_privilege(%(r)s, 'ticketing', 'CREATE')",
+        "delete a ticket": "SELECT has_table_privilege(%(r)s, 'ticketing.tickets', 'DELETE')",
+    }
+    await _as_owner(
+        url,
+        "GRANT UPDATE (subject) ON ticketing.tickets TO {}",
+        "GRANT SELECT ON SEQUENCE ticketing.ticket_number TO {}",
+        "GRANT CREATE ON SCHEMA ticketing TO {}",
+        "GRANT DELETE ON ticketing.tickets TO {}",
+        role=role,
+    )
+    assert all([await _holds(url, role, query) for query in checks.values()])
+
+    await setup_ticketing(url, password, None, role)
+
+    assert {
+        name: await _holds(url, role, query) for name, query in checks.items()
+    } == dict.fromkeys(checks, False)
+    # What the role does need is still there.
+    assert await _holds(
+        url, role, "SELECT has_column_privilege(%(r)s, 'ticketing.tickets', 'status', 'UPDATE')"
+    )
+    assert await _holds(
+        url, role, "SELECT has_sequence_privilege(%(r)s, 'ticketing.ticket_number', 'USAGE')"
+    )
+
+
+async def test_crm_setup_narrows_a_column_and_a_schema_grant(
+    scratch_database: tuple[str, str],
+) -> None:
+    url, role = scratch_database
+    password = f"scratch-{uuid4().hex}"
+    await setup_crm(url, password, None, role)
+    column = "SELECT has_column_privilege(%(r)s, 'crm.accounts', 'credit_limit_internal', 'SELECT')"
+    create = "SELECT has_schema_privilege(%(r)s, 'crm', 'CREATE')"
+    await _as_owner(
+        url,
+        "GRANT SELECT (credit_limit_internal) ON crm.accounts TO {}",
+        "GRANT CREATE ON SCHEMA crm TO {}",
+        role=role,
+    )
+    assert await _holds(url, role, column)
+    assert await _holds(url, role, create)
+
+    await setup_crm(url, password, None, role)
+
+    assert not await _holds(url, role, column)
+    assert not await _holds(url, role, create)
+    assert await _holds(url, role, "SELECT has_schema_privilege(%(r)s, 'crm', 'USAGE')")
+
+
+async def test_handbook_setup_narrows_a_schema_grant(
+    scratch_database: tuple[str, str], model_path: Path
+) -> None:
+    url, role = scratch_database
+    password = f"scratch-{uuid4().hex}"
+    await setup_handbook(url, password, model_path, HANDBOOK_DOCUMENTS, role)
+    create = "SELECT has_schema_privilege(%(r)s, 'handbook', 'CREATE')"
+    await _as_owner(url, "GRANT CREATE ON SCHEMA handbook TO {}", role=role)
+    assert await _holds(url, role, create)
+
+    await setup_handbook(url, password, model_path, HANDBOOK_DOCUMENTS, role)
+
+    assert not await _holds(url, role, create)
+    assert await _holds(url, role, "SELECT has_schema_privilege(%(r)s, 'handbook', 'USAGE')")

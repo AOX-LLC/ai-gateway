@@ -49,7 +49,8 @@ async def test_seed_demo_registers_the_upstream_policies_and_clients(
     tokens = await _seed_demo(monkeypatch, test_database_url, capsys)
 
     upstream = await _rows(
-        test_database_url, "SELECT namespace, url, credential_env FROM upstream_servers"
+        test_database_url,
+        "SELECT namespace, url, credential_env FROM upstream_servers ORDER BY namespace",
     )
     policies = await _rows(
         test_database_url, "SELECT effect, count(*) FROM tool_policies GROUP BY effect ORDER BY 1"
@@ -60,9 +61,13 @@ async def test_seed_demo_registers_the_upstream_policies_and_clients(
         " GROUP BY c.name ORDER BY 1",
     )
     assert sorted(tokens) == ["harborline-ops-bot", "harborline-support-bot"]
-    assert upstream == [("tickets", "http://ticketing:4412/mcp", "TICKETING_SERVICE_TOKEN")]
-    assert policies == [("read", 2), ("write", 4)]
-    assert scopes == [("harborline-ops-bot", 6), ("harborline-support-bot", 4)]
+    assert upstream == [
+        ("crm", "http://crm:4411/mcp", "CRM_SERVICE_TOKEN"),
+        ("handbook", "http://handbook:4410/mcp", "HANDBOOK_SERVICE_TOKEN"),
+        ("tickets", "http://ticketing:4412/mcp", "TICKETING_SERVICE_TOKEN"),
+    ]
+    assert policies == [("read", 7), ("write", 4)]
+    assert scopes == [("harborline-ops-bot", 11), ("harborline-support-bot", 9)]
 
 
 async def test_seed_demo_is_idempotent_and_replaces_the_old_tokens(
@@ -85,7 +90,7 @@ async def test_seed_demo_is_idempotent_and_replaces_the_old_tokens(
     )
     assert first != second
     assert live == [(2,)]
-    assert counts == [(1, 6, 2)]
+    assert counts == [(3, 11, 2)]
 
 
 async def test_tool_policy_set_changes_one_tools_effect(
@@ -134,8 +139,8 @@ async def test_seeding_both_data_sets_leaves_each_client_with_exactly_its_own_sc
     scopes = await _scopes_by_client(test_database_url)
     assert scopes["echo-test-narrow"] == ["echo__say"]
     assert scopes["echo-test-wide"] == ["echo__say", "echo__shout"]
-    assert len(scopes["harborline-support-bot"]) == 4
-    assert len(scopes["harborline-ops-bot"]) == 6
+    assert len(scopes["harborline-support-bot"]) == 9
+    assert len(scopes["harborline-ops-bot"]) == 11
     assert not any(tool.startswith("echo__") for tool in scopes["harborline-ops-bot"])
     assert sorted(scopes) == [
         "echo-test-narrow",
@@ -199,3 +204,54 @@ async def test_replacing_policies_is_all_or_nothing(
 
     rows = await _rows(test_database_url, "SELECT tool FROM tool_policies")
     assert rows == [("get_ticket",)]
+
+
+SUPPORT_TOOLS = [
+    "crm__get_account",
+    "crm__list_deals",
+    "crm__search_accounts",
+    "handbook__get_document",
+    "handbook__search",
+    "tickets__add_comment",
+    "tickets__create_ticket",
+    "tickets__get_ticket",
+    "tickets__list_tickets",
+]
+
+
+async def test_the_demo_clients_have_exactly_the_agreed_scopes(
+    monkeypatch: pytest.MonkeyPatch,
+    test_database_url: str,
+    clean_database: None,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    await _seed_demo(monkeypatch, test_database_url, capsys)
+
+    scopes = await _scopes_by_client(test_database_url)
+    assert scopes["harborline-support-bot"] == SUPPORT_TOOLS
+    assert scopes["harborline-ops-bot"] == sorted(
+        [*SUPPORT_TOOLS, "tickets__assign", "tickets__change_status"]
+    )
+    # The support bot can read the CRM and the handbook, and change nothing there or in
+    # tickets beyond opening one and adding a comment.
+    assert "tickets__assign" not in scopes["harborline-support-bot"]
+    assert "tickets__change_status" not in scopes["harborline-support-bot"]
+
+
+async def test_every_demo_tool_has_a_reviewed_policy_and_the_new_ones_only_read(
+    monkeypatch: pytest.MonkeyPatch,
+    test_database_url: str,
+    clean_database: None,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    await _seed_demo(monkeypatch, test_database_url, capsys)
+
+    rows = await _rows(
+        test_database_url, "SELECT namespace || '__' || tool, effect FROM tool_policies"
+    )
+    effects = {str(name): str(effect) for name, effect in rows}
+    scopes = await _scopes_by_client(test_database_url)
+    assert set(scopes["harborline-ops-bot"]) == set(effects)
+    for name, effect in effects.items():
+        if name.startswith(("crm__", "handbook__")):
+            assert effect == "read", name

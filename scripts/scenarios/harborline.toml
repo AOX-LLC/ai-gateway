@@ -1,46 +1,88 @@
-# Acceptance scenario for the ticketing tools of Harborline Supply Co. (fictional).
+# Acceptance scenario for the tools of Harborline Supply Co. (fictional): ticketing, CRM and
+# the handbook.
 #
-# One entry per tool. Writes target fixed tickets of the deterministic seed (TKT-000001 to
-# TKT-000080), so a run is repeatable; create_ticket opens a new ticket each time.
+# One entry per tool, naming the gateway namespace the tool is exposed under. Writes target
+# fixed tickets of the deterministic seed (TKT-000001 to TKT-000080), so a run is repeatable;
+# create_ticket opens a new ticket each time.
 #
-# Through the gateway (--as <client>), a call the client may make must succeed, and a call
-# outside `allowed_for` must be refused with -32602, which is the same answer as for an
-# unknown tool. Directly (--direct ticketing), every call must succeed.
-
-namespace = "tickets"
+# Through the gateway (--as <client>), tools/list must return exactly the tools the client is
+# allowed, a call the client may make must succeed, and a call outside `allowed_for` must be
+# refused with -32602, which is the same answer as for an unknown tool. Directly
+# (--direct ticketing, crm or handbook), that server's every call must succeed.
 
 [[call]]
+namespace = "tickets"
 tool = "list_tickets"
 arguments = { status = "open", limit = 5 }
 expect_text = "tickets"
 allowed_for = ["harborline-support-bot", "harborline-ops-bot"]
 
 [[call]]
+namespace = "tickets"
 tool = "get_ticket"
 arguments = { ticket_id = "TKT-000001" }
 expect_text = "comments_total"
 allowed_for = ["harborline-support-bot", "harborline-ops-bot"]
 
 [[call]]
+namespace = "tickets"
 tool = "create_ticket"
 arguments = { subject = "Dock gate will not latch", description = "Fictional demo ticket from the acceptance scenario.", priority = "normal", account_id = "ACC-00005" }
 expect_text = "ticket_id"
 allowed_for = ["harborline-support-bot", "harborline-ops-bot"]
 
 [[call]]
+namespace = "tickets"
 tool = "add_comment"
 arguments = { ticket_id = "TKT-000001", body = "Acceptance scenario note: a replacement is on its way." }
 expect_text = "comment_id"
 allowed_for = ["harborline-support-bot", "harborline-ops-bot"]
 
 [[call]]
+namespace = "tickets"
 tool = "change_status"
 arguments = { ticket_id = "TKT-000002", status = "pending" }
 expect_text = '"status": "pending"'
 allowed_for = ["harborline-ops-bot"]
 
 [[call]]
+namespace = "tickets"
 tool = "assign"
 arguments = { ticket_id = "TKT-000003", assignee = "teddy.cormorant" }
 expect_text = "teddy.cormorant"
 allowed_for = ["harborline-ops-bot"]
+
+[[call]]
+namespace = "crm"
+tool = "search_accounts"
+arguments = { query = "marina", limit = 5 }
+expect_text = "accounts"
+allowed_for = ["harborline-support-bot", "harborline-ops-bot"]
+
+[[call]]
+namespace = "crm"
+tool = "get_account"
+arguments = { account_id = "ACC-00001" }
+expect_text = "notes_total"
+allowed_for = ["harborline-support-bot", "harborline-ops-bot"]
+
+[[call]]
+namespace = "crm"
+tool = "list_deals"
+arguments = { stage = "won", limit = 5 }
+expect_text = "amount_cents"
+allowed_for = ["harborline-support-bot", "harborline-ops-bot"]
+
+[[call]]
+namespace = "handbook"
+tool = "search"
+arguments = { query = "how many vacation days do I get", limit = 3 }
+expect_text = "DOC-001"
+allowed_for = ["harborline-support-bot", "harborline-ops-bot"]
+
+[[call]]
+namespace = "handbook"
+tool = "get_document"
+arguments = { document_id = "DOC-001" }
+expect_text = "Paid time off"
+allowed_for = ["harborline-support-bot", "harborline-ops-bot"]

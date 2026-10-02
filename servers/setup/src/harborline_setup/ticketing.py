@@ -5,13 +5,17 @@ from pathlib import Path
 
 from psycopg import AsyncConnection, sql
 
+from harborline_setup.shared import (
+    ensure_role,
+    ensure_schema,
+    restrict_database_access,
+    revoke_role_access,
+)
 from mcp_common.migrate import apply_migrations
 from ticketing_server import MIGRATIONS_PACKAGE, ROLE, SCHEMA
 from ticketing_server.seed import build_dataset, insert_dataset, is_seeded, load_extra_records
 
 logger = logging.getLogger(__name__)
-
-GATEWAY_ROLE = "gateway_app"
 
 # The role may read everything, create tickets and comments, and change only a ticket's
 # status, assignee and update time. It cannot delete, truncate or create.
@@ -40,8 +44,8 @@ async def setup_ticketing(
     if not password:
         raise ValueError("TICKETING_DB_PASSWORD is empty")
     async with await AsyncConnection.connect(owner_url, autocommit=True) as connection:
-        await _ensure_role(connection, password, role)
-        await _ensure_schema(connection)
+        await ensure_role(connection, password, role)
+        await ensure_schema(connection, SCHEMA)
     applied = await apply_migrations(owner_url, MIGRATIONS_PACKAGE, SCHEMA)
     logger.info("ticketing migrations applied: %s", applied or "none")
     async with await AsyncConnection.connect(owner_url, autocommit=True) as connection:
@@ -64,78 +68,13 @@ async def setup_ticketing(
         )
 
 
-async def _ensure_role(connection: AsyncConnection, password: str, role: str) -> None:
-    cursor = await connection.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (role,))
-    if await cursor.fetchone() is None:
-        await connection.execute(sql.SQL("CREATE ROLE {} LOGIN").format(sql.Identifier(role)))
-    # Send a SCRAM verifier, never the password: the plaintext would otherwise appear in
-    # the server's logs and statistics if statements are logged. DDL cannot take bind
-    # parameters; Literal quotes the value safely on the client.
-    verifier = connection.pgconn.encrypt_password(
-        password.encode(), role.encode(), b"scram-sha-256"
-    ).decode()
-    await connection.execute(
-        sql.SQL("ALTER ROLE {} WITH LOGIN PASSWORD {}").format(
-            sql.Identifier(role), sql.Literal(verifier)
-        )
-    )
-    await connection.execute(
-        sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(
-            sql.Identifier(await _database(connection)), sql.Identifier(role)
-        )
-    )
-
-
-async def restrict_database_access(connection: AsyncConnection, roles: list[str]) -> None:
-    """Take the default access away from PUBLIC and grant it, by name, to the roles that
-    need it: connecting to this database, and the public schema (the gateway's registry).
-
-    Without this, every role could connect, create temporary tables and look inside the
-    public schema. A listed role that does not exist (yet) is skipped; setup runs again
-    when it does."""
-    database = sql.Identifier(await _database(connection))
-    await connection.execute(
-        sql.SQL("REVOKE TEMPORARY, CONNECT ON DATABASE {} FROM PUBLIC").format(database)
-    )
-    await connection.execute("REVOKE USAGE ON SCHEMA public FROM PUBLIC")
-    existing = await _existing_roles(connection, [*roles, GATEWAY_ROLE])
-    for name in existing:
-        await connection.execute(
-            sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(database, sql.Identifier(name))
-        )
-    if GATEWAY_ROLE in existing:
-        await connection.execute(
-            sql.SQL("GRANT USAGE ON SCHEMA public TO {}").format(sql.Identifier(GATEWAY_ROLE))
-        )
-
-
-async def _existing_roles(connection: AsyncConnection, roles: list[str]) -> list[str]:
-    cursor = await connection.execute(
-        "SELECT rolname FROM pg_roles WHERE rolname = ANY(%s) ORDER BY rolname", (roles,)
-    )
-    return [str(name) for (name,) in await cursor.fetchall()]
-
-
 async def grant_ticketing_access(connection: AsyncConnection, role: str = ROLE) -> None:
-    """(Re)apply the ticketing role's grants. The role, schema and tables must exist."""
+    """Make the ticketing role's grants exactly these. The role, schema and tables must exist.
+
+    Everything the role holds in the schema is revoked first, so a grant that was widened by
+    hand, at table, column, sequence or schema level, is narrowed again."""
+    await revoke_role_access(connection, SCHEMA, role)
     for template in _GRANTS:
         await connection.execute(
             sql.SQL(template).format(schema=sql.Identifier(SCHEMA), role=sql.Identifier(role))
         )
-
-
-async def _database(connection: AsyncConnection) -> str:
-    cursor = await connection.execute("SELECT current_database()")
-    row = await cursor.fetchone()
-    if row is None:
-        raise RuntimeError("current_database() returned no row")
-    return str(row[0])
-
-
-async def _ensure_schema(connection: AsyncConnection) -> None:
-    await connection.execute(
-        sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(sql.Identifier(SCHEMA))
-    )
-    await connection.execute(
-        sql.SQL("REVOKE ALL ON SCHEMA {} FROM PUBLIC").format(sql.Identifier(SCHEMA))
-    )

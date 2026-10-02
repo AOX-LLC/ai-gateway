@@ -1,18 +1,82 @@
 """Test helpers shared by several test modules."""
 
+import json
 import threading
 import time
-from collections.abc import Iterator
-from contextlib import contextmanager
+from collections.abc import AsyncGenerator, Iterator, Sequence
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 
+import httpx2
 import uvicorn
+from mcp.client import Client
+from mcp.client.streamable_http import streamable_http_client
 from pydantic import SecretStr
 from starlette.types import ASGIApp
 
 from ai_gateway.app import create_app
 from ai_gateway.seams.events import MemoryEventSink
 from ai_gateway.settings import GatewaySettings
+
+HANDBOOK_DOCUMENTS = Path(__file__).resolve().parents[2] / "servers" / "handbook" / "documents"
+"""The handbook's Markdown documents: a plain repository folder, in no package or image."""
+
+WINDOW_CHARS = 60
+WINDOW_STEP = 30
+
+
+def flatten(text: str) -> str:
+    """Whitespace collapsed to single spaces, as a search snippet is."""
+    return " ".join(text.split())
+
+
+def text_windows(text: str) -> list[str]:
+    """Every WINDOW_CHARS-long stretch of the flattened text, every WINDOW_STEP characters,
+    and the last stretch, so any 400-character snippet of it holds at least one window."""
+    flat = flatten(text)
+    if len(flat) <= WINDOW_CHARS:
+        return [flat] if flat else []
+    starts = [*range(0, len(flat) - WINDOW_CHARS + 1, WINDOW_STEP), len(flat) - WINDOW_CHARS]
+    return [flat[start : start + WINDOW_CHARS] for start in starts]
+
+
+def string_values(value: object) -> Iterator[str]:
+    """Every string in a JSON-like value, decoded."""
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from string_values(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from string_values(item)
+
+
+def rendered(structured: object) -> str:
+    """Structured tool output as text to scan: its JSON (non-ASCII kept as is), then every
+    string in it on a line of its own, decoded."""
+    return "\n".join([json.dumps(structured, ensure_ascii=False), *string_values(structured)])
+
+
+def restricted_fingerprints(texts: list[str]) -> list[str]:
+    """What proves a tool output carries restricted handbook text: each text whole and every
+    window of it. A snippet is a cut of a chunk, so comparing whole chunks would miss any
+    chunk longer than the snippet limit."""
+    fingerprints = {flatten(text) for text in texts}
+    for text in texts:
+        fingerprints.update(text_windows(text))
+    return sorted(fingerprints)
+
+
+def leaked(output: str, fingerprints: list[str], headings: Sequence[str] = ()) -> list[str]:
+    """The fingerprints that appear in an output, compared with whitespace flattened, and the
+    headings that appear as a whole string value (a short heading is a substring of ordinary
+    prose, so it only counts as a field of its own)."""
+    flat = flatten(output)
+    values = {flatten(line) for line in output.splitlines()}
+    found = [value for value in fingerprints if value in flat]
+    return found + [heading for heading in headings if heading in values]
+
 
 _SERVER_START_TIMEOUT_S = 10.0
 
@@ -52,3 +116,14 @@ def run_gateway(database_url: str, workdir: Path) -> Iterator[RunningGateway]:
     settings = GatewaySettings(database_url=SecretStr(database_url), pipeline_file=pipeline_file)
     with serve_in_thread(create_app(settings, events)) as base_url:
         yield RunningGateway(f"{base_url}/mcp", events)
+
+
+@asynccontextmanager
+async def connect(url: str, token: str) -> AsyncGenerator[Client]:
+    """An MCP client of the gateway (or of a server), with its bearer token."""
+    headers = {"Authorization": f"Bearer {token}"}
+    async with (
+        httpx2.AsyncClient(headers=headers) as http_client,
+        Client(streamable_http_client(url, http_client=http_client), mode="legacy") as client,
+    ):
+        yield client

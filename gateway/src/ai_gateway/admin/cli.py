@@ -37,27 +37,34 @@ TEST_CLIENTS = {
     ),
 }
 
-# Fictional demo data: the ticketing server's tools and the two clients that use them.
+# Fictional demo data: the three Harborline servers' tools and the two clients that use them.
 DEMO_TICKETS_NAMESPACE = "tickets"
-DEMO_TICKETS_SCOPES_SUPPORT = [
+DEMO_CRM_NAMESPACE = "crm"
+DEMO_HANDBOOK_NAMESPACE = "handbook"
+DEMO_SCOPES_SUPPORT = [
+    "handbook__search",
+    "handbook__get_document",
+    "crm__search_accounts",
+    "crm__get_account",
+    "crm__list_deals",
     "tickets__get_ticket",
     "tickets__list_tickets",
     "tickets__create_ticket",
     "tickets__add_comment",
 ]
-DEMO_TICKETS_SCOPES_OPS = [
-    *DEMO_TICKETS_SCOPES_SUPPORT,
+DEMO_SCOPES_OPS = [
+    *DEMO_SCOPES_SUPPORT,
     "tickets__change_status",
     "tickets__assign",
 ]
 DEMO_CLIENTS = {
     "harborline-support-bot": (
         "Support assistant for the fictional Harborline Supply Co. (demo data)",
-        DEMO_TICKETS_SCOPES_SUPPORT,
+        DEMO_SCOPES_SUPPORT,
     ),
     "harborline-ops-bot": (
         "Operations assistant for the fictional Harborline Supply Co. (demo data)",
-        DEMO_TICKETS_SCOPES_OPS,
+        DEMO_SCOPES_OPS,
     ),
 }
 
@@ -143,11 +150,15 @@ def _parser() -> argparse.ArgumentParser:
 
     demo = commands.add_parser(
         "seed-demo",
-        help="register the ticketing upstream, load tool policies (replacing each namespace's"
-        " set exactly), create the demo clients",
+        help="register the ticketing, CRM and handbook upstreams, load tool policies (replacing"
+        " each namespace's set exactly), create the demo clients",
     )
     demo.add_argument("--tickets-url", default="http://ticketing:4412/mcp")
     demo.add_argument("--credential-env", default="TICKETING_SERVICE_TOKEN", metavar="NAME")
+    demo.add_argument("--crm-url", default="http://crm:4411/mcp")
+    demo.add_argument("--crm-credential-env", default="CRM_SERVICE_TOKEN", metavar="NAME")
+    demo.add_argument("--handbook-url", default="http://handbook:4410/mcp")
+    demo.add_argument("--handbook-credential-env", default="HANDBOOK_SERVICE_TOKEN", metavar="NAME")
     demo.add_argument("--policies", type=Path, default=Path("config/tool_policies.toml"))
     demo.set_defaults(handler=_seed_demo)
 
@@ -281,7 +292,13 @@ def _require_credential_env_name(name: str | None) -> None:
 
 async def _seed_demo(database_url: str, args: argparse.Namespace) -> None:
     """Idempotent: re-running revokes the previous demo tokens and prints new ones."""
-    _require_credential_env_name(args.credential_env)
+    upstreams = [
+        (DEMO_TICKETS_NAMESPACE, args.tickets_url, args.credential_env),
+        (DEMO_CRM_NAMESPACE, args.crm_url, args.crm_credential_env),
+        (DEMO_HANDBOOK_NAMESPACE, args.handbook_url, args.handbook_credential_env),
+    ]
+    for _, _, credential_env in upstreams:
+        _require_credential_env_name(credential_env)
     try:
         policies = load_tool_policies(args.policies)
     except ToolPolicyFileError as error:
@@ -289,13 +306,14 @@ async def _seed_demo(database_url: str, args: argparse.Namespace) -> None:
     tokens = {}
     async with await AsyncConnection.connect(database_url) as connection:
         registry = AdminRegistry(connection)
-        await registry.upsert_upstream(
-            DEMO_TICKETS_NAMESPACE,
-            args.tickets_url,
-            connect_timeout_ms=5000,
-            call_timeout_ms=10000,
-            credential_env=args.credential_env,
-        )
+        for namespace, url, credential_env in upstreams:
+            await registry.upsert_upstream(
+                namespace,
+                url,
+                connect_timeout_ms=5000,
+                call_timeout_ms=10000,
+                credential_env=credential_env,
+            )
         for namespace in sorted({policy.namespace for policy in policies}):
             await registry.replace_tool_policies(
                 namespace,

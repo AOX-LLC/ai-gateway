@@ -11,7 +11,7 @@ x-gateway-build: &gateway-build
     GIT_BRANCH: ${GIT_BRANCH:-}
 
 # One image serves the setup one-shot and every MCP server (all of Harborline Supply Co.,
-# a fictional company).
+# a fictional company), and carries the handbook's embedding model.
 x-servers-build: &servers-build
   context: .
   dockerfile: servers/Dockerfile
@@ -70,8 +70,10 @@ services:
       GATEWAY_PIPELINE_FILE: ${GATEWAY_PIPELINE_FILE_IN_CONTAINER:-/app/config/pipeline.toml}
       GATEWAY_ALLOWED_HOSTS: ${GATEWAY_ALLOWED_HOSTS:-127.0.0.1:*,localhost:*}
       GATEWAY_LOG_LEVEL: ${GATEWAY_LOG_LEVEL:-INFO}
-      # The gateway presents this to the ticketing server (upstream_servers.credential_env).
+      # The gateway presents these to the servers (upstream_servers.credential_env).
       TICKETING_SERVICE_TOKEN: ${TICKETING_SERVICE_TOKEN:?set it in .env}
+      CRM_SERVICE_TOKEN: ${CRM_SERVICE_TOKEN:?set it in .env}
+      HANDBOOK_SERVICE_TOKEN: ${HANDBOOK_SERVICE_TOKEN:?set it in .env}
     ports:
       - "127.0.0.1:4401:4401"
     volumes:
@@ -103,6 +105,13 @@ services:
     environment:
       HARBORLINE_SETUP_DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       TICKETING_DB_PASSWORD: ${TICKETING_DB_PASSWORD:?set it in .env}
+      CRM_DB_PASSWORD: ${CRM_DB_PASSWORD:?set it in .env}
+      HANDBOOK_DB_PASSWORD: ${HANDBOOK_DB_PASSWORD:?set it in .env}
+      HANDBOOK_DOCUMENTS_PATH: /handbook-documents
+    # The handbook's documents, restricted ones included, are in no image: .dockerignore keeps
+    # them out of the build, and only this one-shot sees them, mounted read-only.
+    volumes:
+      - ./servers/handbook/documents:/handbook-documents:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -134,6 +143,63 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
+    <<: *hardening
+
+  crm:
+    build: *servers-build
+    image: harborline-servers
+    command: ["crm-server"]
+    restart: unless-stopped
+    environment:
+      CRM_BIND: 0.0.0.0
+      CRM_PORT: "4411"
+      CRM_DATABASE_URL: postgresql://crm_app:${CRM_DB_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      CRM_SERVICE_TOKEN: ${CRM_SERVICE_TOKEN:?set it in .env}
+      CRM_ALLOWED_HOSTS: crm:*,127.0.0.1:*,localhost:*
+    ports:
+      - "127.0.0.1:4411:4411"
+    depends_on:
+      servers-setup:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen("http://127.0.0.1:4411/healthz", timeout=3)
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    <<: *hardening
+
+  # Loads the embedding model baked into the image (HANDBOOK_MODEL_PATH); no network needed.
+  handbook:
+    build: *servers-build
+    image: harborline-servers
+    command: ["handbook-server"]
+    restart: unless-stopped
+    environment:
+      HANDBOOK_BIND: 0.0.0.0
+      HANDBOOK_PORT: "4410"
+      HANDBOOK_DATABASE_URL: postgresql://handbook_app:${HANDBOOK_DB_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      HANDBOOK_SERVICE_TOKEN: ${HANDBOOK_SERVICE_TOKEN:?set it in .env}
+      HANDBOOK_ALLOWED_HOSTS: handbook:*,127.0.0.1:*,localhost:*
+    ports:
+      - "127.0.0.1:4410:4410"
+    depends_on:
+      servers-setup:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen("http://127.0.0.1:4410/healthz", timeout=3)
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     <<: *hardening
 
   admin:

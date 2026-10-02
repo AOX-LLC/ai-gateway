@@ -156,7 +156,7 @@ def test_a_call_with_no_classification_is_a_default_write() -> None:
 # --- the policy file ----------------------------------------------------------------------
 
 
-def test_the_committed_policy_file_classifies_the_six_ticketing_tools() -> None:
+def test_the_committed_policy_file_classifies_every_demo_tool() -> None:
     policies = {
         (p.namespace, p.tool): p.effect
         for p in load_tool_policies(REPO_ROOT / "config" / "tool_policies.toml")
@@ -169,6 +169,11 @@ def test_the_committed_policy_file_classifies_the_six_ticketing_tools() -> None:
         ("tickets", "add_comment"): "write",
         ("tickets", "change_status"): "write",
         ("tickets", "assign"): "write",
+        ("crm", "search_accounts"): "read",
+        ("crm", "get_account"): "read",
+        ("crm", "list_deals"): "read",
+        ("handbook", "search"): "read",
+        ("handbook", "get_document"): "read",
     }
 
 
