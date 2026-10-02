@@ -1,0 +1,46 @@
+# Acceptance scenario for the ticketing tools of Harborline Supply Co. (fictional).
+#
+# One entry per tool. Writes target fixed tickets of the deterministic seed (TKT-000001 to
+# TKT-000080), so a run is repeatable; create_ticket opens a new ticket each time.
+#
+# Through the gateway (--as <client>), a call the client may make must succeed, and a call
+# outside `allowed_for` must be refused with -32602, which is the same answer as for an
+# unknown tool. Directly (--direct ticketing), every call must succeed.
+
+namespace = "tickets"
+
+[[call]]
+tool = "list_tickets"
+arguments = { status = "open", limit = 5 }
+expect_text = "tickets"
+allowed_for = ["harborline-support-bot", "harborline-ops-bot"]
+
+[[call]]
+tool = "get_ticket"
+arguments = { ticket_id = "TKT-000001" }
+expect_text = "TKT-000001"
+allowed_for = ["harborline-support-bot", "harborline-ops-bot"]
+
+[[call]]
+tool = "create_ticket"
+arguments = { subject = "Dock gate will not latch", description = "Fictional demo ticket from the acceptance scenario.", priority = "normal", account_id = "ACC-00005" }
+expect_text = "ticket_id"
+allowed_for = ["harborline-support-bot", "harborline-ops-bot"]
+
+[[call]]
+tool = "add_comment"
+arguments = { ticket_id = "TKT-000001", body = "Acceptance scenario note: a replacement is on its way." }
+expect_text = "comment_id"
+allowed_for = ["harborline-support-bot", "harborline-ops-bot"]
+
+[[call]]
+tool = "change_status"
+arguments = { ticket_id = "TKT-000002", status = "pending" }
+expect_text = '"status": "pending"'
+allowed_for = ["harborline-ops-bot"]
+
+[[call]]
+tool = "assign"
+arguments = { ticket_id = "TKT-000003", assignee = "teddy.cormorant" }
+expect_text = "teddy.cormorant"
+allowed_for = ["harborline-ops-bot"]
