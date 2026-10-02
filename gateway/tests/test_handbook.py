@@ -423,3 +423,19 @@ def test_the_handbook_server_carries_no_documents_and_never_imports_the_loader()
         [sys.executable, "-c", check], capture_output=True, text=True, check=False
     )
     assert result.returncode == 0, result.stderr
+
+
+async def test_the_chunks_table_has_no_keyword_index_the_view_could_never_use(
+    handbook_data: Dataset, test_database_url: str
+) -> None:
+    async with await psycopg.AsyncConnection.connect(test_database_url) as connection:
+        cursor = await connection.execute(
+            "SELECT indexname FROM pg_indexes"
+            " WHERE schemaname = 'handbook' AND tablename = 'chunks'"
+        )
+        indexes = [row[0] for row in await cursor.fetchall()]
+        cursor = await connection.execute("SELECT max(version) FROM handbook.schema_migrations")
+        latest = await cursor.fetchone()
+
+    assert not [name for name in indexes if "tsv" in name]
+    assert latest == (2,)

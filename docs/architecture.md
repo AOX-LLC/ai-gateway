@@ -312,9 +312,12 @@ Read-only, two tools, both with `read` policies:
 - **Hybrid search.** The top 20 chunks by cosine distance to the query's embedding and the
   top 20 by `ts_rank` of `websearch_to_tsquery` are fused with reciprocal rank fusion
   (`k = 60`); each document is then represented by its best chunk. The vector column
-  (`vector(256)`) has no index: a couple of hundred chunks are scanned exactly. Documents
-  are cut at `##` headings into chunks of about 800 characters, overlapping by about 120
-  within a long section, every chunk carrying its heading.
+  (`vector(256)`) has no index: a couple of hundred chunks are scanned exactly. Nor has the
+  keyword column: the searchable view is a `security_barrier` and `@@` is not leakproof, so
+  a GIN index could not be used through it, and a scan of about 150 chunks takes about a
+  millisecond (revisit when the handbook reaches thousands of chunks, keeping the barrier).
+  Documents are cut at `##` headings into chunks of about 800 characters, overlapping by
+  about 120 within a long section, every chunk carrying its heading.
 - **Embedding model: `minishlab/potion-base-8M`.** A static model2vec model: MIT licence,
   256 dimensions, about 30 MB, no GPU, no PyTorch, deterministic, and it embeds a query in
   well under a millisecond. It is pinned to revision `bf8b056651a2`, downloaded at image

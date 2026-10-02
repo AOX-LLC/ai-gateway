@@ -26,6 +26,11 @@ RRF_K = 60
 # Reciprocal rank fusion of a meaning ranking (cosine distance to the query's embedding)
 # and a keyword ranking (ts_rank of a web-style query), over chunks; then each document is
 # represented by its best chunk, and the best documents are returned.
+#
+# Both rankings scan the view's rows (about 150 chunks, roughly a millisecond); no index
+# helps. The view is a security barrier and `tsv @@ q` is not leakproof, so the planner
+# cannot use a GIN index on tsv through it (migration 0002 dropped the one that sat unused).
+# Revisit when the handbook grows to thousands of chunks, without removing the barrier.
 _SEARCH = """
 WITH semantic AS (
     SELECT id, row_number() OVER (ORDER BY embedding <=> %(vector)s::handbook.vector, id) AS r
