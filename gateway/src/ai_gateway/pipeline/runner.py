@@ -14,6 +14,7 @@ from enum import StrEnum
 from functools import partial
 from typing import Literal
 
+import anyio
 from mcp.types import CallToolResult
 from opentelemetry import trace
 from pydantic import JsonValue
@@ -39,6 +40,9 @@ logger = logging.getLogger(__name__)
 _tracer = trace.get_tracer("ai_gateway")
 
 POLICY_BLOCK_MESSAGE = "Request blocked by gateway policy."
+
+DEFAULT_EMIT_TIMEOUT_S = 2.0
+"""How long recording one event may take before the request goes on without it."""
 
 
 class UpstreamStatus(StrEnum):
@@ -103,10 +107,12 @@ class Pipeline:
         layers: Sequence[BaseLayer],
         config: PipelineConfig,
         events: EventSink,
+        emit_timeout_s: float = DEFAULT_EMIT_TIMEOUT_S,
     ) -> None:
         self._layers = [(layer, config.modes[layer.name]) for layer in layers]
         self._config = config
         self._events = events
+        self._emit_timeout_s = emit_timeout_s
 
     @classmethod
     def build(
@@ -272,20 +278,28 @@ class Pipeline:
         started: float,
         details: dict[str, JsonValue],
     ) -> None:
-        payload: dict[str, JsonValue] = {
-            "request_id": str(ctx.request_id),
-            "protocol_version": ctx.protocol_version,
-            "pipeline_config_sha256": self._config.sha256,
-            "enabled_layers": list(self._config.enabled_layers),
-            "layers": [decision.to_payload() for decision in decisions],
-            "duration_ms": round((time.perf_counter() - started) * 1000, 3),
-            **details,
-        }
-        await self._events.emit(
-            GatewayEvent(
+        # Recording is best effort. A record that cannot be built, a sink that raises and a
+        # sink that stalls must not change what the client gets: by now the upstream may
+        # already have run, and a failed write would otherwise look like a failed call.
+        try:
+            payload: dict[str, JsonValue] = {
+                "request_id": str(ctx.request_id),
+                "protocol_version": ctx.protocol_version,
+                "pipeline_config_sha256": self._config.sha256,
+                "enabled_layers": list(self._config.enabled_layers),
+                "layers": [decision.to_payload() for decision in decisions],
+                "duration_ms": round((time.perf_counter() - started) * 1000, 3),
+                **details,
+            }
+            event = GatewayEvent(
                 action=action,
                 actor_id=ctx.client.actor_id,
                 subject_id=subject_id,
                 payload=payload,
             )
-        )
+            with anyio.fail_after(self._emit_timeout_s):
+                await self._events.emit(event)
+        except Exception:
+            # Catching broadly is deliberate. The traceback is logged; the event is not,
+            # because the record is the thing that failed.
+            logger.exception("could not record a %s event", action)
