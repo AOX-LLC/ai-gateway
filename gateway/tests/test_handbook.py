@@ -1,5 +1,6 @@
 """The handbook documents, chunking and tools, against the seeded database as handbook_app."""
 
+import logging
 import re
 import subprocess
 import sys
@@ -246,6 +247,18 @@ class TestTools:
             await client.call_tool("search", arguments)
 
         assert error.value.code == INVALID_PARAMS
+
+    @pytest.mark.parametrize("query", ["re\x00turns", "returns\n", "re\tturns", "\x7freturns"])
+    async def test_search_refuses_a_control_character_and_logs_no_error(
+        self, client: Client, query: str, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        caplog.set_level(logging.DEBUG)
+
+        with pytest.raises(MCPError) as error:
+            await client.call_tool("search", {"query": query})
+
+        assert error.value.code == INVALID_PARAMS
+        assert [r for r in caplog.records if r.levelno >= logging.ERROR] == []
 
     async def test_a_query_of_only_stop_words_returns_a_result_list_not_an_error(
         self, client: Client

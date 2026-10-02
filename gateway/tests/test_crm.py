@@ -1,6 +1,7 @@
 """The CRM tools, against the seeded fictional database as the crm_app role."""
 
 import json
+import logging
 import re
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -215,6 +216,27 @@ async def test_get_account_for_an_unknown_id_is_a_tool_error(client: Client) -> 
     result = await client.call_tool("get_account", {"account_id": "ACC-99999"})
 
     assert result.is_error
+
+
+@pytest.mark.parametrize(
+    "query", ["mar\x00ina", "marina\n", "ma\trina", "\x7fmarina", "ma\x85rina"]
+)
+async def test_search_refuses_a_control_character_and_logs_no_error(
+    client: Client, query: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.DEBUG)
+
+    with pytest.raises(MCPError) as error:
+        await client.call_tool("search_accounts", {"query": query})
+
+    assert error.value.code == INVALID_PARAMS
+    assert [r for r in caplog.records if r.levelno >= logging.ERROR] == []
+
+
+async def test_search_still_accepts_ordinary_spaces(client: Client) -> None:
+    found = _structured(await client.call_tool("search_accounts", {"query": "marina  harbor"}))
+
+    assert "accounts" in found
 
 
 @pytest.mark.parametrize("account_id", ["ACC-1", "acc-00001", "ACC-00001 OR 1=1", ""])

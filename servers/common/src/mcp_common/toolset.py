@@ -39,6 +39,12 @@ StrictInput = ConfigDict(extra="forbid")
 """The model_config every tool input model uses, so its schema says additionalProperties: false."""
 
 
+NO_CONTROL_CHARACTERS = r"^[^\x00-\x1f\x7f-\x9f]*$"
+"""A `pattern` for free-text inputs: any character except the control characters (NUL, tab,
+newline and the rest; an ordinary space is fine). NUL in particular would reach the database
+driver and fail there as an internal error instead of a bad request."""
+
+
 class NoArguments(BaseModel):
     """The input model of a tool that takes no arguments."""
 

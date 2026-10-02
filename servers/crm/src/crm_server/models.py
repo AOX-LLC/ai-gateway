@@ -12,7 +12,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, Field
 
 from mcp_common.notice import FictionalOutput
-from mcp_common.toolset import StrictInput
+from mcp_common.toolset import NO_CONTROL_CHARACTERS, StrictInput
 
 Tier = Literal["bronze", "silver", "gold"]
 Stage = Literal["prospecting", "proposal", "negotiation", "won", "lost"]
@@ -38,7 +38,7 @@ MAX_NOTES_RETURNED = 10
 class SearchAccountsInput(BaseModel):
     model_config = StrictInput
 
-    query: str = Field(min_length=2, max_length=100)
+    query: str = Field(min_length=2, max_length=100, pattern=NO_CONTROL_CHARACTERS)
     tier: Tier | None = None
     region: Region | None = None
     limit: int = Field(default=10, ge=1, le=20)

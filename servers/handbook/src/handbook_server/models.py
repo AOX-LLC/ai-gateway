@@ -11,7 +11,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, Field
 
 from mcp_common.notice import FictionalOutput
-from mcp_common.toolset import StrictInput
+from mcp_common.toolset import NO_CONTROL_CHARACTERS, StrictInput
 
 Category = Literal["hr", "returns", "shipping", "security", "expenses"]
 DocumentId = Annotated[str, Field(pattern=r"^DOC-[0-9]{3}$", max_length=7)]
@@ -22,7 +22,7 @@ SNIPPET_MAX_CHARS = 400
 class SearchInput(BaseModel):
     model_config = StrictInput
 
-    query: str = Field(min_length=2, max_length=200)
+    query: str = Field(min_length=2, max_length=200, pattern=NO_CONTROL_CHARACTERS)
     category: Category | None = None
     limit: int = Field(default=5, ge=1, le=10)
 
