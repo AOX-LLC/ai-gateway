@@ -1,0 +1,32 @@
+# Reviewed read/write classification of upstream tools, loaded by `gateway-admin seed-demo`
+# (and, one tool at a time, set with `gateway-admin tool-policy-set`).
+#
+# Why this exists: the gateway never trusts an upstream's own readOnlyHint to decide
+# whether a call can change anything. A tool with no entry here is treated as a write.
+# Review a tool's real behaviour before you mark it "read".
+#
+# Format: [<namespace>.<tool>] with effect = "read" | "write" and optional notes.
+
+[tickets.list_tickets]
+effect = "read"
+notes = "Selects ticket summaries; never returns internal notes."
+
+[tickets.get_ticket]
+effect = "read"
+notes = "Selects one ticket and its public comments."
+
+[tickets.create_ticket]
+effect = "write"
+notes = "Inserts a ticket."
+
+[tickets.add_comment]
+effect = "write"
+notes = "Inserts a public comment and touches the ticket's update time."
+
+[tickets.change_status]
+effect = "write"
+notes = "Updates a ticket's status."
+
+[tickets.assign]
+effect = "write"
+notes = "Updates a ticket's assignee."

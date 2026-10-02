@@ -12,6 +12,7 @@ from psycopg import AsyncConnection
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
+from ai_gateway.pipeline.types import Effect
 from ai_gateway.registry.models import ClientStatus, StoredToken, UpstreamServer
 
 _SELECT_BY_LOOKUP_ID = """
@@ -88,6 +89,21 @@ class GatewayRegistry:
             for row in rows
         ]
 
+    async def tool_policies(self) -> dict[tuple[str, str], Effect]:
+        """Reviewed effects, keyed by (namespace, upstream tool name)."""
+        async with self._pool.connection() as connection:
+            cursor = await connection.execute("SELECT namespace, tool, effect FROM tool_policies")
+            rows = await cursor.fetchall()
+        return {(namespace, tool): _effect(effect) for namespace, tool, effect in rows}
+
+
+def _effect(value: object) -> Effect:
+    if value == "read":
+        return "read"
+    if value == "write":
+        return "write"
+    raise RuntimeError(f"unexpected tool effect {value!r}")
+
 
 def _first_column[T](row: tuple[object, ...] | None, expected_type: type[T]) -> T:
     """The first column of a row that the query guarantees exists."""
@@ -150,6 +166,17 @@ class AdminRegistry:
             await self._connection.execute(
                 "DELETE FROM client_scopes WHERE client_id = %s AND tool = ANY(%s)",
                 (client_id, list(tools)),
+            )
+
+    async def upsert_tool_policy(
+        self, namespace: str, tool: str, effect: Effect, notes: str = ""
+    ) -> None:
+        async with self._connection.transaction():
+            await self._connection.execute(
+                "INSERT INTO tool_policies (namespace, tool, effect, notes) VALUES (%s, %s, %s, %s)"
+                " ON CONFLICT (namespace, tool) DO UPDATE SET effect = EXCLUDED.effect,"
+                " notes = EXCLUDED.notes, reviewed_at = now()",
+                (namespace, tool, effect, notes),
             )
 
     async def count_live_tokens(self, client_id: UUID) -> int:

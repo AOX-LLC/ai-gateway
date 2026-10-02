@@ -55,6 +55,7 @@ async def tokens(
     admin_registry: AdminRegistry, make_client: MakeClient, echo_url: str
 ) -> dict[str, IssuedToken]:
     await admin_registry.upsert_upstream("echo", echo_url, 2000, 5000)
+    await admin_registry.upsert_tool_policy("echo", "say", "read", "test policy")
     _, support = await make_client("harborline-support-bot", ["echo__say"])
     _, ops = await make_client("harborline-ops-bot", ["echo__say", "echo__shout"])
     return {"support": support, "ops": ops}
@@ -214,6 +215,20 @@ async def test_every_decision_is_recorded_with_the_negotiated_version(
     assert listings[-1].payload["protocol_version"] == "2025-11-25"
     blocked: dict[str, Any] = calls[-1].payload
     assert (blocked["outcome"], blocked["blocked_by"]) == ("blocked", "scope")
+
+
+async def test_decision_records_carry_the_tool_effect_and_where_it_came_from(
+    gateway: RunningGateway, tokens: dict[str, IssuedToken]
+) -> None:
+    async with connect(gateway.url, tokens["ops"].plaintext) as client:
+        await client.call_tool("echo__say", {"text": "x"})
+        await client.call_tool("echo__shout", {"text": "x"})
+
+    calls = [e.payload for e in gateway.events.events if e.action == "gateway.tool_call"]
+    assert [(c["effect"], c["effect_source"]) for c in calls] == [
+        ("read", "policy"),
+        ("write", "default"),
+    ]
 
 
 async def test_raw_tokens_never_appear_in_logs(

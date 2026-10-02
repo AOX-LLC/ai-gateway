@@ -55,7 +55,7 @@ def app_database_url(test_database_url: str) -> str:
 async def clean_database(test_database_url: str) -> None:
     async with await psycopg.AsyncConnection.connect(test_database_url) as connection:
         await connection.execute(
-            "TRUNCATE clients, client_tokens, client_scopes, upstream_servers"
+            "TRUNCATE clients, client_tokens, client_scopes, upstream_servers, tool_policies"
             " RESTART IDENTITY CASCADE"
         )
 

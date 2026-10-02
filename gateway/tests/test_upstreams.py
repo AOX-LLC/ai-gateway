@@ -12,9 +12,17 @@ import psycopg
 import pytest
 from mcp.client import Client
 from mcp.shared.exceptions import MCPError
-from mcp.types import INVALID_PARAMS, CallToolResult, ListToolsResult, TextContent, Tool
+from mcp.types import (
+    INVALID_PARAMS,
+    CallToolResult,
+    ListToolsResult,
+    TextContent,
+    Tool,
+    ToolAnnotations,
+)
 
 from ai_gateway.pipeline.runner import UpstreamStatus
+from ai_gateway.pipeline.types import Effect
 from ai_gateway.proxy.catalog import Catalog
 from ai_gateway.proxy.sessions import (
     SessionOwnershipError,
@@ -45,6 +53,7 @@ class FakeUpstream:
         self.closed = 0
         self.calls: list[str] = []
         self.cancelled = 0
+        self.annotations: dict[str, ToolAnnotations] = {}
 
     @asynccontextmanager
     async def open(self, upstream: UpstreamServer) -> AsyncGenerator[Client]:
@@ -69,7 +78,14 @@ class FakeClient:
         names = self._upstream.tool_pages[page]
         has_more = page + 1 < len(self._upstream.tool_pages)
         return ListToolsResult(
-            tools=[Tool(name=name, input_schema={"type": "object"}) for name in names],
+            tools=[
+                Tool(
+                    name=name,
+                    input_schema={"type": "object"},
+                    annotations=self._upstream.annotations.get(name),
+                )
+                for name in names
+            ],
             next_cursor=str(page + 1) if has_more else None,
         )
 
@@ -94,9 +110,13 @@ class FakeClient:
 class StaticSource:
     def __init__(self, *upstreams: UpstreamServer) -> None:
         self.upstreams = list(upstreams)
+        self.policies: dict[tuple[str, str], Effect] = {}
 
     async def enabled_upstreams(self) -> list[UpstreamServer]:
         return self.upstreams
+
+    async def tool_policies(self) -> dict[tuple[str, str], Effect]:
+        return self.policies
 
 
 class ManualClock:

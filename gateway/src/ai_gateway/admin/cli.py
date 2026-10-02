@@ -16,6 +16,7 @@ import anyio
 from psycopg import AsyncConnection
 
 from ai_gateway.auth.tokens import IssuedToken, generate_token
+from ai_gateway.proxy.naming import split_exposed
 from ai_gateway.registry import MIGRATIONS_PACKAGE
 from ai_gateway.registry.models import ClientStatus
 from ai_gateway.registry.repo import AdminRegistry, ClientNotFoundError
@@ -106,6 +107,15 @@ def _parser() -> argparse.ArgumentParser:
         help="name of the environment variable holding the service credential to send",
     )
     upstream.set_defaults(handler=_upstream_add)
+
+    policy = commands.add_parser(
+        "tool-policy-set",
+        help="record whether an upstream tool reads or writes, e.g. tickets__get_ticket read",
+    )
+    policy.add_argument("tool", help="exposed tool name, <namespace>__<tool>")
+    policy.add_argument("effect", choices=["read", "write"])
+    policy.add_argument("--notes", default="")
+    policy.set_defaults(handler=_tool_policy_set)
 
     seed = commands.add_parser(
         "seed-test", help="register the echo upstream and two fictional test clients"
@@ -200,6 +210,16 @@ async def _upstream_add(database_url: str, args: argparse.Namespace) -> None:
             args.credential_env,
         )
     print(f"upstream {args.namespace}: {args.url}")
+
+
+async def _tool_policy_set(database_url: str, args: argparse.Namespace) -> None:
+    split = split_exposed(args.tool)
+    if split is None:
+        raise AdminError(f"{args.tool!r} is not a <namespace>__<tool> name")
+    namespace, tool = split
+    async with await AsyncConnection.connect(database_url) as connection:
+        await AdminRegistry(connection).upsert_tool_policy(namespace, tool, args.effect, args.notes)
+    print(f"{args.tool}: {args.effect}")
 
 
 async def _seed_test(database_url: str, args: argparse.Namespace) -> None:

@@ -19,6 +19,7 @@ READABLE_TABLES = [
     "client_tokens",
     "client_scopes",
     "upstream_servers",
+    "tool_policies",
     "schema_migrations",
 ]
 
@@ -32,6 +33,11 @@ FORBIDDEN_WRITES = {
         "INSERT INTO client_scopes (client_id, tool) SELECT id, 'echo__shout' FROM clients LIMIT 1"
     ),
     "insert upstream": "INSERT INTO upstream_servers (namespace, url) VALUES ('evil', 'http://x')",
+    "insert tool policy": (
+        "INSERT INTO tool_policies (namespace, tool, effect) VALUES ('echo', 'shout', 'read')"
+    ),
+    "update tool policy": "UPDATE tool_policies SET effect = 'read'",
+    "delete tool policy": "DELETE FROM tool_policies",
     "insert migration": "INSERT INTO schema_migrations (version) VALUES (999)",
     "update client status": "UPDATE clients SET status = 'active'",
     "update scope": "UPDATE client_scopes SET tool = 'echo__shout'",

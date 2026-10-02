@@ -98,6 +98,8 @@ class GatewayServer:
             namespace=resolved.upstream.namespace,
             upstream_tool=resolved.tool.upstream_name,
             arguments=params.arguments or {},
+            effect=resolved.tool.effect,
+            effect_source=resolved.tool.effect_source,
         )
 
         async def forward(ctx: CallContext, approved_call: ToolCall) -> UpstreamOutcome:
