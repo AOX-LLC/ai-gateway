@@ -1,21 +1,20 @@
 """The tool catalog: every enabled upstream's tools under their exposed names, cached.
 
-tools/list is answered from this cache only and never waits on an upstream. A background
-task notices newly registered upstreams within seconds, and refreshes each upstream on a
-short-lived connection: every refresh interval when it is healthy, with exponential
-backoff when it is not. A failed refresh makes the
+tools/list is answered from this cache only and never waits on an upstream. Each upstream
+has its own background task that refreshes it on a short-lived connection, under its own
+timeout: every refresh interval when it is healthy, with exponential backoff when it is
+not. A hung upstream therefore delays only itself. Newly registered upstreams are noticed
+within seconds. A failed refresh makes the
 upstream unavailable: its tools disappear until it answers again, so clients never see
 stale descriptions for a server that may have changed.
 """
 
 import logging
-import time
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Protocol
 
 import anyio
-from anyio.abc import TaskStatus
+from anyio.abc import TaskGroup, TaskStatus
 from mcp.types import Tool
 from psycopg import Error as DatabaseError
 
@@ -40,7 +39,8 @@ class _UpstreamState:
     tools: tuple[CatalogTool, ...] = ()
     is_available: bool = False
     consecutive_failures: int = 0
-    next_refresh_at: float = 0.0
+    first_attempt_done: anyio.Event = field(default_factory=anyio.Event)
+    stop: anyio.CancelScope = field(default_factory=anyio.CancelScope)
 
 
 @dataclass(frozen=True)
@@ -56,8 +56,10 @@ class Catalog:
     refresh_interval_s: float = 60.0
     registry_poll_s: float = 5.0
     """How often to look for newly registered or removed upstreams. A cheap query."""
-    clock: Callable[[], float] = time.monotonic
+    startup_wait_s: float = 10.0
+    """How long startup waits for the first refresh of each upstream before serving."""
     _states: dict[str, _UpstreamState] = field(default_factory=dict, init=False)
+    _task_group: TaskGroup | None = field(default=None, init=False)
 
     def tools(self) -> list[CatalogTool]:
         return [tool for state in self._available_states() for tool in state.tools]
@@ -70,24 +72,25 @@ class Catalog:
         return None
 
     async def run(self, *, task_status: TaskStatus[None] = anyio.TASK_STATUS_IGNORED) -> None:
-        """Refresh forever. Reports started after the first pass, so a fresh gateway
-        has its catalog before it serves the first request."""
-        await self.refresh_due()
-        task_status.started()
-        while True:
-            await anyio.sleep(self._seconds_until_next_due())
-            await self.refresh_due()
+        """Keep every upstream fresh, each in its own task, until cancelled.
 
-    async def refresh_due(self) -> None:
-        """Re-read the upstream registry, then refresh every upstream that is due."""
-        await self._sync_with_registry()
-        now = self.clock()
-        due = [state for state in self._states.values() if state.next_refresh_at <= now]
+        Reports started once every upstream has had its first refresh, or after
+        startup_wait_s, so a fresh gateway usually has its catalog before the first
+        request but a hung upstream cannot hold up startup.
+        """
         async with anyio.create_task_group() as task_group:
-            for state in due:
-                task_group.start_soon(self._refresh, state)
+            self._task_group = task_group
+            await self.sync_with_registry()
+            with anyio.move_on_after(self.startup_wait_s):
+                for state in list(self._states.values()):
+                    await state.first_attempt_done.wait()
+            task_status.started()
+            while True:
+                await anyio.sleep(self.registry_poll_s)
+                await self.sync_with_registry()
 
-    async def _sync_with_registry(self) -> None:
+    async def sync_with_registry(self) -> None:
+        """Start a refresh task for each new or changed upstream; stop removed ones."""
         try:
             registered = await self.source.enabled_upstreams()
         except DatabaseError:
@@ -96,15 +99,33 @@ class Catalog:
             logger.warning("could not read the upstream registry; keeping the last catalog")
             return
         upstreams = {upstream.namespace: upstream for upstream in registered}
+
         for namespace in self._states.keys() - upstreams.keys():
             logger.info("upstream %s was removed or disabled", namespace)
-            del self._states[namespace]
+            self._states.pop(namespace).stop.cancel()
         for namespace, upstream in upstreams.items():
             known = self._states.get(namespace)
-            if known is None or known.upstream != upstream:
-                self._states[namespace] = _UpstreamState(upstream)
+            if known is not None and known.upstream == upstream:
+                continue
+            if known is not None:
+                known.stop.cancel()
+            self._start(_UpstreamState(upstream))
 
-    async def _refresh(self, state: _UpstreamState) -> None:
+    def _start(self, state: _UpstreamState) -> None:
+        if self._task_group is None:
+            raise RuntimeError("Catalog.run() is not active")
+        self._states[state.upstream.namespace] = state
+        self._task_group.start_soon(self._keep_fresh, state)
+
+    async def _keep_fresh(self, state: _UpstreamState) -> None:
+        with state.stop:
+            while True:
+                next_refresh_in_s = await self._refresh(state)
+                state.first_attempt_done.set()
+                await anyio.sleep(next_refresh_in_s)
+
+    async def _refresh(self, state: _UpstreamState) -> float:
+        """Refresh one upstream under its own timeout; return seconds until the next try."""
         upstream = state.upstream
         try:
             with anyio.fail_after(upstream.connect_timeout_s + upstream.call_timeout_s):
@@ -114,7 +135,6 @@ class Catalog:
             # Catching broadly is deliberate: this background task must keep running.
             state.consecutive_failures += 1
             backoff_s = min(_MAX_BACKOFF_S, 2.0 ** (state.consecutive_failures - 1))
-            state.next_refresh_at = self.clock() + backoff_s
             if state.is_available or state.consecutive_failures == 1:
                 logger.warning(
                     "upstream %s is unavailable; retrying in %.0fs",
@@ -124,14 +144,14 @@ class Catalog:
                 )
             state.is_available = False
             state.tools = ()
-            return
+            return backoff_s
 
         if not state.is_available:
             logger.info("upstream %s is available with %d tools", upstream.namespace, len(tools))
         state.tools = tools
         state.is_available = True
         state.consecutive_failures = 0
-        state.next_refresh_at = self.clock() + self.refresh_interval_s
+        return self.refresh_interval_s
 
     async def _fetch_tools(self, upstream: UpstreamServer) -> tuple[CatalogTool, ...]:
         exposed_tools: dict[str, CatalogTool] = {}
@@ -163,10 +183,3 @@ class Catalog:
 
     def _available_states(self) -> list[_UpstreamState]:
         return [state for state in self._states.values() if state.is_available]
-
-    def _seconds_until_next_due(self) -> float:
-        earliest = min(
-            (state.next_refresh_at for state in self._states.values()),
-            default=self.clock() + self.registry_poll_s,
-        )
-        return min(self.registry_poll_s, max(0.5, earliest - self.clock()))

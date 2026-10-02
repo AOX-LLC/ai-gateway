@@ -1,6 +1,6 @@
 """The catalog and the per-session upstream pool, against fake upstream clients."""
 
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from typing import Any, cast
 from uuid import uuid4
@@ -37,6 +37,7 @@ class FakeUpstream:
     def __init__(self, tool_pages: list[list[str]] | None = None) -> None:
         self.tool_pages = tool_pages or [["say", "shout"]]
         self.is_down = False
+        self.hangs = False
         self.behaviour = "echo"
         self.opened = 0
         self.closed = 0
@@ -47,6 +48,8 @@ class FakeUpstream:
     async def open(self, upstream: UpstreamServer) -> AsyncGenerator[Client]:
         if self.is_down:
             raise httpx2.ConnectError("connection refused")
+        if self.hangs:
+            await anyio.sleep_forever()
         self.opened += 1
         try:
             yield cast(Client, FakeClient(self))
@@ -99,59 +102,6 @@ class ManualClock:
 
     def __call__(self) -> float:
         return self.now
-
-
-# Catalog
-
-
-@pytest.mark.anyio
-async def test_catalog_exposes_namespaced_tools_across_pages() -> None:
-    upstream = FakeUpstream(tool_pages=[["say"], ["shout", "bad.name", "say"]])
-    catalog = Catalog(StaticSource(ECHO), open_client=upstream.open)
-
-    await catalog.refresh_due()
-
-    assert [tool.exposed_name for tool in catalog.tools()] == ["echo__say", "echo__shout"]
-    resolved = catalog.resolve("echo__shout")
-    assert resolved is not None
-    assert resolved.tool.upstream_name == "shout"
-    assert resolved.upstream == ECHO
-    assert catalog.resolve("echo__bad.name") is None
-
-
-@pytest.mark.anyio
-async def test_an_unreachable_upstream_drops_its_tools_and_backs_off() -> None:
-    upstream = FakeUpstream()
-    clock = ManualClock()
-    catalog = Catalog(StaticSource(ECHO), open_client=upstream.open, clock=clock)
-    await catalog.refresh_due()
-
-    upstream.is_down = True
-    clock.now += catalog.refresh_interval_s
-    await catalog.refresh_due()
-    assert catalog.tools() == []
-    assert catalog.resolve("echo__say") is None
-
-    clock.now += 0.5  # not yet due: the first retry waits 1 s
-    upstream.is_down = False
-    await catalog.refresh_due()
-    assert catalog.tools() == []
-
-    clock.now += 1
-    await catalog.refresh_due()
-    assert len(catalog.tools()) == 2
-
-
-@pytest.mark.anyio
-async def test_a_removed_upstream_disappears_from_the_catalog() -> None:
-    source = StaticSource(ECHO)
-    catalog = Catalog(source, open_client=FakeUpstream().open)
-    await catalog.refresh_due()
-
-    source.upstreams = []
-    await catalog.refresh_due()
-
-    assert catalog.tools() == []
 
 
 # Upstream session pool
@@ -293,11 +243,7 @@ async def test_an_unreachable_upstream_is_unavailable() -> None:
     assert raised.value.status is UpstreamStatus.UNAVAILABLE
 
 
-def test_new_upstreams_are_noticed_within_the_registry_poll_interval() -> None:
-    clock = ManualClock()
-    catalog = Catalog(StaticSource(), clock=clock, registry_poll_s=5, refresh_interval_s=60)
-
-    assert catalog._seconds_until_next_due() == 5
+# Catalog
 
 
 class FlakyRegistry(StaticSource):
@@ -311,35 +257,114 @@ class FlakyRegistry(StaticSource):
         return self.upstreams
 
 
+def _upstream(namespace: str, timeout_s: float = 0.5) -> UpstreamServer:
+    return UpstreamServer(
+        id=uuid4(),
+        namespace=namespace,
+        url=f"http://{namespace}.test/mcp",
+        connect_timeout_s=timeout_s,
+        call_timeout_s=timeout_s,
+    )
+
+
+@asynccontextmanager
+async def running_catalog(catalog: Catalog) -> AsyncGenerator[Catalog]:
+    async with anyio.create_task_group() as task_group:
+        await task_group.start(catalog.run)
+        yield catalog
+        task_group.cancel_scope.cancel()
+
+
+async def eventually(condition: Callable[[], bool], timeout_s: float = 5.0) -> None:
+    # Polling is the point: the catalog has no event for a test to wait on.
+    with anyio.fail_after(timeout_s):
+        while not condition():  # noqa: ASYNC110
+            await anyio.sleep(0.01)
+
+
 @pytest.mark.anyio
-async def test_a_registry_outage_keeps_the_last_catalog() -> None:
-    registry = FlakyRegistry(ECHO)
-    catalog = Catalog(registry, open_client=FakeUpstream().open)
-    await catalog.refresh_due()
+async def test_catalog_exposes_namespaced_tools_across_pages() -> None:
+    upstream = FakeUpstream(tool_pages=[["say"], ["shout", "bad.name", "say"]])
+    catalog = Catalog(StaticSource(ECHO), open_client=upstream.open)
 
-    registry.is_down = True
-    await catalog.refresh_due()
+    async with running_catalog(catalog):
+        assert [tool.exposed_name for tool in catalog.tools()] == ["echo__say", "echo__shout"]
+        resolved = catalog.resolve("echo__shout")
+        assert resolved is not None
+        assert resolved.tool.upstream_name == "shout"
+        assert resolved.upstream == ECHO
+        assert catalog.resolve("echo__bad.name") is None
 
-    assert [tool.exposed_name for tool in catalog.tools()] == ["echo__say", "echo__shout"]
+
+@pytest.mark.anyio
+async def test_an_unreachable_upstream_drops_its_tools_and_comes_back() -> None:
+    upstream = FakeUpstream()
+    catalog = Catalog(StaticSource(ECHO), open_client=upstream.open, refresh_interval_s=0.05)
+
+    async with running_catalog(catalog):
+        upstream.is_down = True
+        await eventually(lambda: catalog.tools() == [])
+        assert catalog.resolve("echo__say") is None
+
+        upstream.is_down = False
+        await eventually(lambda: len(catalog.tools()) == 2)  # first retry after 1 s
+
+
+@pytest.mark.anyio
+async def test_a_hung_upstream_does_not_hold_up_the_others() -> None:
+    hung, healthy = FakeUpstream(), FakeUpstream()
+    hung.hangs = True
+    stuck = _upstream("stuck", timeout_s=1.0)
+
+    @asynccontextmanager
+    async def open_by_namespace(upstream: UpstreamServer) -> AsyncGenerator[Client]:
+        chosen = hung if upstream.namespace == "stuck" else healthy
+        async with chosen.open(upstream) as client:
+            yield client
+
+    catalog = Catalog(
+        StaticSource(stuck, ECHO),
+        open_client=open_by_namespace,
+        refresh_interval_s=0.05,
+        startup_wait_s=0.2,
+    )
+
+    with anyio.fail_after(1.5):
+        async with running_catalog(catalog):
+            # The stuck upstream's refresh is still waiting on its 2 s timeout, yet the
+            # healthy one has its tools and keeps refreshing on its own schedule.
+            assert [tool.namespace for tool in catalog.tools()] == ["echo", "echo"]
+            await eventually(lambda: healthy.opened >= 5)
+            assert catalog.resolve("stuck__say") is None
+
+
+@pytest.mark.anyio
+async def test_a_removed_upstream_disappears_from_the_catalog() -> None:
+    registry = StaticSource(ECHO)
+    catalog = Catalog(registry, open_client=FakeUpstream().open, registry_poll_s=0.05)
+
+    async with running_catalog(catalog):
+        registry.upstreams = []
+        await eventually(lambda: catalog.tools() == [])
 
 
 @pytest.mark.anyio
 async def test_an_upstream_registered_later_is_picked_up_at_the_next_poll() -> None:
-    clock = ManualClock()
-    second = UpstreamServer(
-        id=uuid4(),
-        namespace="crm",
-        url="http://crm.test/mcp",
-        connect_timeout_s=1,
-        call_timeout_s=1,
-    )
     registry = StaticSource(ECHO)
-    catalog = Catalog(registry, open_client=FakeUpstream().open, clock=clock, registry_poll_s=5)
-    await catalog.refresh_due()
+    catalog = Catalog(registry, open_client=FakeUpstream().open, registry_poll_s=0.05)
 
-    registry.upstreams.append(second)
-    clock.now += catalog._seconds_until_next_due()
-    await catalog.refresh_due()
+    async with running_catalog(catalog):
+        registry.upstreams.append(_upstream("crm"))
+        await eventually(lambda: catalog.resolve("crm__say") is not None)
 
-    assert catalog._seconds_until_next_due() <= 5
-    assert catalog.resolve("crm__say") is not None
+
+@pytest.mark.anyio
+async def test_a_registry_outage_keeps_the_last_catalog() -> None:
+    registry = FlakyRegistry(ECHO)
+    catalog = Catalog(registry, open_client=FakeUpstream().open)
+
+    async with running_catalog(catalog):
+        registry.is_down = True
+        await catalog.sync_with_registry()
+
+        assert [tool.exposed_name for tool in catalog.tools()] == ["echo__say", "echo__shout"]

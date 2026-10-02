@@ -161,9 +161,12 @@ request.
 ### Catalog (`proxy/catalog.py`)
 
 - **Cached answers.** tools/list is answered from a cache and never waits on an upstream.
-- **Refresh.** A background task refreshes each upstream on a short-lived connection:
-  every 60 s while it is healthy, and with exponential backoff from 1 s to 60 s while it
-  is not.
+- **Refresh.** Each upstream has its own background task, which refreshes it on a
+  short-lived connection under that upstream's own timeout: every 60 s while it is
+  healthy, and with exponential backoff from 1 s to 60 s while it is not. A hung upstream
+  delays only itself.
+- **New upstreams.** The registry is polled every 5 s, so a newly registered upstream
+  is picked up within seconds.
 - **Failed refresh.** The upstream's tools disappear until it answers again, so clients
   never see stale descriptions.
 - **Name checks.** Tool names that Claude clients cannot accept (`[A-Za-z0-9_-]{1,64}`
