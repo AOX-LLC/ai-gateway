@@ -16,7 +16,7 @@ These conventions apply to every contributor, human or AI.
 
 ## Ports
 
-Every service binds to `127.0.0.1` only, never `0.0.0.0`.
+Every service is published on `127.0.0.1` only, never `0.0.0.0`. Inside a container a process has to listen on `0.0.0.0` for Docker to publish its port, so the host side of every Compose port mapping is `127.0.0.1`. Outside Docker, services bind `127.0.0.1`.
 
 | Service | Port |
 | --- | --- |
