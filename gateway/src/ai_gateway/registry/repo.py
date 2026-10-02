@@ -14,6 +14,7 @@ from psycopg_pool import AsyncConnectionPool
 
 from ai_gateway.pipeline.types import Effect
 from ai_gateway.registry.models import ClientStatus, StoredToken, UpstreamServer
+from mcp_common.health import read_schema_version
 
 _SELECT_BY_LOOKUP_ID = """
 SELECT t.id AS token_id, t.lookup_id, t.token_sha256, t.expires_at, t.revoked_at,
@@ -66,11 +67,7 @@ class GatewayRegistry:
 
     async def schema_version(self) -> int:
         """The newest applied migration, or 0 for an empty database."""
-        async with self._pool.connection() as connection:
-            cursor = await connection.execute(
-                "SELECT coalesce(max(version), 0) FROM schema_migrations"
-            )
-            return _first_column(await cursor.fetchone(), int)
+        return await read_schema_version(self._pool, "public")
 
     async def enabled_upstreams(self) -> list[UpstreamServer]:
         async with self._pool.connection() as connection:

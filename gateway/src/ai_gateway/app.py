@@ -16,7 +16,6 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from ai_gateway.auth.middleware import BearerAuthMiddleware
 from ai_gateway.auth.verifier import TokenVerifier
-from ai_gateway.health import BuildIdentity, SchemaVersionCache
 from ai_gateway.pipeline.config import load_pipeline_config
 from ai_gateway.pipeline.registry import LAYER_ORDER
 from ai_gateway.pipeline.runner import Pipeline
@@ -27,6 +26,7 @@ from ai_gateway.proxy.sessions import UpstreamSessionPool
 from ai_gateway.registry.repo import GatewayRegistry
 from ai_gateway.seams.events import EventSink, LogEventSink
 from ai_gateway.settings import GatewaySettings
+from mcp_common.health import BuildIdentity, SchemaVersionCache
 
 MCP_PATH = "/mcp"
 

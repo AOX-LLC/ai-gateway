@@ -2,8 +2,8 @@ import anyio
 import psycopg
 import pytest
 
-from ai_gateway.health import BuildIdentity, SchemaVersionCache
 from ai_gateway.settings import GatewaySettings
+from mcp_common.health import BuildIdentity, SchemaVersionCache
 
 
 class CountingSource:

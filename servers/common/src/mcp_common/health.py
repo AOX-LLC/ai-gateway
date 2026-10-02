@@ -1,4 +1,6 @@
-"""What /healthz reports: the running build and the database schema it is serving."""
+"""What /healthz reports: the running build and the database schema it is serving.
+
+Shared by the gateway and the MCP servers, so every service answers in the same format."""
 
 import logging
 import time
@@ -8,6 +10,8 @@ from typing import Protocol
 
 import anyio
 from psycopg import Error as DatabaseError
+from psycopg import sql
+from psycopg_pool import AsyncConnectionPool
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +26,18 @@ HealthPayload = dict[str, str | float | None]
 
 class SchemaVersionSource(Protocol):
     async def schema_version(self) -> int: ...
+
+
+async def read_schema_version(pool: AsyncConnectionPool, schema: str) -> int:
+    """The newest migration applied to `schema`, or 0 for an empty one."""
+    query = sql.SQL("SELECT coalesce(max(version), 0) FROM {}.schema_migrations").format(
+        sql.Identifier(schema)
+    )
+    async with pool.connection() as connection:
+        row = await (await connection.execute(query)).fetchone()
+    if row is None or not isinstance(row[0], int):
+        raise RuntimeError(f"expected one integer row, got {row!r}")
+    return row[0]
 
 
 @dataclass(frozen=True)

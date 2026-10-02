@@ -9,8 +9,10 @@ description = "Shared building blocks for the gateway and the Harborline MCP ser
 authors = [{ name = "AOX LLC" }]
 requires-python = ">=3.12"
 dependencies = [
+    "anyio>=4.5",
     "mcp==2.2.0",
     "psycopg[binary]>=3.2,<4",
+    "psycopg-pool>=3.2,<4",
     "pydantic>=2.13,<3",
     "starlette>=0.40",
 ]
