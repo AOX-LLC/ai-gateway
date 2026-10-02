@@ -26,7 +26,7 @@ Every service that is published is published on `127.0.0.1` only, never `0.0.0.0
 | PostgreSQL | 4402 |
 | MCP servers | 4410–4412, inside the Compose network only; no host port |
 
-The MCP servers sit on an internal Compose network (`backend`) with no route to the outside world, so they publish nothing on the host. Reach them from inside the network: `scripts/direct_check.sh` runs the direct scenarios there, and `scripts/check_servers_have_no_internet.sh` proves they cannot leave. Only the gateway and PostgreSQL are on both the internal network and `edge`.
+The MCP servers sit on an internal Compose network (`backend`) with no route to the outside world, so they publish nothing on the host, and the host has no address on that network, so they cannot reach the host's own services either. Reach them from inside the network: `scripts/direct_check.sh` runs the direct scenarios there, and `scripts/check_servers_have_no_internet.sh` proves they cannot leave. Only the gateway and PostgreSQL are on both the internal network and `edge`.
 
 The Docker Compose project name is `ai-gateway`.
 
