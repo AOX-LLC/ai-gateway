@@ -29,7 +29,7 @@ WHERE (%(status)s::text IS NULL OR status = %(status)s)
   AND (%(priority)s::text IS NULL OR priority = %(priority)s)
   AND (%(account_id)s::text IS NULL OR account_id = %(account_id)s)
 ORDER BY updated_at DESC, id DESC
-LIMIT %(limit)s
+LIMIT %(limit)s OFFSET %(offset)s
 """  # noqa: S608 - the column list is a constant; every value is a bound parameter
 
 _GET_TICKET = f"""

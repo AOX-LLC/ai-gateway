@@ -100,6 +100,39 @@ async def test_list_tickets_filters(client: Client, ticketing_data: Dataset) -> 
     assert {t["status"] for t in closed["tickets"]} == {"closed"}
 
 
+async def test_list_tickets_offset_reaches_older_tickets(client: Client) -> None:
+    first = _structured(await client.call_tool("list_tickets", {"limit": 5}))["tickets"]
+    second = _structured(await client.call_tool("list_tickets", {"limit": 5, "offset": 5}))[
+        "tickets"
+    ]
+    both = _structured(await client.call_tool("list_tickets", {"limit": 10}))["tickets"]
+    past_the_end = _structured(
+        await client.call_tool("list_tickets", {"limit": 5, "offset": TICKET_COUNT})
+    )
+
+    assert [t["id"] for t in first + second] == [t["id"] for t in both]
+    assert past_the_end == {"tickets": []}
+
+
+@pytest.mark.parametrize("offset", [-1, 10001])
+async def test_list_tickets_offset_is_bounded(client: Client, offset: int) -> None:
+    with pytest.raises(MCPError) as error:
+        await client.call_tool("list_tickets", {"offset": offset})
+
+    assert error.value.code == INVALID_PARAMS
+
+
+async def test_the_activity_order_has_an_index(ticketing_app_url: str) -> None:
+    rows = await _rows(
+        ticketing_app_url,
+        "SELECT indexdef FROM pg_indexes WHERE schemaname = 'ticketing'"
+        " AND indexname = 'tickets_by_activity'",
+    )
+
+    assert len(rows) == 1
+    assert "(updated_at DESC, id DESC)" in rows[0][0]
+
+
 @pytest.mark.parametrize("limit", [0, 21, -1])
 async def test_list_tickets_limit_is_bounded(client: Client, limit: int) -> None:
     with pytest.raises(MCPError) as error:

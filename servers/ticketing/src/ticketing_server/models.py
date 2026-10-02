@@ -27,6 +27,7 @@ class ListTicketsInput(BaseModel):
     priority: Priority | None = None
     account_id: AccountId | None = None
     limit: int = Field(default=10, ge=1, le=20)
+    offset: int = Field(default=0, ge=0, le=10000)
 
 
 class GetTicketInput(BaseModel):

@@ -253,7 +253,7 @@ Tools, in the gateway namespace `tickets`:
 
 | Tool | Effect | Does |
 | --- | --- | --- |
-| `list_tickets(status?, priority?, account_id?, limit)` | read | Up to 20 ticket summaries, newest activity first |
+| `list_tickets(status?, priority?, account_id?, limit, offset)` | read | Up to 20 ticket summaries, newest activity first; `offset` (0 to 10000) reaches older ones |
 | `get_ticket(ticket_id)` | read | One ticket and its newest **public** comments (at most 20, plus `comments_total`) |
 | `create_ticket(subject, description, priority, account_id)` | write | Opens a ticket, returns its id |
 | `add_comment(ticket_id, body)` | write | Adds a public comment (always public) |

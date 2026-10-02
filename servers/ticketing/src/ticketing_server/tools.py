@@ -53,7 +53,7 @@ def build_toolset(repo: TicketRepo) -> StrictToolset:
     toolset.register(
         "list_tickets",
         "List support tickets, newest activity first, optionally filtered by status,"
-        " priority or account.",
+        " priority or account. Use offset to reach older ones.",
         ListTicketsInput,
         ListTicketsOutput,
         list_tickets,
