@@ -181,7 +181,10 @@ request.
 An upstream row may name an environment variable in `credential_env`. The gateway reads
 that variable when it connects and sends `Authorization: Bearer <value>` on every
 upstream connection, both the catalog refresh and the per-session call connections. The
-registry holds the variable's *name*, never the value, and the value is never logged.
+registry holds the variable's *name*, never the value, and the value is never logged. The
+name must end in `_SERVICE_TOKEN` (a database constraint, checked again when connecting), so
+a registry writer cannot make the gateway send another secret, such as its database URL, to
+a server of their choosing.
 
 If the variable is missing or empty, that upstream is unavailable and one clear warning
 names the variable. The gateway never falls back to calling a protected server without

@@ -9,7 +9,7 @@ from mcp.client import Client
 from mcp.client.streamable_http import streamable_http_client
 from mcp.types import Implementation
 
-from ai_gateway.registry.models import UpstreamServer
+from ai_gateway.registry.models import CREDENTIAL_ENV_SUFFIX, UpstreamServer
 
 UpstreamClientFactory = Callable[[UpstreamServer], AbstractAsyncContextManager[Client]]
 
@@ -26,12 +26,20 @@ class UpstreamCredentialError(RuntimeError):
 def upstream_headers(upstream: UpstreamServer) -> dict[str, str]:
     """The headers every connection to this upstream carries: its service credential, if any.
 
-    The credential is read from the environment at connect time, so rotating it needs a
+    Only variables whose name ends in _SERVICE_TOKEN are read. The credential is read from
+    the environment at connect time, so rotating it needs a
     restart of the gateway but no registry change. A missing or empty variable makes the
     upstream unavailable rather than letting the gateway call it without credentials.
     """
     if upstream.credential_env is None:
         return {}
+    if not upstream.credential_env.endswith(CREDENTIAL_ENV_SUFFIX):
+        # The registry's own constraint forbids this; check again here so a row written
+        # around it still cannot make the gateway send some other secret to an upstream.
+        raise UpstreamCredentialError(
+            f"upstream {upstream.namespace!r} names {upstream.credential_env} as its credential,"
+            f" but only variables ending in {CREDENTIAL_ENV_SUFFIX} may be used; refusing"
+        )
     value = os.environ.get(upstream.credential_env, "")
     if not value:
         raise UpstreamCredentialError(

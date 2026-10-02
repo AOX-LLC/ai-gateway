@@ -3,10 +3,12 @@
 import os
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from datetime import datetime
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import psycopg
 import pytest
+from psycopg import sql
+from psycopg.conninfo import make_conninfo
 from psycopg_pool import AsyncConnectionPool
 
 from ai_gateway.auth.tokens import IssuedToken, generate_token
@@ -151,3 +153,22 @@ async def ticketing_pool(
         yield pool
     finally:
         await pool.close()
+
+
+@pytest.fixture
+async def scratch_database(test_database_url: str) -> AsyncIterator[tuple[str, str]]:
+    """An empty database and a role name that exist nowhere yet, removed afterwards."""
+    suffix = uuid4().hex[:8]
+    database, role = f"setup_scratch_{suffix}", f"ticketing_scratch_{suffix}"
+    async with await psycopg.AsyncConnection.connect(test_database_url, autocommit=True) as conn:
+        await conn.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(database)))
+    try:
+        yield make_conninfo(test_database_url, dbname=database), role
+    finally:
+        async with await psycopg.AsyncConnection.connect(
+            test_database_url, autocommit=True
+        ) as conn:
+            await conn.execute(
+                sql.SQL("DROP DATABASE {} WITH (FORCE)").format(sql.Identifier(database))
+            )
+            await conn.execute(sql.SQL("DROP ROLE IF EXISTS {}").format(sql.Identifier(role)))

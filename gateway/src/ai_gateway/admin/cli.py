@@ -19,7 +19,7 @@ from psycopg import AsyncConnection
 from ai_gateway.auth.tokens import IssuedToken, generate_token
 from ai_gateway.proxy.naming import split_exposed
 from ai_gateway.registry import MIGRATIONS_PACKAGE
-from ai_gateway.registry.models import ClientStatus
+from ai_gateway.registry.models import CREDENTIAL_ENV_SUFFIX, ClientStatus
 from ai_gateway.registry.repo import AdminRegistry, ClientNotFoundError
 from ai_gateway.registry.tool_policies import ToolPolicyFileError, load_tool_policies
 from mcp_common.migrate import apply_migrations
@@ -127,7 +127,8 @@ def _parser() -> argparse.ArgumentParser:
     upstream.add_argument(
         "--credential-env",
         metavar="NAME",
-        help="name of the environment variable holding the service credential to send",
+        help="name of the environment variable holding the service credential to send;"
+        " it must end in _SERVICE_TOKEN",
     )
     upstream.set_defaults(handler=_upstream_add)
 
@@ -233,6 +234,7 @@ async def _token_revoke(database_url: str, args: argparse.Namespace) -> None:
 
 
 async def _upstream_add(database_url: str, args: argparse.Namespace) -> None:
+    _require_credential_env_name(args.credential_env)
     async with await AsyncConnection.connect(database_url) as connection:
         await AdminRegistry(connection).upsert_upstream(
             args.namespace,
@@ -271,8 +273,14 @@ async def _seed_test(database_url: str, args: argparse.Namespace) -> None:
     print(json.dumps(tokens, indent=2))
 
 
+def _require_credential_env_name(name: str | None) -> None:
+    if name is not None and not name.endswith(CREDENTIAL_ENV_SUFFIX):
+        raise AdminError(f"--credential-env must name a variable ending in {CREDENTIAL_ENV_SUFFIX}")
+
+
 async def _seed_demo(database_url: str, args: argparse.Namespace) -> None:
     """Idempotent: re-running revokes the previous demo tokens and prints new ones."""
+    _require_credential_env_name(args.credential_env)
     try:
         policies = load_tool_policies(args.policies)
     except ToolPolicyFileError as error:

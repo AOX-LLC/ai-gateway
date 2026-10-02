@@ -1,6 +1,5 @@
 """harborline-setup: idempotent role, schema, migration and seed, run as the owner."""
 
-from collections.abc import AsyncIterator
 from uuid import uuid4
 
 import psycopg
@@ -45,25 +44,6 @@ async def test_setup_seeds_an_empty_schema_once_and_is_safe_to_repeat(
 async def test_setup_refuses_an_empty_password(test_database_url: str) -> None:
     with pytest.raises(ValueError, match="TICKETING_DB_PASSWORD"):
         await setup_ticketing(test_database_url, "", None)
-
-
-@pytest.fixture
-async def scratch_database(test_database_url: str) -> AsyncIterator[tuple[str, str]]:
-    """An empty database and a role name that exist nowhere yet, removed afterwards."""
-    suffix = uuid4().hex[:8]
-    database, role = f"setup_scratch_{suffix}", f"ticketing_scratch_{suffix}"
-    async with await psycopg.AsyncConnection.connect(test_database_url, autocommit=True) as conn:
-        await conn.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(database)))
-    try:
-        yield make_conninfo(test_database_url, dbname=database), role
-    finally:
-        async with await psycopg.AsyncConnection.connect(
-            test_database_url, autocommit=True
-        ) as conn:
-            await conn.execute(
-                sql.SQL("DROP DATABASE {} WITH (FORCE)").format(sql.Identifier(database))
-            )
-            await conn.execute(sql.SQL("DROP ROLE IF EXISTS {}").format(sql.Identifier(role)))
 
 
 async def _privileges(url: str, role: str) -> dict[str, bool]:

@@ -21,7 +21,7 @@ from tests.test_upstreams import StaticSource, eventually, running_catalog
 pytestmark = pytest.mark.anyio
 
 CREDENTIAL = "credential-value-for-tests-only"
-ENV_NAME = "TEST_UPSTREAM_CREDENTIAL"
+ENV_NAME = "TEST_UPSTREAM_SERVICE_TOKEN"
 
 
 class PongOutput(BaseModel):
@@ -129,3 +129,30 @@ async def test_a_missing_credential_variable_makes_the_upstream_unavailable_with
     warnings = [r for r in caplog.records if "is unavailable" in r.getMessage()]
     assert len(warnings) == 1
     assert ENV_NAME in caplog.text
+
+
+def test_a_credential_env_without_the_service_token_suffix_is_refused_without_reading_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret = "postgresql://gateway_app:a-secret-password@db/ai_gateway"  # noqa: S105
+    monkeypatch.setenv("GATEWAY_DATABASE_URL", secret)
+
+    with pytest.raises(UpstreamCredentialError, match="_SERVICE_TOKEN") as error:
+        upstream_headers(_upstream("http://x.test/mcp", "GATEWAY_DATABASE_URL"))
+
+    assert secret not in str(error.value)
+
+
+async def test_an_upstream_with_a_disallowed_credential_env_is_unavailable_with_one_warning(
+    guarded_url: str, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    secret = "not-to-be-sent-anywhere"  # noqa: S105
+    monkeypatch.setenv("GATEWAY_DATABASE_URL", secret)
+    caplog.set_level(logging.WARNING)
+    catalog = Catalog(StaticSource(_upstream(guarded_url, "GATEWAY_DATABASE_URL")))
+
+    async with running_catalog(catalog):
+        assert catalog.tools() == []
+
+    assert len([r for r in caplog.records if "is unavailable" in r.getMessage()]) == 1
+    assert secret not in caplog.text
