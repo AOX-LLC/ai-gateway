@@ -170,3 +170,109 @@ def test_the_real_example_has_no_placeholder_left_after_init(tmp_path: Path) -> 
     _run("--example", str(REPO_ROOT / ".env.example"), "--output", str(output))
 
     assert "change-me" not in output.read_text()
+
+
+# --- edge cases of an existing .env ----------------------------------------------------------
+
+AWKWARD_PASSWORD = "p@ss:word/with#odd?chars%"  # noqa: S105 - fixture value
+
+
+def test_an_existing_password_is_percent_encoded_inside_a_new_url(
+    example: Path, tmp_path: Path
+) -> None:
+    output = _existing_env(tmp_path, f"OWNER_PASSWORD={AWKWARD_PASSWORD}\n")
+
+    _run("--example", str(example), "--output", str(output))
+
+    values = _values(output)
+    assert values["OWNER_PASSWORD"] == AWKWARD_PASSWORD
+    assert values["OWNER_URL"] == (
+        "postgresql://owner:p%40ss%3Aword%2Fwith%23odd%3Fchars%25@db:5432/app"
+    )
+
+
+def test_a_new_url_uses_the_existing_owner_user_and_database(tmp_path: Path) -> None:
+    example = tmp_path / ".env.example"
+    example.write_text(
+        "POSTGRES_USER=ai_owner\nPOSTGRES_PASSWORD=change-me-owner\nPOSTGRES_DB=ai_gateway\n"
+        "MIGRATE_URL=postgresql://ai_owner:change-me-owner@127.0.0.1:4402/ai_gateway\n"
+        "TEST_URL=postgresql://ai_owner:change-me-owner@127.0.0.1:4402/ai_gateway_test\n"
+        "APP_URL=postgresql://gateway_app:change-me-owner@127.0.0.1:4402/ai_gateway\n"
+    )
+    output = _existing_env(
+        tmp_path, "POSTGRES_USER=mine\nPOSTGRES_PASSWORD=secret1\nPOSTGRES_DB=mydb\n"
+    )
+
+    _run("--example", str(example), "--output", str(output))
+
+    values = _values(output)
+    assert values["MIGRATE_URL"] == "postgresql://mine:secret1@127.0.0.1:4402/mydb"
+    # Only the owner's name and the main database are renamed: the test database and the
+    # application role are different things.
+    assert values["TEST_URL"] == "postgresql://mine:secret1@127.0.0.1:4402/ai_gateway_test"
+    assert values["APP_URL"] == "postgresql://gateway_app:secret1@127.0.0.1:4402/mydb"
+
+
+@pytest.mark.parametrize("line", ["OWNER_PASSWORD=", "export OWNER_PASSWORD=", "OWNER_PASSWORD= "])
+def test_an_existing_empty_password_is_refused_and_nothing_is_written(
+    example: Path, tmp_path: Path, line: str
+) -> None:
+    before = f"{line}\nPORT=1\n"
+    output = _existing_env(tmp_path, before)
+
+    result = _run("--example", str(example), "--output", str(output))
+
+    assert result.returncode != 0
+    assert "OWNER_PASSWORD" in result.stderr
+    assert "empty" in result.stderr
+    assert output.read_text() == before
+
+
+def test_an_empty_password_nothing_new_needs_is_left_alone(example: Path, tmp_path: Path) -> None:
+    before = (
+        "OWNER_PASSWORD=\nOWNER_URL=x\nAPP_PASSWORD=a\nAPP_URL=b\nSERVICE_TOKEN=c\nPORT=1\nTOKEN=\n"
+    )
+    output = _existing_env(tmp_path, before)
+
+    result = _run("--example", str(example), "--output", str(output))
+
+    assert result.returncode == 0
+    assert output.read_text() == before
+
+
+def test_export_lines_count_as_existing_keys(example: Path, tmp_path: Path) -> None:
+    before = "export OWNER_PASSWORD=mine\nexport  PORT=9\n"
+    output = _existing_env(tmp_path, before)
+
+    _run("--example", str(example), "--output", str(output))
+
+    text = output.read_text()
+    assert text.startswith(before)
+    assert text.count("OWNER_PASSWORD=") == 1
+    assert text.count("PORT=") == 1
+    assert _values(output)["OWNER_URL"] == "postgresql://owner:mine@db:5432/app"
+
+
+def test_a_looser_file_is_never_readable_while_it_is_rewritten(
+    example: Path, tmp_path: Path
+) -> None:
+    # The file is replaced by a private one rather than written and then chmod-ed.
+    output = tmp_path / ".env"
+    output.write_text("PORT=1\n")
+    output.chmod(0o644)
+
+    _run("--example", str(example), "--output", str(output))
+
+    assert stat.S_IMODE(output.stat().st_mode) == 0o600
+    assert not [p for p in tmp_path.iterdir() if p.name.startswith(".env.") and p != example]
+
+
+def test_force_replaces_a_looser_file_with_a_private_one(example: Path, tmp_path: Path) -> None:
+    output = tmp_path / ".env"
+    output.write_text("PORT=1\n")
+    output.chmod(0o644)
+
+    _run("--example", str(example), "--output", str(output), "--force")
+
+    assert stat.S_IMODE(output.stat().st_mode) == 0o600
+    assert not [v for v in _values(output).values() if v.startswith("change-me")]
