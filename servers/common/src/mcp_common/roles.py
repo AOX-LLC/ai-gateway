@@ -2,9 +2,32 @@
 
 Used by harborline-setup for the servers and by gateway-admin for the telemetry schema."""
 
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
+
 from psycopg import AsyncConnection, sql
 
 GATEWAY_ROLE = "gateway_app"
+
+_DATABASE_ACCESS_LOCK = 7_165_201_001
+"""The advisory lock that serialises changes to the database-level access list."""
+
+
+@asynccontextmanager
+async def _database_access_lock(connection: AsyncConnection) -> AsyncGenerator[None]:
+    """Hold a session advisory lock while changing who may connect to the database or use the
+    public schema.
+
+    Compose runs several setups side by side (the servers' and the telemetry's), and each
+    grants CONNECT on the same database and revokes defaults from PUBLIC. Postgres keeps those
+    privileges in one catalog row per object, and two sessions updating it at once fail with
+    "tuple concurrently updated". The connection must not be inside a transaction that ends
+    before the lock is released: callers use autocommit."""
+    await connection.execute("SELECT pg_advisory_lock(%s)", (_DATABASE_ACCESS_LOCK,))
+    try:
+        yield
+    finally:
+        await connection.execute("SELECT pg_advisory_unlock(%s)", (_DATABASE_ACCESS_LOCK,))
 
 
 async def ensure_role(connection: AsyncConnection, password: str, role: str) -> None:
@@ -22,11 +45,11 @@ async def ensure_role(connection: AsyncConnection, password: str, role: str) -> 
             sql.Identifier(role), sql.Literal(verifier)
         )
     )
-    await connection.execute(
-        sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(
-            sql.Identifier(await database_name(connection)), sql.Identifier(role)
+    database = sql.Identifier(await database_name(connection))
+    async with _database_access_lock(connection):
+        await connection.execute(
+            sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(database, sql.Identifier(role))
         )
-    )
 
 
 async def restrict_database_access(connection: AsyncConnection, roles: list[str]) -> None:
@@ -37,19 +60,20 @@ async def restrict_database_access(connection: AsyncConnection, roles: list[str]
     public schema. A listed role that does not exist (yet) is skipped; setup runs again
     when it does."""
     database = sql.Identifier(await database_name(connection))
-    await connection.execute(
-        sql.SQL("REVOKE TEMPORARY, CONNECT ON DATABASE {} FROM PUBLIC").format(database)
-    )
-    await connection.execute("REVOKE USAGE ON SCHEMA public FROM PUBLIC")
-    existing = await existing_roles(connection, [*roles, GATEWAY_ROLE])
-    for name in existing:
+    async with _database_access_lock(connection):
         await connection.execute(
-            sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(database, sql.Identifier(name))
+            sql.SQL("REVOKE TEMPORARY, CONNECT ON DATABASE {} FROM PUBLIC").format(database)
         )
-    if GATEWAY_ROLE in existing:
-        await connection.execute(
-            sql.SQL("GRANT USAGE ON SCHEMA public TO {}").format(sql.Identifier(GATEWAY_ROLE))
-        )
+        await connection.execute("REVOKE USAGE ON SCHEMA public FROM PUBLIC")
+        existing = await existing_roles(connection, [*roles, GATEWAY_ROLE])
+        for name in existing:
+            await connection.execute(
+                sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(database, sql.Identifier(name))
+            )
+        if GATEWAY_ROLE in existing:
+            await connection.execute(
+                sql.SQL("GRANT USAGE ON SCHEMA public TO {}").format(sql.Identifier(GATEWAY_ROLE))
+            )
 
 
 async def existing_roles(connection: AsyncConnection, roles: list[str]) -> list[str]:
