@@ -229,7 +229,7 @@ schema and role:
 | CRM | 4411 | `crm` | Accounts `ACC-00001` to `ACC-00040`, contacts, deals and activity notes |
 | Ticketing | 4412 | `tickets` | Support tickets and comments for the same accounts |
 
-All three publish on `127.0.0.1` only.
+They publish no port on the host. See [Networks](#networks) below.
 
 ### Shared foundation (`servers/common`, module `mcp_common`)
 
@@ -465,8 +465,8 @@ Any option that crosses a network carries the bearer token, so it must use TLS o
 
 `GET /healthz` needs no token and, like everything else, is published on 127.0.0.1 only.
 The gateway answers 200 while the MCP endpoint is serving and 503 otherwise. The three
-servers (4410, 4411, 4412) use the same format and the same cache (`mcp_common.health`) and
-answer 200 while they can read their own schema version, 503 with `status: "unavailable"` when it cannot.
+servers (4410, 4411, 4412, reachable only inside the Compose network) use the same format
+and the same cache (`mcp_common.health`) and answer 200 while they can read their own schema version, 503 with `status: "unavailable"` when it cannot.
 Their `GIT_COMMIT`/`GIT_BRANCH` come from the build arguments of `servers/Dockerfile`, a
 server's `version` is its own package (`ticketing-server`, `crm-server`, `handbook-server`),
 and `schema_version` is the newest migration in its schema (its role may read that
@@ -490,6 +490,41 @@ itself).
 | Dashboard (Phase 5) | 127.0.0.1:4400 |
 | Gateway | 127.0.0.1:4401 |
 | PostgreSQL | 127.0.0.1:4402 |
-| MCP servers (Phase 2) | 127.0.0.1:4410–4412 (4412: ticketing) |
+| MCP servers (Phase 2) | none on the host; 4410 (handbook), 4411 (CRM) and 4412 (ticketing) inside the `backend` network |
 
-The test-only echo server has no published port.
+The test-only echo server has no published port either.
+
+## Networks
+
+Compose has two networks:
+
+| Network | Kind | Members |
+| --- | --- | --- |
+| `edge` | ordinary bridge | the gateway and PostgreSQL, the two services that publish a port |
+| `backend` | `internal: true` | the three MCP servers, `servers-setup`, `migrate`, `admin`, `direct-check`, the test upstream, and also the gateway and PostgreSQL |
+
+Docker gives an internal network no route to the outside world and publishes no port from
+it. So the MCP servers, which only need the database and the gateway, **cannot reach the
+Internet**, and neither can anything else on `backend` alone: a server that a prompt injection
+or a bug turns against its operator has nowhere to send what it read. It also makes the
+handbook's "no network at run time" claim true by construction instead of by reading the
+code. The gateway and PostgreSQL are on both networks, because the host reaches them and they
+reach the servers.
+
+A server therefore publishes no host port, and the host cannot call it. Anything that needs
+to call a server directly runs inside the network:
+
+- `scripts/direct_check.sh` runs the Harborline scenario against each server from the
+  `direct-check` service.
+- `scripts/check_servers_have_no_internet.sh` is the proof, and CI runs it. From inside each
+  server it checks that PostgreSQL answers, that two public addresses cannot be connected to
+  and that an outside name does not resolve, and that the server publishes no host port. The
+  same probe in the gateway container is the control, so a pass shows the probe can tell a
+  blocked route from an open one.
+- `gateway/tests/test_compose.py` asserts the layout in `compose.yaml`: the network is
+  internal, each internal-only service names it and nothing else, none publishes a port, and
+  every published port is bound to `127.0.0.1`.
+
+A new service joins `backend` only unless it must be reached from the host or needs the
+Internet; a service that names no network would join Compose's default one, which has a route
+out.

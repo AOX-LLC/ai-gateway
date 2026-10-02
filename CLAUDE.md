@@ -17,14 +17,16 @@ These conventions apply to every contributor, human or AI.
 
 ## Ports
 
-Every service is published on `127.0.0.1` only, never `0.0.0.0`. Inside a container a process has to listen on `0.0.0.0` for Docker to publish its port, so the host side of every Compose port mapping is `127.0.0.1`. Outside Docker, services bind `127.0.0.1`.
+Every service that is published is published on `127.0.0.1` only, never `0.0.0.0`. Inside a container a process has to listen on `0.0.0.0` for Docker to publish its port, so the host side of every Compose port mapping is `127.0.0.1`. Outside Docker, services bind `127.0.0.1`.
 
 | Service | Port |
 | --- | --- |
 | Dashboard | 4400 |
 | Gateway | 4401 |
 | PostgreSQL | 4402 |
-| MCP servers | 4410–4412 |
+| MCP servers | 4410–4412, inside the Compose network only; no host port |
+
+The MCP servers sit on an internal Compose network (`backend`) with no route to the outside world, so they publish nothing on the host. Reach them from inside the network: `scripts/direct_check.sh` runs the direct scenarios there, and `scripts/check_servers_have_no_internet.sh` proves they cannot leave. Only the gateway and PostgreSQL are on both the internal network and `edge`.
 
 The Docker Compose project name is `ai-gateway`.
 
