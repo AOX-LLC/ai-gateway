@@ -93,8 +93,11 @@ def create_app(settings: GatewaySettings, events: EventSink | None = None) -> Fa
     )
 
     @app.get("/healthz")
-    async def healthz() -> dict[str, str]:
-        return {"status": "ok"}
+    async def healthz() -> JSONResponse:
+        """Healthy only while the MCP endpoint is serving, so Compose notices when it is not."""
+        if endpoint.app is None:
+            return JSONResponse({"status": "unavailable"}, status_code=503)
+        return JSONResponse({"status": "ok"})
 
     app.router.routes.append(Route(MCP_PATH, endpoint=endpoint, methods=["GET", "POST", "DELETE"]))
     return app

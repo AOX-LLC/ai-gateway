@@ -46,6 +46,7 @@ services:
       dockerfile: gateway/Dockerfile
     image: ai-gateway-gateway
     command: ["ai-gateway"]
+    restart: unless-stopped
     environment:
       GATEWAY_BIND: 0.0.0.0
       GATEWAY_PORT: "4401"
