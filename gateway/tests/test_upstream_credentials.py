@@ -20,7 +20,7 @@ from tests.test_upstreams import StaticSource, eventually, running_catalog
 
 pytestmark = pytest.mark.anyio
 
-CREDENTIAL = "credential-value-for-tests-only"
+CREDENTIAL = "credential-value-for-tests-only-0123456789"
 ENV_NAME = "TEST_UPSTREAM_SERVICE_TOKEN"
 
 

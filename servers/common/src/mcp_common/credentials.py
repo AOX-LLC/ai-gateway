@@ -2,28 +2,26 @@
 
 Each server holds one secret in its environment and the gateway is configured with the
 same value (by environment variable name, in the upstream registry). A server refuses to
-start without it, so it can never run open by accident.
+start without it, so it can never run open by accident, and refuses one that is short or
+still the `change-me` placeholder of .env.example (`scripts/init_env.py` makes real ones).
 """
 
 import hmac
-import os
 
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 _BEARER_PREFIX = "bearer "
+MIN_CREDENTIAL_LENGTH = 32
+PLACEHOLDER_MARKER = "change-me"
 
 
 class MissingCredentialError(RuntimeError):
     """The server's service credential is not configured; it must not start."""
 
 
-def credential_from_env(name: str) -> str:
-    """The credential in the named environment variable; raise when it is missing or empty."""
-    value = os.environ.get(name, "")
-    if not value.strip():
-        raise MissingCredentialError(f"{name} is not set; refusing to start without it")
-    return value
+class WeakCredentialError(RuntimeError):
+    """The service credential is too short or is a placeholder; the server must not start."""
 
 
 class ServiceCredentialMiddleware:
@@ -36,6 +34,11 @@ class ServiceCredentialMiddleware:
     def __init__(self, app: ASGIApp, credential: str) -> None:
         if not credential.strip():
             raise MissingCredentialError("the service credential is empty")
+        if len(credential) < MIN_CREDENTIAL_LENGTH or PLACEHOLDER_MARKER in credential:
+            raise WeakCredentialError(
+                f"the service credential must be at least {MIN_CREDENTIAL_LENGTH} characters"
+                f" and not a '{PLACEHOLDER_MARKER}' placeholder; run scripts/init_env.py"
+            )
         self._app = app
         self._expected = credential.encode()
 

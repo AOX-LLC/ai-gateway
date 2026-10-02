@@ -18,7 +18,7 @@ from mcp_common.attribution import CLIENT_META_KEY, client_name_from_meta
 from mcp_common.credentials import (
     MissingCredentialError,
     ServiceCredentialMiddleware,
-    credential_from_env,
+    WeakCredentialError,
 )
 from mcp_common.schema_contract import check_input_schema
 from mcp_common.toolset import CallInfo, StrictToolset, ToolError
@@ -158,6 +158,9 @@ async def _ok(_: Request) -> PlainTextResponse:
     return PlainTextResponse("reached")
 
 
+CREDENTIAL = "test-credential-0123456789-abcdefghijkl"
+
+
 def _protected(credential: str) -> httpx2.AsyncClient:
     app = Starlette(routes=[Route("/", _ok)])
     wrapped = ServiceCredentialMiddleware(app, credential)
@@ -165,8 +168,8 @@ def _protected(credential: str) -> httpx2.AsyncClient:
 
 
 async def test_the_right_credential_reaches_the_app() -> None:
-    async with _protected("s3cret-value") as http:
-        response = await http.get("/", headers={"Authorization": "Bearer s3cret-value"})
+    async with _protected(CREDENTIAL) as http:
+        response = await http.get("/", headers={"Authorization": f"Bearer {CREDENTIAL}"})
 
     assert (response.status_code, response.text) == (200, "reached")
 
@@ -176,15 +179,15 @@ async def test_the_right_credential_reaches_the_app() -> None:
     [
         {},
         {"Authorization": "Bearer wrong"},
-        {"Authorization": "Bearer s3cret-valu"},
-        {"Authorization": "Bearer s3cret-value-and-more"},
+        {"Authorization": f"Bearer {CREDENTIAL[:-1]}"},
+        {"Authorization": f"Bearer {CREDENTIAL}-and-more"},
         {"Authorization": "Basic czNjcmV0LXZhbHVl"},
-        {"Authorization": "s3cret-value"},
+        {"Authorization": CREDENTIAL},
         {"Authorization": "Bearer "},
     ],
 )
 async def test_any_other_request_gets_the_same_bare_401(headers: dict[str, str]) -> None:
-    async with _protected("s3cret-value") as http:
+    async with _protected(CREDENTIAL) as http:
         response = await http.get("/", headers=headers)
 
     assert response.status_code == 401
@@ -197,17 +200,17 @@ def test_an_empty_credential_refuses_to_start(credential: str) -> None:
         ServiceCredentialMiddleware(Starlette(), credential)
 
 
-def test_the_credential_comes_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("TEST_SERVICE_TOKEN", raising=False)
-    with pytest.raises(MissingCredentialError):
-        credential_from_env("TEST_SERVICE_TOKEN")
+@pytest.mark.parametrize(
+    "credential",
+    ["short", "x" * 31, "change-me-ticketing-service-token-0123456789", "a-change-me-" + "x" * 40],
+)
+def test_a_weak_or_placeholder_credential_refuses_to_start(credential: str) -> None:
+    with pytest.raises(WeakCredentialError):
+        ServiceCredentialMiddleware(Starlette(), credential)
 
-    monkeypatch.setenv("TEST_SERVICE_TOKEN", "")
-    with pytest.raises(MissingCredentialError):
-        credential_from_env("TEST_SERVICE_TOKEN")
 
-    monkeypatch.setenv("TEST_SERVICE_TOKEN", "value")
-    assert credential_from_env("TEST_SERVICE_TOKEN") == "value"
+def test_a_credential_of_32_characters_is_accepted() -> None:
+    ServiceCredentialMiddleware(Starlette(), "x" * 32)
 
 
 # --- schema contract ---------------------------------------------------------------------

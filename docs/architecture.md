@@ -186,6 +186,14 @@ name must end in `_SERVICE_TOKEN` (a database constraint, checked again when con
 a registry writer cannot make the gateway send another secret, such as its database URL, to
 a server of their choosing.
 
+A server refuses to start with a credential shorter than 32 characters or containing
+`change-me` (the placeholders of `.env.example`). The one extra quick-start step is
+`python3 scripts/init_env.py`, which writes `.env` with a fresh `secrets.token_urlsafe(32)`
+for every placeholder (database URLs get the new passwords too) and will not overwrite an
+existing `.env` without `--force`. A `--force` run changes the database passwords in `.env`
+but not those of roles that already exist in an existing Postgres volume; keep the old
+database passwords in that case, or recreate the volume.
+
 If the variable is missing or empty, that upstream is unavailable and one clear warning
 names the variable. The gateway never falls back to calling a protected server without
 its credential.

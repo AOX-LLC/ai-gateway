@@ -99,7 +99,8 @@ jobs:
           version: "0.12.10"
           enable-cache: true
       - run: uv sync --frozen
-      - run: cp .env.example .env
+      - name: Create .env with fresh secrets
+        run: python3 scripts/init_env.py
       - run: docker compose --profile test up -d --build --wait
         env:
           # On a pull request, github.sha is GitHub's temporary merge commit; report the

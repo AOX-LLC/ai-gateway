@@ -5,7 +5,7 @@ import sys
 
 import uvicorn
 
-from mcp_common.credentials import MissingCredentialError
+from mcp_common.credentials import MissingCredentialError, WeakCredentialError
 from ticketing_server.server import build_app
 from ticketing_server.settings import TicketingSettings
 
@@ -15,7 +15,7 @@ def main() -> None:
     logging.basicConfig(level=settings.log_level)
     try:
         app = build_app(settings)
-    except MissingCredentialError as error:
+    except (MissingCredentialError, WeakCredentialError) as error:
         sys.exit(f"ticketing-server: {error}")
     uvicorn.run(app, host=settings.bind, port=settings.port)
 
