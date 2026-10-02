@@ -30,3 +30,23 @@ notes = "Updates a ticket's status."
 [tickets.assign]
 effect = "write"
 notes = "Updates a ticket's assignee."
+
+[crm.search_accounts]
+effect = "read"
+notes = "Selects account summaries from public columns; the database role cannot read the internal ones."
+
+[crm.get_account]
+effect = "read"
+notes = "Selects one account, its contacts and its newest activity notes; public columns only."
+
+[crm.list_deals]
+effect = "read"
+notes = "Selects deals without the internal floor price."
+
+[handbook.search]
+effect = "read"
+notes = "Reads published chunks through a view that leaves restricted documents out."
+
+[handbook.get_document]
+effect = "read"
+notes = "Reads one published document through a view; a restricted id is reported as not found."
