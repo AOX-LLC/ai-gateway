@@ -19,6 +19,10 @@ query = "customer wants to return an unopened order after 40 days"
 expected = ["DOC-008"]
 
 [[pair]]
+query = "how many photographs do I need before a return is authorised"
+expected = ["DOC-008"]
+
+[[pair]]
 query = "the box arrived crushed, what do I file"
 expected = ["DOC-009"]
 

@@ -54,3 +54,7 @@ class DocumentOutput(FictionalOutput):
     category: Category
     updated: date
     body: str
+    superseded_by: DocumentId | None = None
+    """The id of the edition that replaces this document; null for a current document."""
+    superseded_notice: str | None = None
+    """Set with superseded_by: says that this is not the current edition."""

@@ -297,7 +297,7 @@ Read-only, two tools, both with `read` policies:
 | Tool | Does |
 | --- | --- |
 | `search(query, category?, limit)` | Up to 10 documents (default 5), each with its best-matching passage (at most 400 characters), best first |
-| `get_document(document_id)` | A published document's title, category, date and full text |
+| `get_document(document_id)` | A published document's title, category, date and full text; a superseded one also names the edition that replaced it |
 
 - **Restricted documents are excluded in the database, before ranking.** The three
   restricted documents sit in base tables (`handbook.documents`, `handbook.chunks`) that
@@ -306,6 +306,15 @@ Read-only, two tools, both with `read` policies:
   rights (and which are security barriers). Restricted text is therefore unreachable by the
   server's role even with a bug in a query. The search SQL also repeats the condition inside
   each ranking step, so the exclusion happens before ranking and `LIMIT`, never afterwards.
+- **Superseded editions are not searched.** A document's `superseded_by` front matter names
+  the edition that replaces it (DOC-007, the 2025 returns policy, by DOC-008). The
+  `searchable_chunks` view leaves such a document out, so no ranking step can return it, but
+  `get_document` still serves it with `superseded_by` and a notice, because an old edition
+  can still be the rule (DOC-008 keeps the earlier rules for orders delivered before 1
+  February 2026). `harborline-setup` refuses a pointer to a missing, restricted or itself
+  superseded document, `published_documents` shows a pointer only when its target is
+  published, and the markers are synced from the files on every setup run, because the seed
+  itself runs only when the schema is empty.
 - **A restricted id looks like a missing one.** `get_document` reads the view, so a
   restricted id returns the same error, `Document 'DOC-xxx' was not found.`, as an id that
   does not exist.

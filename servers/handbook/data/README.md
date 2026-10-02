@@ -11,7 +11,8 @@ The 30 documents are plain Markdown files in
 generated, so every run reads the same text. The folder is outside every Python package and
 excluded from the Docker build context, so no image contains the documents (restricted ones
 included); `harborline-setup` reads them from a read-only mount at `HANDBOOK_DOCUMENTS_PATH`. Each starts with front matter holding `id`,
-`title`, `category`, `classification` and `updated`, followed by a `#` title and three to
+`title`, `category`, `classification` and `updated` (and `superseded_by`, on a document that
+a newer edition replaces), followed by a `#` title and three to
 five `##` sections (250 to 450 words in all). Emails are on `.example` domains and phone
 numbers are in the `555-0100` to `555-0199` block.
 
@@ -57,7 +58,9 @@ These are deliberate, so retrieval has to pick the right document:
 - **DOC-007 and DOC-008** (customer returns policy, 2025 and 2026). Same structure and most
   of the wording. 2025: 30-day window, 15 percent restocking fee, no photographs. 2026:
   45 days for unopened items (30 for opened), 10 percent fee, two photographs required.
-  DOC-008 states that it supersedes DOC-007.
+  DOC-008 states that it supersedes DOC-007, and DOC-007's front matter says
+  `superseded_by: DOC-008`: DOC-007 is left out of search, and `get_document` still returns
+  it with a pointer to DOC-008.
 - **DOC-013 and DOC-016** (domestic shipping service levels and its quick reference).
   DOC-016 summarises DOC-013 with one figure deliberately different: the same-day cut-off
   is 3:00 pm in DOC-016 and 2:00 pm in DOC-013. DOC-013 is authoritative.

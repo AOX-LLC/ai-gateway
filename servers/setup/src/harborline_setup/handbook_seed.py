@@ -85,10 +85,11 @@ async def insert_dataset(connection: AsyncConnection, dataset: Dataset) -> None:
     """Write the dataset in one transaction."""
     async with connection.transaction(), connection.cursor() as cursor:
         await cursor.executemany(
-            "INSERT INTO documents (id, title, category, classification, updated, body)"
-            " VALUES (%s, %s, %s, %s, %s, %s)",
+            "INSERT INTO documents"
+            " (id, title, category, classification, updated, body, superseded_by)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s)",
             [
-                (d.id, d.title, d.category, d.classification, d.updated, d.body)
+                (d.id, d.title, d.category, d.classification, d.updated, d.body, d.superseded_by)
                 for d in dataset.documents
             ],
         )
@@ -97,3 +98,20 @@ async def insert_dataset(connection: AsyncConnection, dataset: Dataset) -> None:
             " VALUES (%s, %s, %s, %s, %s::handbook.vector)",
             [(c.document_id, c.ordinal, c.heading, c.text, c.embedding) for c in dataset.chunks],
         )
+
+
+async def sync_superseded(connection: AsyncConnection, documents_path: Path) -> int:
+    """Make each stored document's `superseded_by` match its file, and return how many
+    changed. A schema seeded before the column existed has none of the values, and the seed
+    only runs when the schema is empty, so setup calls this on every repeat run."""
+    documents = load_documents(documents_path)
+    changed = 0
+    async with connection.transaction(), connection.cursor() as cursor:
+        for document in documents:
+            await cursor.execute(
+                "UPDATE documents SET superseded_by = %s"
+                " WHERE id = %s AND superseded_by IS DISTINCT FROM %s",
+                (document.superseded_by, document.id, document.superseded_by),
+            )
+            changed += cursor.rowcount
+    return changed

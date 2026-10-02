@@ -314,6 +314,28 @@ async def test_handbook_setup_builds_everything_once_and_is_safe_to_repeat(
     assert await _handbook_privileges(url, role) == expected
 
 
+async def test_handbook_setup_restores_the_superseded_markers_of_an_already_seeded_schema(
+    scratch_database: tuple[str, str], model_path: Path
+) -> None:
+    """A schema seeded before the column existed has no values, and the seed runs only when
+    the schema is empty, so a repeat run must bring the markers in step with the files."""
+    url, role = scratch_database
+    password = f"scratch-{uuid4().hex}"
+    await setup_handbook(url, password, model_path, HANDBOOK_DOCUMENTS, role)
+    async with await psycopg.AsyncConnection.connect(url, autocommit=True) as connection:
+        await connection.execute(
+            "UPDATE handbook.documents SET superseded_by = NULL WHERE id = 'DOC-007'"
+        )
+
+    await setup_handbook(url, password, model_path, HANDBOOK_DOCUMENTS, role)
+
+    async with await psycopg.AsyncConnection.connect(url) as connection:
+        cursor = await connection.execute(
+            "SELECT id, superseded_by FROM handbook.documents WHERE superseded_by IS NOT NULL"
+        )
+        assert await cursor.fetchall() == [("DOC-007", "DOC-008")]
+
+
 async def test_handbook_setup_puts_the_vector_extension_in_the_handbook_schema(
     scratch_database: tuple[str, str], model_path: Path
 ) -> None:
