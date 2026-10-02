@@ -6,6 +6,7 @@ These conventions apply to every contributor, human or AI.
 
 - The main checkout stays on `main` and is never edited directly.
 - All work happens in a worktree at `.worktrees/<branch>`. `.worktrees/` is gitignored.
+- Local-only, gitignored files (such as `.env` and local notes) live in the main checkout and are copied into each new worktree, because merging removes the worktree.
 - Branches are named `phase-N-<slug>`, for example `phase-1-gateway-skeleton`.
 - Cut every branch from an up-to-date `origin/main`:
 
