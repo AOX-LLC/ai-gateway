@@ -25,7 +25,7 @@ from pathlib import Path
 from psycopg import AsyncConnection
 from pydantic import BaseModel, ConfigDict, Field
 
-from crm_server.models import REGIONS, AccountId, NoteKind, StaffHandle, Stage, Tier
+from crm_server.models import REGIONS, AccountId, NoteKind, Region, StaffHandle, Stage, Tier
 
 SEED = 20261002
 BASE_TIME = datetime(2026, 9, 1, 8, 0, tzinfo=UTC)
@@ -270,7 +270,7 @@ class ExtraAccount(BaseModel):
     id: AccountId | None = None
     name: str = Field(min_length=1, max_length=120)
     industry: str = Field(min_length=1, max_length=120)
-    region: str = Field(pattern=r"^[a-z-]+$", max_length=40)
+    region: Region
     tier: Tier = "bronze"
     about: str = Field(min_length=1, max_length=4000)
     account_manager: StaffHandle

@@ -416,3 +416,30 @@ def test_extra_records_reject_unknown_fields(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="surprise"):
         load_extra_records(build_dataset(), extra)
+
+
+@pytest.mark.parametrize("region", ["moon", "north-east", "Northeast", "atlantic"])
+def test_extra_records_reject_a_region_the_output_would_refuse(tmp_path: Path, region: str) -> None:
+    # A well-formed but unknown region used to be seeded, then failed output validation.
+    extra = tmp_path / "extra.json"
+    extra.write_text(
+        json.dumps(
+            {
+                "accounts": [
+                    {
+                        "name": "Planted Co",
+                        "industry": "x",
+                        "region": region,
+                        "about": "planted text",
+                        "account_manager": "a.b",
+                    }
+                ]
+            }
+        )
+    )
+    dataset = build_dataset()
+
+    with pytest.raises(ValueError, match="region"):
+        load_extra_records(dataset, extra)
+
+    assert len(dataset.accounts) == ACCOUNT_COUNT

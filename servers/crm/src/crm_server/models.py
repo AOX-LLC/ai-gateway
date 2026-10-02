@@ -7,7 +7,7 @@ Money is an integer number of cents.
 """
 
 from datetime import date, datetime
-from typing import Annotated, Literal
+from typing import Annotated, Literal, get_args
 
 from pydantic import BaseModel, Field
 
@@ -17,17 +17,11 @@ from mcp_common.toolset import NO_CONTROL_CHARACTERS, StrictInput
 Tier = Literal["bronze", "silver", "gold"]
 Stage = Literal["prospecting", "proposal", "negotiation", "won", "lost"]
 NoteKind = Literal["call", "email", "meeting", "note"]
-REGIONS = (
-    "northeast",
-    "mid-atlantic",
-    "southeast",
-    "great-lakes",
-    "gulf-coast",
-    "pacific-northwest",
-)
 Region = Literal[
     "northeast", "mid-atlantic", "southeast", "great-lakes", "gulf-coast", "pacific-northwest"
 ]
+REGIONS: tuple[Region, ...] = get_args(Region)
+"""The one list of regions: the type below and the seed both come from it."""
 
 AccountId = Annotated[str, Field(pattern=r"^ACC-[0-9]{5}$", max_length=9)]
 StaffHandle = Annotated[str, Field(pattern=r"^[a-z]+\.[a-z]+$", max_length=40)]
