@@ -13,7 +13,6 @@ from mcp.types import CallToolResult, TextContent, Tool
 from ai_gateway.pipeline.config import PipelineConfigError, parse_pipeline_config
 from ai_gateway.pipeline.layers.scope import ScopeLayer
 from ai_gateway.pipeline.runner import (
-    DEFAULT_EMIT_TIMEOUT_S,
     Blocked,
     Forwarded,
     Pipeline,
@@ -32,7 +31,12 @@ from ai_gateway.pipeline.types import (
     ToolCall,
     Verdict,
 )
-from ai_gateway.seams.events import EventSink, GatewayEvent, MemoryEventSink
+from ai_gateway.seams.events import (
+    DEFAULT_EMIT_TIMEOUT_S,
+    EventSink,
+    GatewayEvent,
+    MemoryEventSink,
+)
 
 
 class TraceLayer(BaseLayer):

@@ -86,7 +86,9 @@ upstream call, so no layer can skip the layers after it or call a tool twice.
   at ERROR on `ai_gateway.pipeline.runner`, with the request id, and the request goes on;
   cancellation is not swallowed. A request can therefore end with no record, and that log
   line is the only trace of it. The 2-second bound cannot interrupt a sink that blocks the
-  event loop without awaiting, so a sink must not.
+  event loop without awaiting, so a sink must not. The same holds for the
+  `gateway.auth_failure` event: the 401 is sent whether or not the event was recorded, and
+  neither a raising nor a stalled sink delays it.
 
 ### Configuration
 

@@ -33,16 +33,13 @@ from ai_gateway.pipeline.types import (
     displayable_tool_name,
     tool_unavailable_message,
 )
-from ai_gateway.seams.events import EventSink, GatewayEvent
+from ai_gateway.seams.events import DEFAULT_EMIT_TIMEOUT_S, EventSink, GatewayEvent
 from ai_gateway.telemetry import attributes
 
 logger = logging.getLogger(__name__)
 _tracer = trace.get_tracer("ai_gateway")
 
 POLICY_BLOCK_MESSAGE = "Request blocked by gateway policy."
-
-DEFAULT_EMIT_TIMEOUT_S = 2.0
-"""How long recording one event may take before the request goes on without it."""
 
 
 class UpstreamStatus(StrEnum):
