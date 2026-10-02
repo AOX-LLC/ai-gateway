@@ -8,7 +8,12 @@ from psycopg import AsyncConnection, sql
 from handbook_server import MIGRATIONS_PACKAGE, ROLE, SCHEMA
 from handbook_server.embedding import Embedder
 from harborline_setup.handbook_seed import build_dataset, insert_dataset, is_seeded
-from harborline_setup.shared import ensure_role, ensure_schema, restrict_database_access
+from harborline_setup.shared import (
+    ensure_role,
+    ensure_schema,
+    restrict_database_access,
+    revoke_role_access,
+)
 from mcp_common.migrate import apply_migrations
 
 logger = logging.getLogger(__name__)
@@ -66,11 +71,9 @@ async def prepare_schema(connection: AsyncConnection) -> None:
 async def grant_handbook_access(connection: AsyncConnection, role: str = ROLE) -> None:
     """Make the handbook role's grants exactly these. The role, schema and views must exist.
 
-    Everything the role holds on the schema's tables and views is revoked first, so a grant
-    that was widened by hand, for example onto a base table, is narrowed again."""
+    Everything the role holds in the schema is revoked first, so a grant that was widened by
+    hand, for example onto a base table, is narrowed again."""
     schema, name = sql.Identifier(SCHEMA), sql.Identifier(role)
-    await connection.execute(
-        sql.SQL("REVOKE ALL ON ALL TABLES IN SCHEMA {} FROM {}").format(schema, name)
-    )
+    await revoke_role_access(connection, SCHEMA, role)
     for template in _GRANTS:
         await connection.execute(sql.SQL(template).format(schema=schema, role=name))

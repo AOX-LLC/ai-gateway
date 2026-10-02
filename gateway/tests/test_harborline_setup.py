@@ -356,3 +356,100 @@ async def test_handbook_setup_refuses_an_empty_password(
 ) -> None:
     with pytest.raises(ValueError, match="HANDBOOK_DB_PASSWORD"):
         await setup_handbook(test_database_url, "", model_path, HANDBOOK_DOCUMENTS)
+
+
+# --- grants widened below table level are narrowed again -------------------------------------
+
+
+async def _as_owner(url: str, *statements: str, role: str) -> None:
+    async with await psycopg.AsyncConnection.connect(url, autocommit=True) as connection:
+        for statement in statements:
+            await connection.execute(sql.SQL(statement).format(sql.Identifier(role)))
+
+
+async def _holds(url: str, role: str, query: str) -> bool:
+    async with await psycopg.AsyncConnection.connect(url) as connection:
+        cursor = await connection.execute(query.encode(), {"r": role})
+        row = await cursor.fetchone()
+    assert row is not None
+    return bool(row[0])
+
+
+async def test_ticketing_setup_narrows_column_sequence_and_schema_grants(
+    scratch_database: tuple[str, str],
+) -> None:
+    url, role = scratch_database
+    password = f"scratch-{uuid4().hex}"
+    await setup_ticketing(url, password, None, role)
+    checks = {
+        "update the subject column": (
+            "SELECT has_column_privilege(%(r)s, 'ticketing.tickets', 'subject', 'UPDATE')"
+        ),
+        "read the ticket number sequence": (
+            "SELECT has_sequence_privilege(%(r)s, 'ticketing.ticket_number', 'SELECT')"
+        ),
+        "create in the schema": "SELECT has_schema_privilege(%(r)s, 'ticketing', 'CREATE')",
+        "delete a ticket": "SELECT has_table_privilege(%(r)s, 'ticketing.tickets', 'DELETE')",
+    }
+    await _as_owner(
+        url,
+        "GRANT UPDATE (subject) ON ticketing.tickets TO {}",
+        "GRANT SELECT ON SEQUENCE ticketing.ticket_number TO {}",
+        "GRANT CREATE ON SCHEMA ticketing TO {}",
+        "GRANT DELETE ON ticketing.tickets TO {}",
+        role=role,
+    )
+    assert all([await _holds(url, role, query) for query in checks.values()])
+
+    await setup_ticketing(url, password, None, role)
+
+    assert {
+        name: await _holds(url, role, query) for name, query in checks.items()
+    } == dict.fromkeys(checks, False)
+    # What the role does need is still there.
+    assert await _holds(
+        url, role, "SELECT has_column_privilege(%(r)s, 'ticketing.tickets', 'status', 'UPDATE')"
+    )
+    assert await _holds(
+        url, role, "SELECT has_sequence_privilege(%(r)s, 'ticketing.ticket_number', 'USAGE')"
+    )
+
+
+async def test_crm_setup_narrows_a_column_and_a_schema_grant(
+    scratch_database: tuple[str, str],
+) -> None:
+    url, role = scratch_database
+    password = f"scratch-{uuid4().hex}"
+    await setup_crm(url, password, None, role)
+    column = "SELECT has_column_privilege(%(r)s, 'crm.accounts', 'credit_limit_internal', 'SELECT')"
+    create = "SELECT has_schema_privilege(%(r)s, 'crm', 'CREATE')"
+    await _as_owner(
+        url,
+        "GRANT SELECT (credit_limit_internal) ON crm.accounts TO {}",
+        "GRANT CREATE ON SCHEMA crm TO {}",
+        role=role,
+    )
+    assert await _holds(url, role, column)
+    assert await _holds(url, role, create)
+
+    await setup_crm(url, password, None, role)
+
+    assert not await _holds(url, role, column)
+    assert not await _holds(url, role, create)
+    assert await _holds(url, role, "SELECT has_schema_privilege(%(r)s, 'crm', 'USAGE')")
+
+
+async def test_handbook_setup_narrows_a_schema_grant(
+    scratch_database: tuple[str, str], model_path: Path
+) -> None:
+    url, role = scratch_database
+    password = f"scratch-{uuid4().hex}"
+    await setup_handbook(url, password, model_path, HANDBOOK_DOCUMENTS, role)
+    create = "SELECT has_schema_privilege(%(r)s, 'handbook', 'CREATE')"
+    await _as_owner(url, "GRANT CREATE ON SCHEMA handbook TO {}", role=role)
+    assert await _holds(url, role, create)
+
+    await setup_handbook(url, password, model_path, HANDBOOK_DOCUMENTS, role)
+
+    assert not await _holds(url, role, create)
+    assert await _holds(url, role, "SELECT has_schema_privilege(%(r)s, 'handbook', 'USAGE')")

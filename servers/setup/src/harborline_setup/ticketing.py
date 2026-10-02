@@ -9,6 +9,7 @@ from harborline_setup.shared import (
     ensure_role,
     ensure_schema,
     restrict_database_access,
+    revoke_role_access,
 )
 from mcp_common.migrate import apply_migrations
 from ticketing_server import MIGRATIONS_PACKAGE, ROLE, SCHEMA
@@ -68,7 +69,11 @@ async def setup_ticketing(
 
 
 async def grant_ticketing_access(connection: AsyncConnection, role: str = ROLE) -> None:
-    """(Re)apply the ticketing role's grants. The role, schema and tables must exist."""
+    """Make the ticketing role's grants exactly these. The role, schema and tables must exist.
+
+    Everything the role holds in the schema is revoked first, so a grant that was widened by
+    hand, at table, column, sequence or schema level, is narrowed again."""
+    await revoke_role_access(connection, SCHEMA, role)
     for template in _GRANTS:
         await connection.execute(
             sql.SQL(template).format(schema=sql.Identifier(SCHEMA), role=sql.Identifier(role))

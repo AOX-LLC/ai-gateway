@@ -72,3 +72,17 @@ async def ensure_schema(connection: AsyncConnection, schema: str) -> None:
     await connection.execute(
         sql.SQL("REVOKE ALL ON SCHEMA {} FROM PUBLIC").format(sql.Identifier(schema))
     )
+
+
+async def revoke_role_access(connection: AsyncConnection, schema: str, role: str) -> None:
+    """Take back everything `role` holds in `schema`: its table, view and column privileges,
+    its sequence privileges, and the schema's own USAGE and CREATE. The grant step runs this
+    first and then grants exactly what the role needs, so anything widened by hand, at any
+    of those levels, is narrowed again."""
+    schema_name, role_name = sql.Identifier(schema), sql.Identifier(role)
+    for statement in (
+        "REVOKE ALL ON ALL TABLES IN SCHEMA {} FROM {}",
+        "REVOKE ALL ON ALL SEQUENCES IN SCHEMA {} FROM {}",
+        "REVOKE ALL ON SCHEMA {} FROM {}",
+    ):
+        await connection.execute(sql.SQL(statement).format(schema_name, role_name))
