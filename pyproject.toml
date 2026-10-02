@@ -13,6 +13,7 @@ dev = [
     "echo-server",
     "mcp-common",
     "ticketing-server",
+    "harborline-setup",
 ]
 
 [tool.uv]
@@ -26,11 +27,12 @@ ai-gateway = { workspace = true }
 echo-server = { workspace = true }
 mcp-common = { workspace = true }
 ticketing-server = { workspace = true }
+harborline-setup = { workspace = true }
 
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-src = ["gateway/src", "gateway/tests", "servers/echo/src", "servers/common/src", "servers/ticketing/src", "scripts"]
+src = ["gateway/src", "gateway/tests", "servers/echo/src", "servers/common/src", "servers/ticketing/src", "servers/setup/src", "scripts"]
 
 [tool.ruff.lint]
 select = [
@@ -61,9 +63,9 @@ ban-relative-imports = "all"
 [tool.mypy]
 strict = true
 python_version = "3.12"
-files = ["gateway/src", "gateway/tests", "servers/echo/src", "servers/common/src", "servers/ticketing/src", "scripts"]
+files = ["gateway/src", "gateway/tests", "servers/echo/src", "servers/common/src", "servers/ticketing/src", "servers/setup/src", "scripts"]
 plugins = ["pydantic.mypy"]
-mypy_path = "gateway/src:servers/echo/src:servers/common/src:servers/ticketing/src"
+mypy_path = "gateway/src:servers/echo/src:servers/common/src:servers/ticketing/src:servers/setup/src"
 explicit_package_bases = true
 
 [tool.pydantic-mypy]
