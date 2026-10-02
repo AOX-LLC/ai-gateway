@@ -2,6 +2,7 @@
 
 from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from typing import Any, cast
 from uuid import uuid4
 
@@ -39,6 +40,7 @@ class FakeUpstream:
         self.is_down = False
         self.hangs = False
         self.behaviour = "echo"
+        self.attempts = 0
         self.opened = 0
         self.closed = 0
         self.calls: list[str] = []
@@ -46,6 +48,7 @@ class FakeUpstream:
 
     @asynccontextmanager
     async def open(self, upstream: UpstreamServer) -> AsyncGenerator[Client]:
+        self.attempts += 1
         if self.is_down:
             raise httpx2.ConnectError("connection refused")
         if self.hangs:
@@ -339,13 +342,63 @@ async def test_a_hung_upstream_does_not_hold_up_the_others() -> None:
 
 
 @pytest.mark.anyio
-async def test_a_removed_upstream_disappears_from_the_catalog() -> None:
+async def test_a_removed_upstream_disappears_and_is_no_longer_contacted() -> None:
+    upstream = FakeUpstream()
     registry = StaticSource(ECHO)
-    catalog = Catalog(registry, open_client=FakeUpstream().open, registry_poll_s=0.05)
+    catalog = Catalog(
+        registry, open_client=upstream.open, refresh_interval_s=0.05, registry_poll_s=0.05
+    )
 
     async with running_catalog(catalog):
+        await eventually(lambda: upstream.opened >= 2)
         registry.upstreams = []
         await eventually(lambda: catalog.tools() == [])
+        contacts_after_removal = upstream.attempts
+        await anyio.sleep(0.3)
+
+        assert upstream.attempts == contacts_after_removal
+
+
+@pytest.mark.anyio
+async def test_a_changed_upstream_is_refreshed_at_its_new_address_only() -> None:
+    contacted: list[str] = []
+    upstream = FakeUpstream()
+
+    @asynccontextmanager
+    async def open_recording(server: UpstreamServer) -> AsyncGenerator[Client]:
+        contacted.append(server.url)
+        async with upstream.open(server) as client:
+            yield client
+
+    moved = replace(ECHO, url="http://echo-moved.test/mcp")
+    registry = StaticSource(ECHO)
+    catalog = Catalog(
+        registry, open_client=open_recording, refresh_interval_s=0.05, registry_poll_s=0.05
+    )
+
+    async with running_catalog(catalog):
+        registry.upstreams = [moved]
+        await eventually(lambda: contacted.count(moved.url) >= 2)
+        old_address_contacts = contacted.count(ECHO.url)
+        await anyio.sleep(0.3)
+
+        assert contacted.count(ECHO.url) == old_address_contacts
+        resolved = catalog.resolve("echo__say")
+        assert resolved is not None
+        assert resolved.upstream == moved
+
+
+@pytest.mark.anyio
+async def test_a_down_upstream_is_retried_with_backoff_not_hammered() -> None:
+    upstream = FakeUpstream()
+    upstream.is_down = True
+    catalog = Catalog(StaticSource(ECHO), open_client=upstream.open, refresh_interval_s=0.05)
+
+    async with running_catalog(catalog):
+        await anyio.sleep(0.9)
+
+    # Retrying every refresh interval would be about 18 attempts; backoff waits 1 s first.
+    assert 1 <= upstream.attempts <= 2
 
 
 @pytest.mark.anyio
