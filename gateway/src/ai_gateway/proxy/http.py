@@ -52,7 +52,8 @@ class ProtocolVersionGuard:
                 "code": INVALID_REQUEST,
                 "message": (
                     f"Unsupported MCP protocol version {declared[:40]!r}."
-                    f" This gateway speaks {PINNED_PROTOCOL_VERSION}."
+                    " This gateway uses the initialize handshake and targets"
+                    f" {PINNED_PROTOCOL_VERSION}."
                 ),
             },
         }

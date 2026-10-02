@@ -15,7 +15,7 @@ This document describes Phase 1, the skeleton, and the seams later phases build 
 
 | Topic | Decision |
 | --- | --- |
-| MCP revision | **2025-11-25**, the newest revision with the initialize handshake and sessions. Requests that declare the stateless 2026-07-28 revision get a clear 400. |
+| MCP revision | Targets **2025-11-25**, the newest revision with the initialize handshake and sessions. Older handshake revisions are negotiated by the SDK. Requests that declare the stateless 2026-07-28 revision get a clear 400; current clients then fall back to the handshake. |
 | MCP SDK | The official Python SDK, pinned to `mcp==2.2.0` |
 | Tool names | `<namespace>__<tool>`, e.g. `echo__say` |
 | Authentication | Bearer tokens, stored as SHA-256 hashes and compared in constant time. It runs before the chain, and no configuration can turn it off. |
@@ -136,6 +136,10 @@ Every failure gets the same `401` body. A missing token gets
 `error="invalid_token"`, following RFC 6750. Each failure emits a `gateway.auth_failure`
 event with the reason, the lookup id if the token was well formed, and the peer address.
 Phase 3's rate limiting and IP banning will consume these events.
+
+The peer address is the direct TCP peer. Behind Docker's port publishing it is likely the
+bridge gateway for every host client, so IP bans must not key on it until real client
+addresses reach the gateway, through a trusted proxy header set by whatever sits in front.
 
 ### Keeping the raw token out of memory and logs
 
