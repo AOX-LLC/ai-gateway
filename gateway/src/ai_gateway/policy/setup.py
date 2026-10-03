@@ -1,8 +1,11 @@
 """Set up the policy schema: roles, agent-core's tables, grants, and the approval guard.
 
-Runs as the database owner (`gateway-admin policy-setup`) and is safe to repeat. agent-core's own
-installer is not repeatable (it creates tables), so it runs only when the tables are missing; the
-grants and the guard trigger are applied on every run, after revoking everything the roles hold.
+Runs as the database owner (`gateway-admin policy-setup`) and is safe to repeat, and safe to run
+twice at once (a lock serialises runs). agent-core's own installer is not repeatable (it creates
+tables), so it runs only when the tables are missing, and for a scratch role that cannot log in and
+is dropped afterwards: the installer grants its app role UPDATE on approvals at once, and the guard
+trigger does not exist yet, so a real role must never hold that grant. The grants and the guard
+are applied together, in one transaction, guard first, on every run.
 """
 
 import logging
@@ -32,6 +35,10 @@ from mcp_common.roles import (
 
 logger = logging.getLogger(__name__)
 
+_SETUP_LOCK = 7_165_201_002
+"""The advisory lock that serialises policy setups."""
+_INSTALL_ROLE = "policy_install_scratch"
+
 
 @dataclass(frozen=True)
 class PolicyPasswords:
@@ -51,21 +58,43 @@ async def setup_policy(owner_url: str, passwords: PolicyPasswords) -> None:
         if not password:
             raise ValueError(f"the password of {role} is empty")
     async with await AsyncConnection.connect(owner_url, autocommit=True) as connection:
-        for role, password in role_passwords:
-            await ensure_role(connection, password, role)
-        await ensure_schema(connection, SCHEMA)
-        installed = await _tables_exist(connection)
-    if installed:
-        logger.info("agent-core's audit and approval tables are already installed")
-    else:
+        await connection.execute("SELECT pg_advisory_lock(%s)", (_SETUP_LOCK,))
+        try:
+            for role, password in role_passwords:
+                await ensure_role(connection, password, role)
+            await ensure_schema(connection, SCHEMA)
+            if await _tables_exist(connection):
+                logger.info("agent-core's audit and approval tables are already installed")
+            else:
+                await _install_tables(connection, owner_url)
+            await grant_policy_access(connection)
+            await restrict_database_access(connection, list(ROLES))
+        finally:
+            await connection.execute("SELECT pg_advisory_unlock(%s)", (_SETUP_LOCK,))
+
+
+async def _install_tables(connection: AsyncConnection, owner_url: str) -> None:
+    """Install agent-core's tables for a scratch role that cannot log in, then drop the role (and
+    with it every grant the installer made), so no real role holds a grant before its guard."""
+    name = sql.Identifier(_INSTALL_ROLE)
+    if await _role_exists(connection, _INSTALL_ROLE):  # left by a setup that was killed
+        await connection.execute(sql.SQL("DROP OWNED BY {}").format(name))
+        await connection.execute(sql.SQL("DROP ROLE {}").format(name))
+    await connection.execute(sql.SQL("CREATE ROLE {} NOLOGIN").format(name))
+    try:
         # The installer is synchronous (agent-core's drivers are), so it runs on a thread.
         await anyio.to_thread.run_sync(
-            lambda: install_postgres_schema(policy_url(owner_url), app_role=GATEWAY_ROLE)
+            lambda: install_postgres_schema(policy_url(owner_url), app_role=_INSTALL_ROLE)
         )
-        logger.info("installed agent-core's audit and approval tables in schema %s", SCHEMA)
-    async with await AsyncConnection.connect(owner_url, autocommit=True) as connection:
-        await grant_policy_access(connection)
-        await restrict_database_access(connection, list(ROLES))
+    finally:
+        await connection.execute(sql.SQL("DROP OWNED BY {}").format(name))
+        await connection.execute(sql.SQL("DROP ROLE {}").format(name))
+    logger.info("installed agent-core's audit and approval tables in schema %s", SCHEMA)
+
+
+async def _role_exists(connection: AsyncConnection, role: str) -> bool:
+    cursor = await connection.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (role,))
+    return await cursor.fetchone() is not None
 
 
 async def _tables_exist(connection: AsyncConnection) -> bool:
@@ -136,24 +165,14 @@ END $$
 async def grant_policy_access(connection: AsyncConnection) -> None:
     """Make the three roles' grants exactly these, and (re)install the approval guard.
 
-    The tables and roles must exist. Everything each role holds in the schema is revoked first,
-    and its attributes and memberships are reset, so a widened grant is narrowed again."""
+    The tables and roles must exist. Everything runs in one transaction, so there is never a moment
+    when a role holds a grant and the guard is missing, and the guard is created before any grant.
+    Each role's attributes and memberships are reset and everything it holds in the schema is
+    revoked first, so a widened grant is narrowed again."""
     schema = sql.Identifier(SCHEMA)
-    for role in ROLES:
-        await reset_role(connection, role)
-        await revoke_role_access(connection, SCHEMA, role)
-        await connection.execute(
-            sql.SQL("GRANT USAGE ON SCHEMA {} TO {}").format(schema, sql.Identifier(role))
-        )
-        for table, privileges in _GRANTS[role]:
-            await connection.execute(
-                sql.SQL("GRANT {} ON {}.{} TO {}").format(
-                    sql.SQL(privileges), schema, sql.Identifier(table), sql.Identifier(role)
-                )
-            )
-    # The guard function and trigger belong to the policy schema, like the table they guard.
-    await connection.execute(sql.SQL("SET search_path TO {}").format(schema))
-    try:
+    async with connection.transaction():
+        # The guard function and trigger belong to the policy schema, like the table they guard.
+        await connection.execute(sql.SQL("SET LOCAL search_path TO {}").format(schema))
         await connection.execute(_GUARD_FUNCTION.encode())
         await connection.execute(
             f"DROP TRIGGER IF EXISTS {APPROVALS_TABLE}_guard ON {APPROVALS_TABLE}".encode()
@@ -162,5 +181,15 @@ async def grant_policy_access(connection: AsyncConnection) -> None:
             f"CREATE TRIGGER {APPROVALS_TABLE}_guard BEFORE INSERT OR UPDATE ON {APPROVALS_TABLE}"
             f" FOR EACH ROW EXECUTE FUNCTION {APPROVALS_TABLE}_guard()".encode()
         )
-    finally:
-        await connection.execute("RESET search_path")
+        for role in ROLES:
+            await reset_role(connection, role)
+            await revoke_role_access(connection, SCHEMA, role)
+            await connection.execute(
+                sql.SQL("GRANT USAGE ON SCHEMA {} TO {}").format(schema, sql.Identifier(role))
+            )
+            for table, privileges in _GRANTS[role]:
+                await connection.execute(
+                    sql.SQL("GRANT {} ON {}.{} TO {}").format(
+                        sql.SQL(privileges), schema, sql.Identifier(table), sql.Identifier(role)
+                    )
+                )

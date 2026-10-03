@@ -2,6 +2,7 @@
 
 from uuid import uuid4
 
+import anyio
 import psycopg
 import pytest
 from aox_agent_core.approvals import Decision, Principal, PrincipalKind, SQLApprovalQueue
@@ -12,7 +13,13 @@ from psycopg import errors
 from pydantic import SecretStr
 
 from ai_gateway.policy import APPROVALS_TABLE, AUDIT_TABLE, ROLES, SCHEMA, policy_url
-from ai_gateway.policy.setup import PolicyPasswords, grant_policy_access, setup_policy
+from ai_gateway.policy.setup import (
+    PolicyPasswords,
+    _install_tables,
+    grant_policy_access,
+    setup_policy,
+)
+from mcp_common.roles import ensure_schema
 from tests.conftest import password_of
 
 pytestmark = [pytest.mark.integration, pytest.mark.anyio]
@@ -83,6 +90,69 @@ async def test_setup_installs_the_tables_in_the_policy_schema_once_and_is_safe_t
         assert await cursor.fetchall() == [(SCHEMA,), (SCHEMA,)]
         cursor = await connection.execute(b"SELECT count(*) FROM agent_core_audit")
         assert await cursor.fetchone() == (1,), "a repeat setup must not touch the records"
+
+
+async def test_no_real_role_holds_a_grant_while_agent_cores_tables_are_installed(
+    policy: None, test_database_url: str
+) -> None:
+    """agent-core's installer grants its app role UPDATE on approvals, and the guard does not exist
+    yet. It installs for a scratch role that cannot log in, which is dropped with its grants."""
+    async with await _as(test_database_url) as connection:
+        await connection.execute("DROP SCHEMA policy CASCADE")
+        await ensure_schema(connection, SCHEMA)
+        await _install_tables(connection, test_database_url)
+
+        cursor = await connection.execute(
+            "SELECT r.rolname, t.relname FROM pg_roles r CROSS JOIN pg_class t"
+            " WHERE r.rolname = ANY(%s) AND t.relnamespace = 'policy'::regnamespace"
+            " AND t.relkind = 'r' AND (has_table_privilege(r.oid, t.oid, 'SELECT')"
+            " OR has_table_privilege(r.oid, t.oid, 'INSERT')"
+            " OR has_table_privilege(r.oid, t.oid, 'UPDATE'))",
+            (list(ROLES),),
+        )
+        assert await cursor.fetchall() == []
+        cursor = await connection.execute(
+            "SELECT count(*) FROM pg_roles WHERE rolname = 'policy_install_scratch'"
+        )
+        assert await cursor.fetchone() == (0,)
+        cursor = await connection.execute(
+            "SELECT count(*) FROM pg_class WHERE relnamespace = 'policy'::regnamespace"
+            " AND relname IN ('agent_core_audit', 'agent_core_approvals')"
+        )
+        assert await cursor.fetchone() == (2,)
+
+
+async def test_two_setups_at_once_do_not_collide(
+    test_database_url: str,
+    policy_gateway_url: str,
+    policy_approver_url: str,
+    policy_auditor_url: str,
+) -> None:
+    async with await _as(test_database_url) as connection:
+        await connection.execute("DROP SCHEMA IF EXISTS policy CASCADE")
+    passwords = PolicyPasswords(
+        password_of(policy_gateway_url),
+        password_of(policy_approver_url),
+        password_of(policy_auditor_url),
+    )
+    failures: list[BaseException] = []
+
+    async def run() -> None:
+        try:
+            await setup_policy(test_database_url, passwords)
+        except BaseException as error:
+            failures.append(error)
+
+    async with anyio.create_task_group() as tasks:
+        tasks.start_soon(run)
+        tasks.start_soon(run)
+
+    assert failures == []
+    async with await _as(test_database_url) as connection:
+        cursor = await connection.execute(
+            "SELECT count(*) FROM pg_trigger WHERE tgname = 'agent_core_approvals_guard'"
+        )
+        assert await cursor.fetchone() == (1,)
 
 
 @pytest.mark.parametrize("empty", ["gateway", "approver", "auditor"])
