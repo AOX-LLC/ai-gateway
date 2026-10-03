@@ -1,3 +1,4 @@
+import { seeOther } from "@/lib/redirect";
 import { type NextRequest, NextResponse } from "next/server";
 import { config as settings } from "./lib/config";
 import { hostAllowed } from "./lib/auth/hosts";
@@ -62,7 +63,7 @@ export function proxy(request: NextRequest): NextResponse {
     if (path.startsWith("/api/")) {
       return secure(NextResponse.json({ error: "not signed in" }, { status: 401 }), csp);
     }
-    return secure(NextResponse.redirect(new URL("/signin", request.url), 303), csp);
+    return secure(seeOther("/signin"), csp);
   }
 
   const headers = new Headers(request.headers);

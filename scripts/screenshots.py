@@ -21,6 +21,7 @@ import sys
 from pathlib import Path
 
 from playwright.sync_api import Page, ViewportSize, sync_playwright
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 VIEWPORT: ViewportSize = {"width": 1440, "height": 900}
 HOSTNAME = re.compile(
@@ -41,9 +42,10 @@ def settle(page: Page) -> None:
     states = page.evaluate(
         "document.fonts.ready.then(() => [...document.fonts].map((f) => f.status))"
     )
+    # A face the page does not use stays "unloaded"; one that failed says "error".
     check(
-        len(states) > 0 and all(state == "loaded" for state in states),
-        f"{len(states)} font faces loaded",
+        "loaded" in states and "error" not in states,
+        f"fonts loaded, none failed ({states.count('loaded')} of {len(states)} faces in use)",
     )
 
 
@@ -51,7 +53,12 @@ def sign_in(page: Page, base: str, password: str) -> None:
     page.goto(f"{base}/signin")
     page.fill("#password", password)
     page.click("button[type=submit]")
-    page.wait_for_url(f"{base}/")
+    try:
+        page.wait_for_url(f"{base}/")
+    except PlaywrightTimeoutError:
+        alert = page.locator("[role=alert]")
+        shown = alert.first.inner_text() if alert.count() else "no message"
+        sys.exit(f"screenshots: sign-in did not reach the overview; at {page.url} ({shown})")
 
 
 def main() -> None:

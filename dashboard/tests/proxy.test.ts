@@ -36,7 +36,7 @@ describe("the proxy", () => {
     const api = await call("/api/live");
 
     expect(page.status).toBe(303);
-    expect(new URL(page.headers.get("location")!).pathname).toBe("/signin");
+    expect(page.headers.get("location")).toBe("/signin");
     expect(api.status).toBe(401);
   });
 
