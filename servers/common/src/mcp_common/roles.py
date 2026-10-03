@@ -5,12 +5,14 @@ Used by harborline-setup for the servers and by gateway-admin for the telemetry 
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
+import anyio
 from psycopg import AsyncConnection, sql
 
 GATEWAY_ROLE = "gateway_app"
 
 _DATABASE_ACCESS_LOCK = 7_165_201_001
 """The advisory lock that serialises changes to the database-level access list."""
+_LOCK_WAIT = "120s"
 
 
 @asynccontextmanager
@@ -21,13 +23,23 @@ async def _database_access_lock(connection: AsyncConnection) -> AsyncGenerator[N
     Compose runs several setups side by side (the servers' and the telemetry's), and each
     grants CONNECT on the same database and revokes defaults from PUBLIC. Postgres keeps those
     privileges in one catalog row per object, and two sessions updating it at once fail with
-    "tuple concurrently updated". The connection must not be inside a transaction that ends
-    before the lock is released: callers use autocommit."""
-    await connection.execute("SELECT pg_advisory_lock(%s)", (_DATABASE_ACCESS_LOCK,))
+    "tuple concurrently updated". The connection must be in autocommit mode, so the lock and the
+    statements it protects are not wrapped in one transaction. Waiting for the lock is bounded:
+    a setup that hangs while holding it fails the other with an error instead of blocking it for
+    ever."""
+    if not connection.autocommit:
+        raise ValueError("the database access lock needs an autocommit connection")
+    await connection.execute(sql.SQL("SET lock_timeout = {}").format(sql.Literal(_LOCK_WAIT)))
+    try:
+        await connection.execute("SELECT pg_advisory_lock(%s)", (_DATABASE_ACCESS_LOCK,))
+    finally:
+        await connection.execute("RESET lock_timeout")
     try:
         yield
     finally:
-        await connection.execute("SELECT pg_advisory_unlock(%s)", (_DATABASE_ACCESS_LOCK,))
+        # Even when cancelled: the unlock must run, or the lock is held until the session ends.
+        with anyio.CancelScope(shield=True):
+            await connection.execute("SELECT pg_advisory_unlock(%s)", (_DATABASE_ACCESS_LOCK,))
 
 
 async def ensure_role(connection: AsyncConnection, password: str, role: str) -> None:

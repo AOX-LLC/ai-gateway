@@ -44,3 +44,11 @@ async def test_two_setups_changing_the_database_access_list_at_once_do_not_colli
                 )
 
     assert failures == []
+
+
+async def test_the_lock_refuses_a_connection_that_is_not_in_autocommit(
+    test_database_url: str,
+) -> None:
+    async with await psycopg.AsyncConnection.connect(test_database_url) as connection:
+        with pytest.raises(ValueError, match="autocommit"):
+            await restrict_database_access(connection, [])
