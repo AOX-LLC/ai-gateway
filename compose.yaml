@@ -125,7 +125,7 @@ services:
     build: *gateway-build
     image: ai-gateway-gateway
     command: ["telemetry-purge", "--every", "3600"]
-    restart: unless-stopped
+    restart: "no"
     <<: *hardening
     networks: [backend]
     mem_limit: 96m
@@ -336,23 +336,25 @@ services:
 
   # The lab approver, for Phase 6's red-team runs: approves every pending write automatically.
   # Off unless asked for twice: the `lab` profile, and LAB_AUTO_APPROVE=yes in the environment (the
-  # service will not start without it); it also needs the lab database role, which exists only when
+  # service exits at once without it); it also needs the lab database role, which exists only when
   # POLICY_LAB_APPROVER_DB_PASSWORD is set for `policy-setup`. Register its approver first:
   # `docker compose run --rm admin approver-add lab-approver --name "Lab approver"`.
+  # Compose interpolates every service's variables whatever the profile, so none is marked
+  # required here: the service itself refuses to run without the flag.
   # Never use it against anything real: it defeats approval.
   lab-approver:
     profiles: [lab]
     build: *gateway-build
     image: ai-gateway-gateway
     entrypoint: ["/app/.venv/bin/python", "/lab/lab_approver.py"]
-    restart: unless-stopped
+    restart: "no"
     <<: *hardening
     networks: [backend]
     mem_limit: 96m
     environment:
-      POLICY_APPROVER_DATABASE_URL: postgresql://policy_lab_approver:${POLICY_LAB_APPROVER_DB_PASSWORD:?set it in .env to use the lab profile}@postgres:5432/${POSTGRES_DB}
+      POLICY_APPROVER_DATABASE_URL: postgresql://policy_lab_approver:${POLICY_LAB_APPROVER_DB_PASSWORD:-}@postgres:5432/${POSTGRES_DB}
       APPROVAL_ROLES_FILE: /app/config/approval_roles.toml
-      LAB_AUTO_APPROVE: ${LAB_AUTO_APPROVE:?set LAB_AUTO_APPROVE=yes to use the lab profile}
+      LAB_AUTO_APPROVE: ${LAB_AUTO_APPROVE:-}
       LAB_APPROVER_ID: ${LAB_APPROVER_ID:-lab-approver}
     volumes:
       - ./scripts/auto_approver.py:/lab/auto_approver.py:ro

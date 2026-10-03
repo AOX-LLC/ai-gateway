@@ -185,9 +185,9 @@ def _compose() -> dict[str, Any]:
 
 
 def test_the_test_approver_exists_in_compose_only_as_the_lab_service_behind_both_switches() -> None:
-    """Off in the default stack: it is the `lab` profile's one service, which will not start unless
-    LAB_AUTO_APPROVE is set (required, no default), and holds the lab database role's URL, which
-    needs the lab role's password. Nothing else in Compose names the switch or the script."""
+    """Off in the default stack: it is the `lab` profile's one service, which holds no default for
+    the switch (an empty one: the service refuses to run) and is not restarted. Nothing else in
+    Compose names the switch or the script."""
     services = _compose()["services"]
 
     mentions = [
@@ -198,9 +198,11 @@ def test_the_test_approver_exists_in_compose_only_as_the_lab_service_behind_both
     assert mentions == ["lab-approver"]
     lab = services["lab-approver"]
     assert lab["profiles"] == ["lab"], "not started by `docker compose up`"
-    assert lab["environment"]["LAB_AUTO_APPROVE"].startswith("${LAB_AUTO_APPROVE:?"), "no default"
-    assert ":?" in lab["environment"]["POLICY_APPROVER_DATABASE_URL"], "needs the lab password"
-    assert "policy_lab_approver" in lab["environment"]["POLICY_APPROVER_DATABASE_URL"]
+    assert lab["environment"]["LAB_AUTO_APPROVE"] == "${LAB_AUTO_APPROVE:-}", "no default: empty"
+    assert "policy_lab_approver:${POLICY_LAB_APPROVER_DB_PASSWORD:-}@" in str(
+        lab["environment"]["POLICY_APPROVER_DATABASE_URL"]
+    ), "the lab role's password, empty unless set"
+    assert lab["restart"] == "no"
     assert lab["volumes"] == [
         "./scripts/auto_approver.py:/lab/auto_approver.py:ro",
         "./scripts/lab_approver.py:/lab/lab_approver.py:ro",
@@ -209,49 +211,76 @@ def test_the_test_approver_exists_in_compose_only_as_the_lab_service_behind_both
     assert "--approve-as" not in (ROOT / "compose.yaml").read_text()
 
 
-def test_without_both_switches_the_lab_service_will_not_start(tmp_path: Path) -> None:
-    """The lab profile alone is not enough: compose refuses to build the service without
-    LAB_AUTO_APPROVE, and without the lab role's password."""
+def _docker_config(
+    tmp_path: Path, *profiles: str, **extra: str
+) -> subprocess.CompletedProcess[str]:
+    env_file = tmp_path / ".env"
+    if not env_file.exists():
+        subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "scripts" / "init_env.py"),
+                "--example",
+                str(ROOT / ".env.example"),
+                "--output",
+                str(env_file),
+            ],
+            check=True,
+            capture_output=True,
+        )
+    command = ["docker", "compose", "--env-file", str(env_file)]
+    for profile in profiles:
+        command += ["--profile", profile]
+    return subprocess.run(
+        [*command, "config", "-q"],
+        cwd=ROOT,
+        env={"PATH": os.environ["PATH"], "HOME": str(tmp_path), **extra},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_the_default_stack_and_the_lab_profile_both_resolve_without_the_lab_switches(
+    tmp_path: Path,
+) -> None:
+    """Compose interpolates every service's variables whatever the profile: a variable marked
+    required on the lab service would break `docker compose` for everyone. None is."""
     if shutil.which("docker") is None:
         pytest.skip("docker is not installed")
-    env_file = tmp_path / ".env"
-    subprocess.run(
-        [
-            sys.executable,
-            str(ROOT / "scripts" / "init_env.py"),
-            "--example",
-            str(ROOT / ".env.example"),
-            "--output",
-            str(env_file),
-        ],
-        check=True,
+
+    default = _docker_config(tmp_path)
+    lab = _docker_config(tmp_path, "lab")
+
+    assert default.returncode == 0, default.stderr
+    assert lab.returncode == 0, lab.stderr
+
+
+def test_the_lab_approver_refuses_to_run_without_its_switch(tmp_path: Path) -> None:
+    """The service is the fence: with the lab profile on but LAB_AUTO_APPROVE not set to yes, it
+    exits at once, before it reads a database URL or approves anything."""
+    env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path), "PYTHONPATH": str(ROOT / "scripts")}
+
+    refused = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "lab_approver.py")],
+        env=env,
         capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
     )
-    base = {"PATH": os.environ["PATH"], "HOME": str(tmp_path)}
+    wrong_value = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "lab_approver.py")],
+        env={**env, "LAB_AUTO_APPROVE": "true"},
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
 
-    def config(**extra: str) -> subprocess.CompletedProcess[str]:
-        command = ["docker", "compose", "--env-file", str(env_file), "--profile", "lab"]
-        return subprocess.run(
-            [*command, "config", "-q"],
-            cwd=ROOT,
-            env={**base, **extra},
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-
-    password = {"POLICY_LAB_APPROVER_DB_PASSWORD": "a-lab-password"}
-    neither = config()
-    only_the_role = config(**password)
-    only_the_switch = config(LAB_AUTO_APPROVE="yes")
-    both = config(**password, LAB_AUTO_APPROVE="yes")
-
-    assert neither.returncode != 0
-    assert only_the_role.returncode != 0
-    assert "LAB_AUTO_APPROVE" in only_the_role.stderr
-    assert only_the_switch.returncode != 0
-    assert "POLICY_LAB_APPROVER_DB_PASSWORD" in only_the_switch.stderr
-    assert both.returncode == 0, both.stderr
+    for result in (refused, wrong_value):
+        assert result.returncode != 0
+        assert "LAB_AUTO_APPROVE=yes" in result.stderr
 
 
 def test_the_gateway_service_holds_no_approver_credential() -> None:
