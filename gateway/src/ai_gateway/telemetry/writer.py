@@ -12,6 +12,7 @@ request:
 """
 
 import logging
+import math
 import time
 from collections import defaultdict
 from contextlib import suppress
@@ -134,7 +135,9 @@ class TelemetryWriter:
             with anyio.fail_after(self._write_timeout_s):
                 await self._insert(batch)
         except (errors.IntegrityError, errors.DataError):
-            await self._insert_one_by_one(batch)
+            if not await self._insert_one_by_one(batch):
+                return False  # the split failed: the batch stays queued and the writer degraded
+            return len(batch) >= self._batch_size
         except Exception as error:
             await self._discard_connection()
             self._note_failure(error)
@@ -154,30 +157,37 @@ class TelemetryWriter:
                 if table in by_table:
                     await cursor.executemany(_statement(table), _params(table, by_table[table]))
 
-    async def _insert_one_by_one(self, rows: list[Row]) -> None:
-        """After the database refused a batch: write what it accepts, drop what it refuses."""
+    async def _insert_one_by_one(self, rows: list[Row]) -> bool:
+        """After the database refused a batch: write what it accepts, drop what it refuses.
+
+        Returns whether the pass finished. If the database fails part way, the whole batch stays
+        pending (rows already written are written again harmlessly: every key is idempotent) and
+        the writer is degraded; nothing is counted as written or dropped that was not."""
+        refused = 0
         try:
-            with anyio.fail_after(self._write_timeout_s):
-                for row in rows:
-                    try:
+            for row in rows:
+                try:
+                    with anyio.fail_after(self._write_timeout_s):  # per row, not for the pass
                         await self._insert([row])
-                    except (errors.IntegrityError, errors.DataError):
-                        self._rejected_total += 1
-                        logger.error("the database refused a %s row; it was dropped", row.table)
+                except (errors.IntegrityError, errors.DataError):
+                    refused += 1
+                    logger.error("the database refused a %s row; it was dropped", row.table)
         except Exception as error:
             await self._discard_connection()
             self._note_failure(error)
-            return
-        self._written_total += len(rows)
+            return False
+        self._rejected_total += refused
+        self._written_total += len(rows) - refused
         self._pending = []
         self._failing = False
+        return True
 
     async def _connect(self) -> AsyncConnection:
         if self._connection is None or self._connection.closed:
             with anyio.fail_after(self._connect_timeout_s + 1):
                 self._connection = await AsyncConnection.connect(
                     self._url,
-                    connect_timeout=int(self._connect_timeout_s),
+                    connect_timeout=max(1, math.ceil(self._connect_timeout_s)),  # 0 means forever
                     options="-c statement_timeout=3000",
                 )
         return self._connection
@@ -185,7 +195,7 @@ class TelemetryWriter:
     async def _discard_connection(self) -> None:
         connection, self._connection = self._connection, None
         if connection is not None:
-            with anyio.move_on_after(2), anyio.CancelScope(shield=True), suppress(psycopg.Error):
+            with anyio.move_on_after(2, shield=True), suppress(psycopg.Error):
                 await connection.close()
 
     def _note_failure(self, error: Exception) -> None:

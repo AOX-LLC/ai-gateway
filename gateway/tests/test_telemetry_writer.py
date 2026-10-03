@@ -108,6 +108,43 @@ async def test_a_row_the_database_refuses_is_dropped_and_the_rest_are_written(
     status = writer.status()
     assert (status.status, status.queue_depth, status.rejected_total) == ("ok", 0, 1)
     assert await _count(test_database_url, "requests") == 2
+    # 2 requests and 3 layer verdicts were written; the refused request row was not.
+    assert status.written_total == len(first) + len(last) + len(poison) - 1
+
+
+async def test_a_database_failure_while_splitting_a_refused_batch_loses_nothing(
+    telemetry: None,
+    buffer: TelemetryBuffer,
+    writer_url: str,
+    test_database_url: str,
+    flaky: "_FlakyConnect",
+) -> None:
+    """The batch is refused, then the connection fails during the one-by-one pass: the rows
+    must stay queued and the writer must say it is degraded, not write them off."""
+    flaky.mode = "pass"
+    writer = TelemetryWriter(buffer, writer_url, flush_interval_s=0.02)
+    first, poison, last = _call_rows(1), _call_rows(1), _call_rows(1)
+    poison[0].values["tool"] = "t" * 65
+    buffer.put(*first, *poison, *last)
+    real_insert = writer._insert
+    calls = {"n": 0}
+
+    async def failing_after_the_refusal(rows: list[Row]) -> None:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            await real_insert(rows)  # the whole batch: refused by the CHECK
+        else:
+            raise psycopg.OperationalError("connection lost")
+
+    writer._insert = failing_after_the_refusal  # type: ignore[method-assign]
+
+    await writer._write_next_batch()
+
+    status = writer.status()
+    assert status.status == "degraded"
+    assert status.written_total == 0
+    assert status.queue_depth == len(first) + len(poison) + len(last)
+    assert await _count(test_database_url, "requests") == 0
 
 
 class _FlakyConnect:
