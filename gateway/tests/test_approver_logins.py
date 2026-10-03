@@ -2,7 +2,6 @@
 the audit log and the database say about who decided."""
 
 import argparse
-import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -12,7 +11,7 @@ import psycopg
 import pytest
 from aox_agent_core.approvals import Decision, Principal, PrincipalKind, RoleApproverPolicy
 from aox_agent_core.audit import AuditEvent
-from aox_agent_core.errors import AuditIntegrityError
+from aox_agent_core.errors import AuditIntegrityError, ConfigError
 from aox_agent_core.storage import open_database
 from psycopg import errors
 from pydantic import SecretStr
@@ -313,8 +312,10 @@ async def test_a_decision_stays_attributed_after_the_approver_is_removed(
     policy_auditor_url: str,
 ) -> None:
     aiden = Approvals(await make_approver("aiden"), ROLES)
-    tyler = await make_approver("tyler")
+    tyler = Approvals(await make_approver("tyler"), ROLES)
     await aiden.decide(await _ask(policy_gateway_url), Decision.REJECT, "no")
+    other = await _ask(policy_gateway_url, ticket_id="TKT-000002", status="closed")
+    await tyler.decide(other, Decision.REJECT, "no")
 
     async with await _owner(test_database_url) as owner:
         await remove_approver(owner, _audit(policy_gateway_url), "aiden")
@@ -323,7 +324,7 @@ async def test_a_decision_stays_attributed_after_the_approver_is_removed(
     logins = await _approver_logins(policy_auditor_url)
     assert logins["policy_approver_aiden"] == "aiden", "a removed approver's login stays known"
     await verify_with_anchors(auditor, [], approver_logins=logins)
-    assert tyler
+    assert logins["policy_approver_tyler"] == "tyler"
 
 
 async def test_removing_takes_effect_on_what_the_approver_approved_but_nobody_used(
@@ -518,6 +519,7 @@ async def test_only_the_owner_writes_the_approvers_and_none_of_them_is_ever_dele
     async with await _owner(test_database_url) as owner:
         for statement, why in (
             ("DELETE FROM policy.approvers WHERE id = 'aiden'", "never deleted"),
+            ("TRUNCATE policy.approvers", "never deleted"),
             ("UPDATE policy.approvers SET db_role = 'policy_approver_other'", "keeps its id"),
             ("UPDATE policy.approvers SET id = 'other'", "keeps its id"),
         ):
@@ -566,9 +568,15 @@ async def test_the_dashboard_reader_sees_the_upstream_and_who_decided_and_no_mor
 # --- what the audit log says ---------------------------------------------------------------
 
 
-async def _forge(url: str, action: str, actor: str) -> None:
+async def _forge(
+    url: str, action: str, actor: str, subject: str | None = None, **payload: Any
+) -> None:
     log = audit_log_on(open_database(SecretStr(policy_url(url))))
-    await log.append(AuditEvent(action=action, actor_id=actor, subject_id=str(uuid4())))
+    await log.append(
+        AuditEvent(
+            action=action, actor_id=actor, subject_id=subject or str(uuid4()), payload=payload
+        )
+    )
 
 
 async def test_a_decision_that_claims_to_be_someone_elses_fails_verification(
@@ -707,4 +715,185 @@ async def test_the_commands_show_the_password_once_and_need_the_gateway_role_to_
     assert first.split()[1] not in listed + removed, "shown once, never listed"
     assert "active  policy_approver_aiden" in listed
     assert "removed" in removed
-    assert os.environ.get("APPROVER_PASSWORD") is None
+
+
+# --- what the gatekeeper's review asked to be proved --------------------------------------------
+
+_TS = "to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')"
+
+
+async def _approve_in_plain_sql(login: str, request_id: UUID, claiming: str) -> None:
+    """What a login can do without the tool: approve a pending request itself, saying who did."""
+    async with await _owner(login) as connection:
+        await connection.execute(
+            "UPDATE policy.agent_core_approvals SET status = 'approved', decision = 'approve',"  # noqa: S608 - fixed text, the values are bound
+            f" resolved_by = %s, resolved_at = {_TS} WHERE id = %s".encode(),
+            (claiming, str(request_id)),
+        )
+
+
+async def test_the_lab_login_cannot_set_role_to_the_shared_approver_role(
+    policy: None,
+    test_database_url: str,
+    policy_gateway_url: str,
+    policy_auditor_url: str,
+) -> None:
+    await _setup(test_database_url, policy_gateway_url, policy_auditor_url, lab="lab-pw-0123456789")
+
+    async with await _owner(
+        login_url(test_database_url, "policy_lab_approver", "lab-pw-0123456789")
+    ) as lab:
+        with pytest.raises(errors.InsufficientPrivilege):
+            await lab.execute("SET ROLE policy_approver")
+    assert await _rows(
+        test_database_url,
+        "SELECT m.inherit_option, m.set_option, m.admin_option FROM pg_auth_members m"
+        " JOIN pg_roles r ON r.oid = m.member WHERE r.rolname = 'policy_lab_approver'",
+    ) == [(True, False, False)]
+
+
+async def test_setup_takes_back_the_right_to_grant_on_and_roles_that_are_members_of_a_login(
+    policy: None,
+    make_approver: MakeApprover,
+    test_database_url: str,
+    policy_gateway_url: str,
+    policy_auditor_url: str,
+) -> None:
+    await make_approver("aiden")
+    async with await _owner(test_database_url) as owner:
+        await owner.execute("CREATE ROLE bystander NOLOGIN")
+        try:
+            await owner.execute(
+                "GRANT policy_approver TO policy_approver_aiden"
+                " WITH ADMIN TRUE, INHERIT TRUE, SET FALSE"
+            )
+            await owner.execute("GRANT policy_approver_aiden TO bystander")  # could SET ROLE to it
+
+            await _setup(test_database_url, policy_gateway_url, policy_auditor_url)
+
+            assert await _rows(
+                test_database_url,
+                "SELECT parent.rolname, member.rolname, m.admin_option FROM pg_auth_members m"
+                " JOIN pg_roles parent ON parent.oid = m.roleid"
+                " JOIN pg_roles member ON member.oid = m.member"
+                " WHERE member.rolname IN ('policy_approver_aiden', 'bystander')"
+                " OR parent.rolname = 'policy_approver_aiden'",
+            ) == [("policy_approver", "policy_approver_aiden", False)]
+        finally:
+            await owner.execute("DROP ROLE IF EXISTS bystander")
+
+
+async def test_a_decision_the_request_credits_to_someone_else_is_not_used(
+    policy: None, make_approver: MakeApprover, policy_gateway_url: str
+) -> None:
+    """A login can approve in plain SQL under another name, and add an honest record naming itself.
+    The two do not agree, so the gate does not use it."""
+    aiden = await make_approver("aiden")
+    await make_approver("tyler")
+    gate, ctx, call = _gate(policy_gateway_url, hold_s=0), _context(), _call()
+    pending = await gate.decide(ctx, call)
+    request_id = UUID(pending.approval_id or "")
+
+    await _approve_in_plain_sql(aiden, request_id, claiming="human:tyler")
+    await _forge(aiden, "approval.resolved", "human:aiden", str(request_id), decision="approve")
+
+    assert (await gate.decide(ctx, call)).outcome is ApprovalOutcome.UNAVAILABLE
+
+
+async def test_a_decision_by_an_approver_without_the_role_the_request_needed_is_not_used(
+    policy: None, make_approver: MakeApprover, policy_gateway_url: str
+) -> None:
+    intern = await make_approver("intern", ["reader"])
+    gate, ctx, call = _gate(policy_gateway_url, hold_s=0), _context(), _call()
+    pending = await gate.decide(ctx, call)
+    request_id = UUID(pending.approval_id or "")
+
+    await _approve_in_plain_sql(intern, request_id, claiming="human:intern")
+    await _forge(intern, "approval.resolved", "human:intern", str(request_id), decision="approve")
+
+    assert (await gate.decide(ctx, call)).outcome is ApprovalOutcome.UNAVAILABLE
+
+
+async def test_a_second_decision_on_one_request_fails_verification(
+    policy: None,
+    make_approver: MakeApprover,
+    policy_gateway_url: str,
+    policy_auditor_url: str,
+) -> None:
+    aiden = await make_approver("aiden")
+    request_id = await _ask(policy_gateway_url)
+    await Approvals(aiden, ROLES).decide(request_id, Decision.REJECT, "no")
+    auditor = audit_log_on(open_database(SecretStr(policy_url(policy_auditor_url))))
+    logins = await _approver_logins(policy_auditor_url)
+    await verify_with_anchors(auditor, [], approver_logins=logins)
+
+    await _forge(aiden, "approval.resolved", "human:aiden", str(request_id), decision="approve")
+
+    with pytest.raises(AuditIntegrityError, match="second decision"):
+        await verify_with_anchors(auditor, [], approver_logins=logins)
+
+
+async def test_setup_still_stops_for_a_plain_sql_approval_when_only_removed_approvers_decided(
+    policy: None,
+    make_approver: MakeApprover,
+    test_database_url: str,
+    policy_gateway_url: str,
+    policy_auditor_url: str,
+) -> None:
+    """The fallback is for approvals a removed approver made through the tool. One made in plain
+    SQL has no decision on record, and setup must still refuse to go on."""
+    aiden = await make_approver("aiden")
+    explained = Approvals(aiden, ROLES)
+    first = await _gate(policy_gateway_url, hold_s=0).decide(_context(), _call())
+    await explained.decide(UUID(first.approval_id or ""), Decision.APPROVE, None)
+    second = await _ask(policy_gateway_url, ticket_id="TKT-000002", status="closed")
+    await _approve_in_plain_sql(aiden, second, claiming="human:aiden")
+    async with await _owner(test_database_url) as owner:
+        await remove_approver(owner, _audit(policy_gateway_url), "aiden")
+
+    with pytest.raises(ConfigError, match=r"approval\.resolved"):
+        await _setup(test_database_url, policy_gateway_url, policy_auditor_url)
+
+
+async def test_rotating_records_first_so_a_log_that_is_down_locks_nobody_out(
+    policy: None, test_database_url: str, policy_gateway_url: str, policy_auditor_url: str
+) -> None:
+    async with await _owner(test_database_url) as owner:
+        added = await add_approver(
+            owner, _audit(policy_gateway_url), "aiden", "Aiden", ["approver"]
+        )
+        url = login_url(test_database_url, added.login, added.password or "")
+        session = await _owner(url)
+
+        with pytest.raises(Exception):  # noqa: B017, PT011 - the auditor role cannot append
+            await rotate_approver(owner, _audit(policy_auditor_url), "aiden")
+
+        await session.execute("SELECT 1")  # still signed in
+        async with await _owner(url):
+            pass  # and the old password still works
+
+
+async def test_removing_goes_ahead_when_the_log_is_down_and_says_it_is_not_recorded(
+    policy: None, test_database_url: str, policy_gateway_url: str, policy_auditor_url: str
+) -> None:
+    async with await _owner(test_database_url) as owner:
+        await add_approver(owner, _audit(policy_gateway_url), "aiden", "Aiden", ["approver"])
+
+        with pytest.raises(ApproverLoginError, match="could not record it"):
+            await remove_approver(owner, _audit(policy_auditor_url), "aiden")
+
+    assert (
+        await _rows(
+            test_database_url, "SELECT 1 FROM pg_roles WHERE rolname = 'policy_approver_aiden'"
+        )
+        == []
+    ), "a person who must lose access loses it"
+
+
+async def test_the_reserved_lab_id_cannot_be_rotated_or_removed(
+    policy: None, test_database_url: str, policy_gateway_url: str
+) -> None:
+    async with await _owner(test_database_url) as owner:
+        for action in (rotate_approver, remove_approver):
+            with pytest.raises(ApproverLoginError, match="reserved"):
+                await action(owner, _audit(policy_gateway_url), "lab-approver")

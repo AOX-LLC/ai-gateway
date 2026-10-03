@@ -29,11 +29,12 @@ from ai_gateway.policy import (
     APPROVERS_TABLE,
     LAB_APPROVER_ROLE,
     POLICY_IDLE_IN_TRANSACTION_MS,
+    PROVISIONING_LOCK,
     RESERVED_APPROVER_IDS,
     SCHEMA,
     approver_login_name,
 )
-from mcp_common.roles import ensure_role, existing_roles
+from mcp_common.roles import advisory_lock, ensure_role, existing_roles
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +70,7 @@ def new_password() -> str:
     return secrets.token_urlsafe(32)
 
 
-async def add_approver(
+async def _add_approver(
     connection: AsyncConnection,
     audit: SQLAuditLog,
     approver_id: str,
@@ -117,12 +118,12 @@ async def add_approver(
         await _drop_login(connection, login)
         raise ApproverLoginError(
             f"approver {approver_id} was not added ({type(error).__name__}: the audit log or the"
-            " approvers table refused it); nothing was kept"
+            " approvers table refused it); no login was kept"
         ) from error
     return Provisioned(approver_id, login, password)
 
 
-async def rotate_approver(
+async def _rotate_approver(
     connection: AsyncConnection, audit: SQLAuditLog, approver_id: str
 ) -> Provisioned:
     """Give an approver a new password and end their open sessions. The old password stops working
@@ -133,13 +134,13 @@ async def rotate_approver(
     if not row.db_role:
         raise ApproverLoginError(f"approver {approver_id} has no login yet: run approver-add")
     password = new_password()
+    await _record(audit, "approver.rotated", approver_id, {"login": row.db_role})
     await _create_login(connection, row.db_role, password)
     await _end_sessions(connection, row.db_role)
-    await _record(audit, "approver.rotated", approver_id, {"login": row.db_role})
     return Provisioned(approver_id, row.db_role, password)
 
 
-async def remove_approver(
+async def _remove_approver(
     connection: AsyncConnection, audit: SQLAuditLog, approver_id: str
 ) -> None:
     """Take a person's login away and end their sessions. The row stays, inactive and marked
@@ -158,7 +159,55 @@ async def remove_approver(
     )
     if row.db_role and row.db_role != LAB_APPROVER_ROLE:
         await _drop_login(connection, row.db_role)
-    await _record(audit, "approver.removed", approver_id, {"login": row.db_role or ""})
+    try:
+        await _record(audit, "approver.removed", approver_id, {"login": row.db_role or ""})
+    except Exception as error:
+        raise ApproverLoginError(
+            f"approver {approver_id} was removed, but the audit log could not record it"
+            f" ({type(error).__name__}): note it down and record it when the log is back"
+        ) from error
+
+
+async def add_approver(
+    connection: AsyncConnection,
+    audit: SQLAuditLog,
+    approver_id: str,
+    name: str,
+    roles: list[str],
+) -> Provisioned:
+    """Register a person and make their login, or update the name and roles of one who has it.
+
+    Nothing is kept unless the audit log takes the record. One at a time with setup and the other
+    provisioning commands: two ids that make one login name must not overwrite each other."""
+    async with advisory_lock(connection, PROVISIONING_LOCK):
+        return await _add_approver(connection, audit, approver_id, name, roles)
+
+
+async def rotate_approver(
+    connection: AsyncConnection, audit: SQLAuditLog, approver_id: str
+) -> Provisioned:
+    """Give an approver a new password and end their open sessions. The old password stops working
+    at once. The login is made again if the role is missing. The change is recorded first: if the
+    audit log cannot take the record, nothing changes and nobody is locked out."""
+    _check_not_reserved(approver_id)
+    async with advisory_lock(connection, PROVISIONING_LOCK):
+        return await _rotate_approver(connection, audit, approver_id)
+
+
+async def remove_approver(
+    connection: AsyncConnection, audit: SQLAuditLog, approver_id: str
+) -> None:
+    """Take a person's login away and end their sessions. The row stays, inactive and marked
+    removed, so the decisions they made still name them, and the id is never given to anyone else.
+
+    Removing goes first and is recorded after: a person who must lose access loses it even when the
+    audit log is down, and the error then says the removal is not in the log.
+
+    A request the person approved and nobody has used yet is no longer approved by anyone who may
+    approve: the gate will not use it, and the next `policy-setup` cancels it."""
+    _check_not_reserved(approver_id)
+    async with advisory_lock(connection, PROVISIONING_LOCK):
+        await _remove_approver(connection, audit, approver_id)
 
 
 async def sync_approver_logins(connection: AsyncConnection) -> list[str]:
@@ -182,8 +231,8 @@ async def sync_approver_logins(connection: AsyncConnection) -> list[str]:
             await _normalise_login(connection, role)
             active.append(role)
         else:
-            await _end_sessions(connection, role)
             await connection.execute(sql.SQL("ALTER ROLE {} NOLOGIN").format(sql.Identifier(role)))
+            await _end_sessions(connection, role)  # after NOLOGIN: it cannot reconnect in between
     return active
 
 
@@ -220,6 +269,10 @@ def _check_id(approver_id: str) -> None:
             "an approver id is lowercase letters, digits, . _ -, starting with a letter,"
             f" at most {APPROVER_ID_MAX_LENGTH} characters"
         )
+    _check_not_reserved(approver_id)
+
+
+def _check_not_reserved(approver_id: str) -> None:
     if approver_id in RESERVED_APPROVER_IDS:
         raise ApproverLoginError(f"{approver_id} is reserved: policy-setup makes that login")
 
@@ -275,8 +328,10 @@ async def _create_login(connection: AsyncConnection, login: str, password: str) 
 
 async def _normalise_login(connection: AsyncConnection, login: str) -> None:
     """The login's attributes, its one membership and nothing else: no attribute that bypasses a
-    check, a connection limit, membership of the approver role with inheritance and without
-    `SET ROLE`, no other role, and no privilege granted to it directly."""
+    check, a connection limit, membership of the approver role with inheritance, without `SET ROLE`
+    and without the right to grant it on, no other role, no role that is a member of it (that
+    member could `SET ROLE` to it and write as it), and no table privilege in the policy schema
+    granted to it directly. It keeps the CONNECT that `ensure_role` gave it."""
     name = sql.Identifier(login)
     await connection.execute(
         sql.SQL(
@@ -290,34 +345,47 @@ async def _normalise_login(connection: AsyncConnection, login: str) -> None:
         )
     )
     kept = False
-    for parent, grantor, inherit, can_set in await _grants(connection, login):
-        if parent == APPROVER_ROLE and inherit and not can_set and not kept:
+    for parent, member, grantor, inherit, can_set, admin in await _grants(connection, login):
+        if (
+            member == login
+            and parent == APPROVER_ROLE
+            and (inherit, can_set, admin) == (True, False, False)
+            and not kept
+        ):
             kept = True
             continue
         await connection.execute(
             sql.SQL("REVOKE {} FROM {} GRANTED BY {} CASCADE").format(
-                sql.Identifier(parent), name, sql.Identifier(grantor)
+                sql.Identifier(parent), sql.Identifier(member), sql.Identifier(grantor)
             )
         )
     if not kept:
         await connection.execute(
-            sql.SQL("GRANT {} TO {} WITH INHERIT TRUE, SET FALSE").format(
+            sql.SQL("GRANT {} TO {} WITH INHERIT TRUE, SET FALSE, ADMIN FALSE").format(
                 sql.Identifier(APPROVER_ROLE), name
             )
         )
 
 
-async def _grants(connection: AsyncConnection, login: str) -> list[tuple[str, str, bool, bool]]:
+async def _grants(
+    connection: AsyncConnection, login: str
+) -> list[tuple[str, str, str, bool, bool, bool]]:
+    """Every membership the login is part of, as a member or as the role granted:
+    (role, member, grantor, inherit, set, admin)."""
     cursor = await connection.execute(
-        "SELECT parent.rolname, grantor.rolname, m.inherit_option, m.set_option"
-        " FROM pg_auth_members m"
+        "SELECT parent.rolname, member.rolname, grantor.rolname,"
+        " m.inherit_option, m.set_option, m.admin_option FROM pg_auth_members m"
         " JOIN pg_roles parent ON parent.oid = m.roleid"
         " JOIN pg_roles member ON member.oid = m.member"
         " JOIN pg_roles grantor ON grantor.oid = m.grantor"
-        " WHERE member.rolname = %s ORDER BY parent.rolname, grantor.rolname",
-        (login,),
+        " WHERE member.rolname = %s OR parent.rolname = %s"
+        " ORDER BY parent.rolname, member.rolname, grantor.rolname",
+        (login, login),
     )
-    return [(str(a), str(b), bool(c), bool(d)) for a, b, c, d in await cursor.fetchall()]
+    return [
+        (str(a), str(b), str(c), bool(d), bool(e), bool(f))
+        for a, b, c, d, e, f in await cursor.fetchall()
+    ]
 
 
 async def _end_sessions(connection: AsyncConnection, login: str) -> None:

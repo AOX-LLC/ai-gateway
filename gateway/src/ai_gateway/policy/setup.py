@@ -35,6 +35,7 @@ from ai_gateway.policy import (
     LAB_APPROVER_ID,
     LAB_APPROVER_ROLE,
     POLICY_IDLE_IN_TRANSACTION_MS,
+    PROVISIONING_LOCK,
     ROLES,
     SCHEMA,
 )
@@ -51,8 +52,7 @@ from mcp_common.roles import (
 
 logger = logging.getLogger(__name__)
 
-_SETUP_LOCK = 7_165_201_002
-"""The advisory lock that serialises policy setups."""
+_SETUP_LOCK = PROVISIONING_LOCK
 
 
 @dataclass(frozen=True)
@@ -121,9 +121,11 @@ LIMIT 1
 """  # noqa: S608 - fixed names and no input
 
 
-async def _approved_without_a_decision_on_record(owner_url: str) -> bool:
-    """Whether an approved request lacks a decision event from a removed (or lab) approver's login:
-    one that nobody who ever held an approver's login approved. Only for the all-removed case."""
+async def _approved_without_an_explained_decision(owner_url: str) -> bool:
+    """Whether an approved request lacks a decision event written by the login of a removed approver
+    (or the lab approver's): one that nobody who ever held a login approved. Only asked in the
+    all-removed case, where every request the installer would cancel is one a removed approver
+    decided; anything else is plain SQL and stops setup."""
     async with await AsyncConnection.connect(owner_url, autocommit=True) as connection:
         cursor = await connection.execute(
             "SELECT count(*) FROM information_schema.columns WHERE table_schema = %s"
@@ -175,7 +177,7 @@ async def _install(owner_url: str) -> None:
     except ConfigError as error:
         if "close_unaudited_approvals needs" not in str(error):
             raise
-        if await _approved_without_a_decision_on_record(owner_url):
+        if await _approved_without_an_explained_decision(owner_url):
             raise  # an approval no approver's decision made: that is what setup exists to stop
         report = await anyio.to_thread.run_sync(lambda: install(close=False))
         logger.warning(
@@ -234,7 +236,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS {APPROVERS_TABLE}_db_role ON {APPROVERS_TABLE}
 CREATE OR REPLACE FUNCTION {APPROVERS_TABLE}_keep_identities() RETURNS trigger
 LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
 BEGIN
-    IF TG_OP = 'DELETE' THEN
+    IF TG_OP IN ('DELETE', 'TRUNCATE') THEN
         RAISE EXCEPTION 'an approver is never deleted: remove it, so the id and login stay taken'
             USING ERRCODE = 'integrity_constraint_violation';
     END IF;
@@ -250,7 +252,15 @@ END $$;
 DROP TRIGGER IF EXISTS {APPROVERS_TABLE}_keep_identities ON {APPROVERS_TABLE};
 CREATE TRIGGER {APPROVERS_TABLE}_keep_identities BEFORE UPDATE OR DELETE ON {APPROVERS_TABLE}
     FOR EACH ROW EXECUTE FUNCTION {APPROVERS_TABLE}_keep_identities();
+DROP TRIGGER IF EXISTS {APPROVERS_TABLE}_no_truncate ON {APPROVERS_TABLE};
+CREATE TRIGGER {APPROVERS_TABLE}_no_truncate BEFORE TRUNCATE ON {APPROVERS_TABLE}
+    FOR EACH STATEMENT EXECUTE FUNCTION {APPROVERS_TABLE}_keep_identities();
 """
+
+_RESOLVED_INDEX = f"""
+CREATE INDEX IF NOT EXISTS policy_audit_resolved_subject
+ON {AUDIT_TABLE} (subject_id) WHERE action = 'approval.resolved'
+"""  # the gate asks who decided a request each time it consumes an approval; the log only grows
 
 _FIND_INDEX = f"""
 CREATE INDEX IF NOT EXISTS policy_approvals_find
@@ -292,7 +302,7 @@ LEFT JOIN {APPROVERS_TABLE} p ON a.resolved_by = 'human:' || p.id
 
 _ACTIVE_APPROVERS_VIEW = f"""
 CREATE OR REPLACE VIEW {ACTIVE_APPROVERS_VIEW} AS
-SELECT 'human:' || id AS principal, db_role FROM {APPROVERS_TABLE} WHERE active
+SELECT 'human:' || id AS principal, db_role, roles FROM {APPROVERS_TABLE} WHERE active
 """  # noqa: S608 - fixed names and no input
 
 _APPROVER_LOGINS_VIEW = f"""
@@ -326,6 +336,7 @@ async def _ensure_approval_tables(connection: AsyncConnection) -> None:
             f"REVOKE ALL ON FUNCTION {ARGUMENTS_PURGE_FUNCTION}() FROM PUBLIC".encode()
         )
         await connection.execute(_FIND_INDEX.encode())
+        await connection.execute(_RESOLVED_INDEX.encode())
         await connection.execute(_DASHBOARD_VIEW.encode())
         await connection.execute(_APPROVER_LOGINS_VIEW.encode())
         await connection.execute(_ACTIVE_APPROVERS_VIEW.encode())
@@ -470,7 +481,13 @@ async def _set_up_lab_role(connection: AsyncConnection, password: str | None) ->
         return
     await ensure_role(connection, password, LAB_APPROVER_ROLE, POLICY_IDLE_IN_TRANSACTION_MS)
     await reset_role(connection, LAB_APPROVER_ROLE)
-    await connection.execute(sql.SQL("GRANT {} TO {}").format(sql.Identifier(APPROVER_ROLE), name))
+    # Inheritance is how it connects and decides; without SET it cannot `SET ROLE` to the group and
+    # write records as the shared role.
+    await connection.execute(
+        sql.SQL("GRANT {} TO {} WITH INHERIT TRUE, SET FALSE").format(
+            sql.Identifier(APPROVER_ROLE), name
+        )
+    )
     # The login is the identity: a decision it writes is recorded under this role, so the approver
     # record that names it is made here and `approver-add` refuses the id.
     await connection.execute(

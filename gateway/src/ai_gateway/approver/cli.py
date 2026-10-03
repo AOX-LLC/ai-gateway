@@ -171,10 +171,8 @@ def _sign_in(url: str) -> str:
         raise ApproverError(
             f"no terminal to ask on: set {_LOGIN_ENV} and {_PASSWORD_ENV} for this one command"
         ) from None
-    host = parts.hostname or ""
+    host = parts.netloc.rpartition("@")[2]  # as written: an IPv6 address keeps its brackets
     netloc = f"{quote(login.strip(), safe='')}:{quote(password, safe='')}@{host}"
-    if parts.port:
-        netloc += f":{parts.port}"
     return urlunsplit(parts._replace(netloc=netloc))
 
 

@@ -249,21 +249,24 @@ class PostgresApprovalGate:
             )
 
     async def _decided_by_an_active_approver(self, request: ApprovalRequest) -> bool:
-        """The decision was written by the login of an approver who is still active, and says it
-        is theirs. Who wrote it is the database's word (`db_role`, set by a trigger), not the
-        request's `resolved_by`, which is whatever the deciding tool put there. Removing an approver
-        takes effect on the requests they approved but nobody has used yet, at once, not at the
-        next setup. A decision made through the shared approver role, before the logins, does not
-        count: the client asks again."""
+        """The decision was written by the login of an approver who is still active and holds the
+        role the request needed, and the request says that approver decided it.
+
+        Who wrote the decision is the database's word (`db_role`, set by a trigger); `resolved_by`
+        is whatever the deciding tool put there, so the two must agree, or a login could approve in
+        plain SQL under another name. Removing an approver takes effect on the requests they
+        approved but nobody has used yet, at once, not at the next setup. A decision made through
+        the shared approver role, before the logins, does not count: the client asks again."""
 
         def read(session: Any) -> list[tuple[Any, ...]]:
             rows: list[tuple[Any, ...]] = session.execute(
                 "SELECT 1 FROM policy.agent_core_audit e"  # noqa: S608 - fixed names
                 f" JOIN policy.{ACTIVE_APPROVERS_VIEW} a ON a.db_role = e.db_role"
                 " WHERE e.action = 'approval.resolved' AND e.subject_id = ?"
-                ' AND e.actor_id = a.principal AND e.payload LIKE \'%"decision":"approve"%\''
+                " AND e.actor_id = a.principal AND a.principal = ?"
+                ' AND ? = ANY(a.roles) AND e.payload LIKE \'%"decision":"approve"%\''
                 " LIMIT 1",
-                (str(request.id),),
+                (str(request.id), request.resolved_by, request.required_role),
             )
             return rows
 

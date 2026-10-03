@@ -100,7 +100,9 @@ by a trigger, whoever the writer claims to be. Records from before audit schema 
 gateway role: agent-core refuses an append from the role that owns the table."""
 
 
-def _check_provenance(record: AuditRecord, logins: Mapping[str, str]) -> None:
+def _check_provenance(
+    record: AuditRecord, logins: Mapping[str, str], *, shared_role_may_decide: bool
+) -> None:
     """Who may have written the record, and for a decision, whose it says it is.
 
     A decision is written by an approver's own login (`logins` maps each login to the approver it
@@ -117,7 +119,9 @@ def _check_provenance(record: AuditRecord, logins: Mapping[str, str]) -> None:
                     f"record {record.seq} ({action}) was written by the login of approver"
                     f" {logins[db_role]} but is a decision by {record.actor_id}"
                 )
-        elif db_role not in (APPROVER_ROLE, LAB_APPROVER_ROLE):
+        elif db_role == APPROVER_ROLE and shared_role_may_decide:
+            pass
+        elif db_role != LAB_APPROVER_ROLE:
             raise AuditIntegrityError(
                 f"record {record.seq} ({action}) was written by role {db_role},"
                 " which is not an approver's login"
@@ -159,8 +163,20 @@ async def verify_with_anchors(
             raise AuditIntegrityError(f"anchors disagree about record {seq}: the log was rewritten")
     newest = max(taken, key=lambda anchor: anchor.seq, default=None)
     head = await log.verify(expected_head=newest.head if newest else None)
+    first_login_seq: int | None = None
+    resolved: set[str | None] = set()
     async for record in log.iter_records():
-        _check_provenance(record, approver_logins or {})
+        if record.action.startswith("approver.") and first_login_seq is None:
+            first_login_seq = record.seq
+        _check_provenance(
+            record, approver_logins or {}, shared_role_may_decide=first_login_seq is None
+        )
+        if record.action == "approval.resolved":
+            if record.subject_id in resolved:
+                raise AuditIntegrityError(
+                    f"record {record.seq} is a second decision on request {record.subject_id}"
+                )
+            resolved.add(record.subject_id)
         if record.action == "approval.resolved" and record.db_role == LAB_APPROVER_ROLE:
             lab_decisions.append(record.seq)
         for anchor in wanted.pop(record.seq, []):

@@ -28,6 +28,9 @@ APPROVER_LOGIN_CONNECTION_LIMIT = 2
 APPROVER_LOGINS_VIEW = "approver_logins"
 """Which login is which approver, for the auditor: `audit-verify` checks a decision's author
 against it. Includes removed approvers, whose decisions stay in the log."""
+PROVISIONING_LOCK = 7_165_201_002
+"""The advisory lock that serialises policy setups and approver provisioning: they change the same
+roles and the same table."""
 LAB_APPROVER_ID = "lab-approver"
 ACTIVE_APPROVERS_VIEW = "active_approvers"
 """The approvers who may still decide, as principals (`human:<id>`), for the gateway: it will not
