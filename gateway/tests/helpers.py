@@ -115,6 +115,8 @@ def run_gateway(
     policy_database_url: str | None = None,
     unaudited_writes: bool | None = None,
     approvals: dict[str, float] | None = None,
+    allowlist: str = "",
+    rate_limits: str = "",
 ) -> Iterator[RunningGateway]:
     """The whole gateway on a free port, with only the scope layer, recording its events (and,
     given a telemetry database, storing them there too).
@@ -133,6 +135,10 @@ def run_gateway(
         f"allow_unaudited_writes = {unaudited}\n"
         f"allow_floor_override = {str(approvals is None).lower()}\n"
     )
+    allowlist_file = workdir / "allowlist.toml"
+    allowlist_file.write_text(allowlist)
+    limits_file = workdir / "rate_limits.toml"
+    limits_file.write_text(rate_limits)
     roles_file = workdir / "approval_roles.toml"
     roles_file.write_text('[roles_by_action]\necho__shout = "approver"\n')
     events = MemoryEventSink()
@@ -140,6 +146,8 @@ def run_gateway(
         database_url=SecretStr(database_url),
         pipeline_file=pipeline_file,
         approval_roles_file=roles_file,
+        allowlist_file=allowlist_file,
+        rate_limits_file=limits_file,
         telemetry_database_url=(
             SecretStr(telemetry_database_url) if telemetry_database_url else None
         ),

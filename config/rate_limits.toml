@@ -1,0 +1,19 @@
+# How fast one client may call. See the header of
+# gateway/src/ai_gateway/pipeline/layers/rate_limit.py for the format.
+#
+# A bucket holds `burst` tokens and refills `burst` tokens every `per` seconds; a call takes one.
+# The limits below are generous: normal use never meets them, a runaway client does.
+
+[reads]
+burst = 600
+per = 60
+
+[writes]
+burst = 60
+per = 60
+
+# One tool with a limit of its own, tight enough to see: this is what the traffic simulator uses to
+# show the layer working (the lookup of deals is fictional data, and cheap, so nothing is lost).
+[tools.crm__list_deals]
+burst = 4
+per = 3600

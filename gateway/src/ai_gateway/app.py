@@ -19,6 +19,8 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from ai_gateway.auth.middleware import BearerAuthMiddleware
 from ai_gateway.auth.verifier import TokenVerifier
 from ai_gateway.pipeline.config import load_pipeline_config
+from ai_gateway.pipeline.layers.allowlist import load_allowlist
+from ai_gateway.pipeline.layers.rate_limit import load_rate_limits
 from ai_gateway.pipeline.registry import LAYER_ORDER
 from ai_gateway.pipeline.runner import Pipeline
 from ai_gateway.policy.approvals import expire_due_forever, purge_arguments_forever
@@ -71,6 +73,8 @@ def create_app(settings: GatewaySettings, events: EventSink | None = None) -> Fa
         event_sink,
         audit=audit,
         approvals=approvals[0] if approvals else None,
+        allowlist=load_allowlist(settings.allowlist_file),
+        rate_limits=load_rate_limits(settings.rate_limits_file),
     )
     if telemetry is not None:
         telemetry.buffer.put(

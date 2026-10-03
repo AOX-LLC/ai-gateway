@@ -19,6 +19,8 @@ class GatewaySettings(ServiceSettings):
     port: Annotated[int, Field(ge=1, le=65535)] = 4401
     pipeline_file: Path = Path("config/pipeline.toml")
     approval_roles_file: Path = Path("config/approval_roles.toml")
+    allowlist_file: Path = Path("config/allowlist.toml")
+    rate_limits_file: Path = Path("config/rate_limits.toml")
     """The role that must approve each write tool. Read at startup with a policy database."""
     session_idle_timeout_s: Annotated[float, Field(gt=0)] = 900.0
     max_sessions: Annotated[int, Field(ge=1)] = 1000

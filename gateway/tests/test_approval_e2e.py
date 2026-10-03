@@ -187,8 +187,14 @@ def _settings(url: str, tmp_path: Path) -> GatewaySettings:
     pipeline.write_text('[layers]\napproval = "enforce"\n')
     roles = tmp_path / "approval_roles.toml"
     roles.write_text("[roles_by_action]\n")
+    (tmp_path / "allowlist.toml").write_text("")
+    (tmp_path / "rate_limits.toml").write_text("")
     return GatewaySettings(
-        database_url=SecretStr(url), pipeline_file=pipeline, approval_roles_file=roles
+        database_url=SecretStr(url),
+        pipeline_file=pipeline,
+        approval_roles_file=roles,
+        allowlist_file=tmp_path / "allowlist.toml",
+        rate_limits_file=tmp_path / "rate_limits.toml",
     )
 
 

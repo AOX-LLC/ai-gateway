@@ -34,6 +34,8 @@ class DenyCode(StrEnum):
     TOOL_UNAVAILABLE = "tool_unavailable"
     LAYER_ERROR = "layer_error"
     AUDIT_UNAVAILABLE = "audit_unavailable"
+    ALLOWLIST_VIOLATION = "allowlist_violation"
+    RATE_LIMITED = "rate_limited"
     APPROVAL_PENDING = "approval_pending"
     APPROVAL_REJECTED = "approval_rejected"
     APPROVAL_EXPIRED = "approval_expired"
