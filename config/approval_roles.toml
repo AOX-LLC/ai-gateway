@@ -11,3 +11,6 @@ tickets__create_ticket = "approver"
 tickets__add_comment = "approver"
 tickets__change_status = "approver"
 tickets__assign = "approver"
+# The echo test upstream (compose profile `test`): its `shout` is a write, so it needs a role too.
+# It exists only in the test stack, with fictional data.
+echo__shout = "approver"

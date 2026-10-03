@@ -201,8 +201,17 @@ jobs:
         run: |
           set -euo pipefail
           . scripts/mask.sh
-          trap 'rm -f seed.json' EXIT
+          trap 'rm -f seed.json; docker compose run --rm -T admin approver-deactivate acceptance-approver >/dev/null 2>&1 || true' EXIT
           docker compose run --rm -T admin seed-test > seed.json
+          # echo__shout is a write, so it waits for a person. This is the fictional test stack: a
+          # registered test approver approves for it (scripts/auto_approver.py, test tooling that
+          # needs --approve-as and LAB_AUTO_APPROVE=yes, and is not part of the gateway).
+          docker compose run --rm -T admin approver-add acceptance-approver --name "Acceptance test approver (test data)" > /dev/null
+          POLICY_APPROVER_DATABASE_URL=$(sed -n 's/^POLICY_APPROVER_DATABASE_URL=//p' .env)
+          POLICY_APPROVER_DB_PASSWORD=$(sed -n 's/^POLICY_APPROVER_DB_PASSWORD=//p' .env)
+          mask "$POLICY_APPROVER_DB_PASSWORD"
+          mask "$POLICY_APPROVER_DATABASE_URL"
+          export POLICY_APPROVER_DATABASE_URL LAB_AUTO_APPROVE=yes
           SUPPORT=$(python3 -c 'import json; print(json.load(open("seed.json"))["echo-test-narrow"])')
           mask "$SUPPORT"
           OPS=$(python3 -c 'import json; print(json.load(open("seed.json"))["echo-test-wide"])')
@@ -211,7 +220,7 @@ jobs:
           # take a moment to show up: retry the first check for at most about 60 seconds.
           retry() { for _ in $(seq 1 30); do "$@" && return 0; sleep 2; done; "$@"; }
           GATEWAY_TOKEN="$SUPPORT" retry uv run scripts/test_client.py --expect echo__say --refused echo__shout
-          GATEWAY_TOKEN="$OPS" uv run scripts/test_client.py --expect echo__say --expect echo__shout
+          GATEWAY_TOKEN="$OPS" uv run scripts/test_client.py --expect echo__say --expect echo__shout --approve-as acceptance-approver
           LOOKUP_ID=$(echo "$SUPPORT" | cut -d_ -f2)
           docker compose run --rm -T admin token-revoke "$LOOKUP_ID"
           GATEWAY_TOKEN="$SUPPORT" uv run scripts/test_client.py --expect-rejected

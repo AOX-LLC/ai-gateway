@@ -49,7 +49,7 @@ def test_the_gateway_never_names_delegates_so_only_the_asking_client_can_use_an_
     assert _keyword_uses("delegates") == []
 
 
-def test_every_write_tool_has_an_approver_role_and_only_write_tools_do() -> None:
+def test_every_write_tool_has_an_approver_role_and_only_write_tools_have_one() -> None:
     policies = tomllib.loads((ROOT / "config" / "tool_policies.toml").read_text())
     writes = {
         f"{namespace}__{tool}"
@@ -60,7 +60,8 @@ def test_every_write_tool_has_an_approver_role_and_only_write_tools_do() -> None
     roles = load_roles_by_action(ROOT / "config" / "approval_roles.toml")
 
     assert writes
-    assert set(roles) == writes
+    assert writes <= set(roles), "every write tool has a role"
+    assert set(roles) - writes == {"echo__shout"}, "and the only extra is the test upstream's write"
     assert set(roles.values()) == {"approver"}
 
 
@@ -212,9 +213,19 @@ def test_nothing_in_the_gateway_imports_the_test_approver() -> None:
         assert "auto_approver" not in path.read_text(), path
 
 
-def test_the_default_environment_and_the_workflow_do_not_switch_it_on() -> None:
+def test_the_default_environment_and_the_workflow_do_not_switch_it_on_globally() -> None:
     assert "LAB_AUTO_APPROVE" not in (ROOT / ".env.example").read_text()
-    assert "LAB_AUTO_APPROVE" not in (ROOT / ".github" / "workflows" / "ci.yml").read_text()
+    workflow = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())
+    # Not at workflow, job or step level: only inside the script of a step that runs the fictional
+    # test stack, next to --approve-as.
+    assert "LAB_AUTO_APPROVE" not in str(workflow.get("env", {}))
+    for job in workflow["jobs"].values():
+        assert "LAB_AUTO_APPROVE" not in str(job.get("env", {}))
+        for step in job["steps"]:
+            assert "LAB_AUTO_APPROVE" not in str(step.get("env", {}))
+            if "LAB_AUTO_APPROVE" in str(step.get("run", "")):
+                assert "--approve-as" in step["run"]
+                assert job is workflow["jobs"]["e2e"]
 
 
 def _load_auto_approver() -> Any:
