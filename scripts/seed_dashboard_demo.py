@@ -29,6 +29,7 @@ import math
 import os
 import random
 import re
+import subprocess
 import sys
 import uuid
 from collections import Counter
@@ -273,17 +274,17 @@ def _tools_list(
         _request(
             rng,
             ts,
-            "tools_list",
-            client,
-            client_ids,
-            None,
-            None,
-            "listed",
-            None,
-            None,
-            None,
-            rng.uniform(0.3, 1.2),
-            sha,
+            kind="tools_list",
+            client=client,
+            client_ids=client_ids,
+            tool=None,
+            effect=None,
+            outcome="listed",
+            blocked_by=None,
+            deny_code=None,
+            upstream=None,
+            duration=rng.uniform(0.3, 1.2),
+            sha=sha,
         )
         | {"tools_available": 11, "tools_returned": len(SCOPES[client])}
     )
@@ -292,6 +293,7 @@ def _tools_list(
 def _request(
     rng: random.Random,
     ts: datetime,
+    *,
     kind: str,
     client: str,
     client_ids: dict[str, str],
@@ -391,17 +393,17 @@ def _call(
     row = _request(
         rng,
         ts,
-        "tool_call",
-        client,
-        client_ids,
-        tool,
-        effect,
-        outcome,
-        blocked_by,
-        deny_code,
-        upstream,
-        duration,
-        sha,
+        kind="tool_call",
+        client=client,
+        client_ids=client_ids,
+        tool=tool,
+        effect=effect,
+        outcome=outcome,
+        blocked_by=blocked_by,
+        deny_code=deny_code,
+        upstream=upstream,
+        duration=duration,
+        sha=sha,
     )
     result.requests.append(row)
     modes = dict(LAYERS)
@@ -517,6 +519,40 @@ def write_backfill(url: str, backfill: Backfill) -> None:
                 cursor, "layer_verdicts", VERDICT_COLUMNS, backfill.verdicts[start : start + 2000]
             )
         insert(cursor, "auth_failures", AUTH_COLUMNS, backfill.auth_failures)
+
+
+DEMO_PROJECT = "ai-gateway-demo"
+
+
+def not_the_demo_stack(port: int) -> str | None:
+    """Why the database published on this port is not the demo stack's, or None when it is.
+
+    A fresh real stack has no requests either, so "empty" does not say whose it is: the container
+    that publishes the port must belong to the demo Compose project."""
+    try:
+        done = subprocess.run(  # noqa: S603 - fixed command, port from this script's own argument
+            [  # noqa: S607 - docker on PATH, as everywhere else here
+                "docker",
+                "ps",
+                "--filter",
+                f"publish={port}",
+                "--format",
+                '{{.Label "com.docker.compose.project"}}',
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as error:
+        return f"cannot tell which stack owns port {port} ({error.__class__.__name__})"
+    projects = {line for line in done.stdout.split() if line}
+    if projects == {DEMO_PROJECT}:
+        return None
+    return (
+        f"the database on port {port} is not the demo stack's (Compose project"
+        f" {sorted(projects) or 'none found'}, not {DEMO_PROJECT});"
+        " run scripts/run_dashboard_demo.sh"
+    )
 
 
 def existing_requests(reader_url: str) -> int:
@@ -708,6 +744,9 @@ def main(argv: list[str] | None = None) -> None:
     )
     if args.dry_run:
         return
+    refusal = not_the_demo_stack(args.port)
+    if refusal:
+        sys.exit(f"seed_dashboard_demo: {refusal}")
     env = read_env(args.env_file)
     reader = database_url(
         env, "telemetry_reader", "TELEMETRY_READER_DB_PASSWORD", args.host, args.port

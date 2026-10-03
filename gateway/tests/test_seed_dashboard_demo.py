@@ -159,7 +159,8 @@ def test_the_seeds_pipeline_fingerprint_is_the_gateways_for_the_demo_pipeline() 
 def test_the_demo_override_changes_only_what_it_says_and_never_the_real_admin_credential() -> None:
     override = yaml.safe_load((ROOT / "compose.demo.yaml").read_text(encoding="utf-8"))
 
-    assert set(override) == {"services"}
+    assert set(override) == {"name", "services"}
+    assert override["name"] == "ai-gateway-demo", "by hand it must still not be the real project"
     assert set(override["services"]) == {"gateway", "dashboard"}
     assert set(override["services"]["gateway"]) == {"environment"}
     assert set(override["services"]["dashboard"]) == {"environment"}
@@ -175,3 +176,41 @@ def test_the_demo_override_changes_only_what_it_says_and_never_the_real_admin_cr
     assert ":?" in dashboard["DASHBOARD_ADMIN_PASSWORD_HASH"], (
         "required, with no default to fall back to"
     )
+    secret = dashboard["DASHBOARD_SESSION_SECRET"]
+    assert "DEMO_SESSION_SECRET" in secret, "its own secret, not .env's"
+    assert ":?" in secret, "required, so a cookie signed with the real secret is never accepted"
+
+
+def _docker_says(monkeypatch: pytest.MonkeyPatch, module: ModuleType, stdout: str) -> None:
+    def fake_run(*_: Any, **__: Any) -> Any:
+        return type("Done", (), {"stdout": stdout})()
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+
+
+def test_the_seed_refuses_a_database_that_is_not_the_demo_stacks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load()
+
+    def says(stdout: str) -> str | None:
+        _docker_says(monkeypatch, module, stdout)
+        refusal: str | None = module.not_the_demo_stack(4402)
+        return refusal
+
+    assert "not the demo stack's" in (says("ai-gateway\n") or "")
+    assert "none found" in (says("") or "")
+    assert says("ai-gateway-demo\n") is None
+
+
+def test_the_seed_refuses_when_it_cannot_tell_whose_database_it_is(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load()
+
+    def no_docker(*_: Any, **__: Any) -> Any:
+        raise FileNotFoundError("docker")
+
+    monkeypatch.setattr(module.subprocess, "run", no_docker)
+
+    assert "cannot tell" in (module.not_the_demo_stack(4402) or "")

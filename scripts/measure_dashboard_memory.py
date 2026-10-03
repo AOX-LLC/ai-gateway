@@ -14,8 +14,9 @@ cgroup's own recorded peak is read at the end:
   4. a sign-in burst: thirty concurrent attempts with a wrong password (the throttle answers most).
 
 The limit it suggests is 1.5 times the highest peak seen (rounded up to 16 MiB, at least 128), and
-the Node heap 60% of that. It prints the numbers and changes nothing. The password is read from
-the environment and never printed."""
+the Node heap 60% of that. It prints the numbers and changes no file or setting; it does restart the
+dashboard container before each round (so each starts cold), and refuses any container that is not
+the demo project's. The password is read from the environment and never printed."""
 
 import argparse
 import contextlib
@@ -31,6 +32,7 @@ import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 
 COOKIE = "__Host-aig_session"
+DEMO_PROJECT = "ai-gateway-demo"
 
 
 def docker(*args: str) -> str:
@@ -141,9 +143,21 @@ def main() -> None:
     password = os.environ.get("DASHBOARD_PASSWORD", "")
     if not password:
         sys.exit("measure: set DASHBOARD_PASSWORD (the demo stack's)")
-    container = args.container or docker("compose", "ps", "-q", "dashboard")
+    container = args.container or docker(
+        "ps",
+        "-q",
+        "--filter",
+        f"label=com.docker.compose.project={DEMO_PROJECT}",
+        "--filter",
+        "label=com.docker.compose.service=dashboard",
+    )
     if not container:
-        sys.exit("measure: no dashboard container (is the demo stack up? COMPOSE_PROJECT_NAME?)")
+        sys.exit("measure: no dashboard container of the demo stack (is it up?)")
+    project = docker(
+        "inspect", "-f", '{{index .Config.Labels "com.docker.compose.project"}}', container
+    )
+    if project != DEMO_PROJECT:
+        sys.exit(f"measure: {container[:12]} belongs to project {project!r}, not {DEMO_PROJECT}")
     limit = int(docker("inspect", "-f", "{{.HostConfig.Memory}}", container))
     results: list[dict[str, object]] = []
 

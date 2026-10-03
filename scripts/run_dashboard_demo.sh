@@ -9,19 +9,17 @@
 #   scripts/run_dashboard_demo.sh down      # remove the stack and its data
 #   scripts/run_dashboard_demo.sh all       # up, seed, shots
 #
-# It uses a Compose project of its own (ai-gateway-demo), so a real stack's data is never touched, and a
-# demo-only admin password made for this run (kept in .demo/, which is git-ignored and removed by `down`).
+# It always uses a Compose project of its own (ai-gateway-demo), so a real stack's data is never touched,
+# and a demo-only admin password and session secret made for this run (kept in .demo/, which is git-ignored and removed by `down`).
 # Your real admin password hash in .env is not read or changed. If the machine is shared, run this under
 # the shared Docker lock: flock ~/portfolio-projects/.locks/docker scripts/run_dashboard_demo.sh all
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-export COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-ai-gateway-demo}"
-if [ "$COMPOSE_PROJECT_NAME" = "ai-gateway" ]; then
-  echo "run_dashboard_demo: refusing to run as the project 'ai-gateway' (a real stack's name)" >&2
-  exit 1
-fi
+# Always the demo project, whatever the shell inherited: `down` removes its volumes.
+export COMPOSE_PROJECT_NAME=ai-gateway-demo
 STATE=.demo
+trap 'rm -f "$STATE/tokens.json"' EXIT
 COMPOSE=(docker compose -f compose.yaml -f compose.demo.yaml)
 
 demo_password() {
@@ -30,6 +28,10 @@ demo_password() {
   if [ ! -s "$STATE/password" ]; then
     (umask 077; python3 -c 'import secrets; print(secrets.token_urlsafe(18))' > "$STATE/password")
   fi
+  if [ ! -s "$STATE/session-secret" ]; then
+    (umask 077; python3 -c 'import secrets; print(secrets.token_urlsafe(32))' > "$STATE/session-secret")
+  fi
+  DEMO_SESSION_SECRET=$(cat "$STATE/session-secret")
   DASHBOARD_PASSWORD=$(cat "$STATE/password")
   DEMO_DASHBOARD_PASSWORD_HASH=$(python3 - <<'PY'
 import importlib.util, os
@@ -39,7 +41,7 @@ spec.loader.exec_module(module)
 print(module.hash_password(open(".demo/password").read().strip()))
 PY
 )
-  export DASHBOARD_PASSWORD DEMO_DASHBOARD_PASSWORD_HASH
+  export DASHBOARD_PASSWORD DEMO_DASHBOARD_PASSWORD_HASH DEMO_SESSION_SECRET
 }
 
 up() {
@@ -77,7 +79,6 @@ seed() {
   export DEMO_APPROVER_1_URL DEMO_APPROVER_2_URL
   (umask 077; "${COMPOSE[@]}" run --rm -T admin seed-demo > "$STATE/tokens.json")
   nice -n 19 uv run scripts/seed_dashboard_demo.py --tokens-file "$STATE/tokens.json"
-  rm -f "$STATE/tokens.json"
 }
 
 case "${1:-}" in
@@ -86,7 +87,7 @@ case "${1:-}" in
   shots) demo_password; nice -n 19 uv run scripts/screenshots.py --out docs/images ;;
   memory) demo_password; nice -n 19 python3 scripts/measure_dashboard_memory.py ;;
   down)
-    export DEMO_DASHBOARD_PASSWORD_HASH=unused
+    export DEMO_DASHBOARD_PASSWORD_HASH=unused DEMO_SESSION_SECRET=unused
     "${COMPOSE[@]}" down -v
     rm -rf "$STATE"
     ;;
