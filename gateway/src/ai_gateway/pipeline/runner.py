@@ -17,6 +17,8 @@ from typing import Literal
 import anyio
 from mcp.types import CallToolResult
 from opentelemetry import trace
+from opentelemetry.context import Context
+from opentelemetry.trace import Span
 from pydantic import JsonValue
 
 from ai_gateway.pipeline.config import PipelineConfig
@@ -33,16 +35,17 @@ from ai_gateway.pipeline.types import (
     displayable_tool_name,
     tool_unavailable_message,
 )
-from ai_gateway.seams.events import EventSink, GatewayEvent
+from ai_gateway.seams.events import DEFAULT_EMIT_TIMEOUT_S, EventSink, GatewayEvent
 from ai_gateway.telemetry import attributes
 
 logger = logging.getLogger(__name__)
 _tracer = trace.get_tracer("ai_gateway")
+# Every request starts a trace of its own. The MCP SDK parents its server span under a
+# `traceparent` the client sent in `_meta`, and the call to the upstream carries the trace
+# context that is current when it is made; starting the gateway's spans in an empty context,
+# not under the SDK's, means a client cannot choose which trace an upstream call joins.
 
 POLICY_BLOCK_MESSAGE = "Request blocked by gateway policy."
-
-DEFAULT_EMIT_TIMEOUT_S = 2.0
-"""How long recording one event may take before the request goes on without it."""
 
 
 class UpstreamStatus(StrEnum):
@@ -76,11 +79,14 @@ class Blocked:
 CallOutcome = Forwarded | Blocked
 
 LayerVerdict = Literal["allow", "deny", "would_block", "off", "error"]
+Hook = Literal["filter", "before_call", "after_call"]
+"""Which step of the pipeline a verdict came from."""
 
 
 @dataclass(frozen=True)
 class LayerDecision:
     layer: str
+    hook: Hook
     mode: LayerMode
     verdict: LayerVerdict
     code: str | None = None
@@ -90,6 +96,7 @@ class LayerDecision:
     def to_payload(self) -> dict[str, JsonValue]:
         payload: dict[str, JsonValue] = {
             "layer": self.layer,
+            "hook": self.hook,
             "mode": self.mode.value,
             "verdict": self.verdict,
             "duration_ms": round(self.duration_ms, 3),
@@ -99,6 +106,16 @@ class LayerDecision:
         if self.tools_removed is not None:
             payload["tools_removed"] = self.tools_removed
         return payload
+
+
+def _describe_request(span: Span, ctx: CallContext, details: dict[str, JsonValue]) -> None:
+    """Name the request on its span and, when a tracer is recording, put the trace id in the
+    decision record so the two can be joined."""
+    span.set_attribute(attributes.GATEWAY_REQUEST_ID, str(ctx.request_id))
+    span.set_attribute(attributes.GATEWAY_CLIENT, ctx.client.name)
+    trace_id = span.get_span_context().trace_id
+    if trace_id:
+        details["trace_id"] = format(trace_id, "032x")
 
 
 class Pipeline:
@@ -114,6 +131,10 @@ class Pipeline:
         self._events = events
         self._emit_timeout_s = emit_timeout_s
 
+    def describe(self) -> list[dict[str, str]]:
+        """The layers and their modes, in pipeline order, for the telemetry store."""
+        return [{"name": layer.name, "mode": mode.value} for layer, mode in self._layers]
+
     @classmethod
     def build(
         cls,
@@ -127,7 +148,9 @@ class Pipeline:
         started = time.perf_counter()
         visible = list(tools)
         decisions = []
-        with _tracer.start_as_current_span(attributes.SPAN_TOOLS_LIST):
+        details: dict[str, JsonValue] = {}
+        with _tracer.start_as_current_span(attributes.SPAN_TOOLS_LIST, context=Context()) as span:
+            _describe_request(span, ctx, details)
             for layer, mode in self._layers:
                 decision, visible = await self._filter_with(layer, mode, ctx, visible)
                 decisions.append(decision)
@@ -138,7 +161,7 @@ class Pipeline:
             subject_id=None,
             decisions=decisions,
             started=started,
-            details={"tools_available": len(tools), "tools_returned": len(visible)},
+            details={**details, "tools_available": len(tools), "tools_returned": len(visible)},
         )
         return visible
 
@@ -147,27 +170,37 @@ class Pipeline:
         decisions: list[LayerDecision] = []
         details: dict[str, JsonValue] = {
             "arguments_sha256": call.arguments_sha256,
+            "namespace": call.namespace,
             "effect": call.effect,
             "effect_source": call.effect_source,
         }
 
-        with _tracer.start_as_current_span(attributes.SPAN_TOOL_CALL) as span:
+        with _tracer.start_as_current_span(attributes.SPAN_TOOL_CALL, context=Context()) as span:
             span.set_attribute(attributes.GATEWAY_TOOL, call.exposed_name)
+            _describe_request(span, ctx, details)
 
             for layer, mode in self._layers:
                 block = await self._check_with(
-                    layer, mode, decisions, partial(layer.before_call, ctx, call)
+                    layer, mode, decisions, "before_call", partial(layer.before_call, ctx, call)
                 )
                 if block is not None:
                     return await self._finish_blocked(ctx, call, block, decisions, started, details)
 
+            upstream_started = time.perf_counter()
             with _tracer.start_as_current_span(attributes.SPAN_UPSTREAM_CALL):
                 upstream = await forward(ctx, call)
+            details["upstream_duration_ms"] = round(
+                (time.perf_counter() - upstream_started) * 1000, 3
+            )
             details["upstream_status"] = upstream.status.value
 
             for layer, mode in self._layers:
                 block = await self._check_with(
-                    layer, mode, decisions, partial(layer.after_call, ctx, call, upstream.result)
+                    layer,
+                    mode,
+                    decisions,
+                    "after_call",
+                    partial(layer.after_call, ctx, call, upstream.result),
                 )
                 if block is not None:
                     return await self._finish_blocked(ctx, call, block, decisions, started, details)
@@ -193,8 +226,9 @@ class Pipeline:
     async def _filter_with(
         self, layer: BaseLayer, mode: LayerMode, ctx: CallContext, visible: list[CatalogTool]
     ) -> tuple[LayerDecision, list[CatalogTool]]:
+        hook: Hook = "filter"
         if mode is LayerMode.OFF:
-            return LayerDecision(layer.name, mode, "off"), visible
+            return LayerDecision(layer.name, hook, mode, "off"), visible
 
         started = time.perf_counter()
         try:
@@ -203,7 +237,7 @@ class Pipeline:
             # Fail closed: in enforce mode a layer that cannot decide hides every tool.
             # Catching broadly is deliberate here; the traceback is logged.
             logger.exception("layer %s failed in filter_tools", layer.name)
-            decision = LayerDecision(layer.name, mode, "error", DenyCode.LAYER_ERROR.value)
+            decision = LayerDecision(layer.name, hook, mode, "error", DenyCode.LAYER_ERROR.value)
             return decision, (visible if mode is LayerMode.MONITOR else [])
 
         # Layers may only remove tools, never add or alter them.
@@ -212,20 +246,23 @@ class Pipeline:
         elapsed_ms = (time.perf_counter() - started) * 1000
         if mode is LayerMode.MONITOR:
             verdict: LayerVerdict = "would_block" if removed else "allow"
-            return LayerDecision(layer.name, mode, verdict, None, removed, elapsed_ms), visible
+            return LayerDecision(
+                layer.name, hook, mode, verdict, None, removed, elapsed_ms
+            ), visible
         verdict = "deny" if removed else "allow"
-        return LayerDecision(layer.name, mode, verdict, None, removed, elapsed_ms), kept
+        return LayerDecision(layer.name, hook, mode, verdict, None, removed, elapsed_ms), kept
 
     async def _check_with(
         self,
         layer: BaseLayer,
         mode: LayerMode,
         decisions: list[LayerDecision],
+        hook: Hook,
         run_hook: Callable[[], Awaitable[Verdict]],
     ) -> tuple[str, Deny] | None:
         """Run one layer hook, record its verdict, and return (layer, deny) if it blocks."""
         if mode is LayerMode.OFF:
-            decisions.append(LayerDecision(layer.name, mode, "off"))
+            decisions.append(LayerDecision(layer.name, hook, mode, "off"))
             return None
 
         started = time.perf_counter()
@@ -237,22 +274,24 @@ class Pipeline:
                 # Catching broadly is deliberate here; the traceback is logged.
                 logger.exception("layer %s failed", layer.name)
                 code = DenyCode.LAYER_ERROR
-                decisions.append(LayerDecision(layer.name, mode, "error", code.value))
+                decisions.append(LayerDecision(layer.name, hook, mode, "error", code.value))
                 if mode is LayerMode.MONITOR:
                     return None
                 return layer.name, Deny(code, POLICY_BLOCK_MESSAGE)
         elapsed_ms = (time.perf_counter() - started) * 1000
 
         if not isinstance(verdict, Deny):
-            decisions.append(LayerDecision(layer.name, mode, "allow", duration_ms=elapsed_ms))
+            decisions.append(LayerDecision(layer.name, hook, mode, "allow", duration_ms=elapsed_ms))
             return None
         code_value = verdict.code.value
         if mode is LayerMode.MONITOR:
             decisions.append(
-                LayerDecision(layer.name, mode, "would_block", code_value, None, elapsed_ms)
+                LayerDecision(layer.name, hook, mode, "would_block", code_value, None, elapsed_ms)
             )
             return None
-        decisions.append(LayerDecision(layer.name, mode, "deny", code_value, None, elapsed_ms))
+        decisions.append(
+            LayerDecision(layer.name, hook, mode, "deny", code_value, None, elapsed_ms)
+        )
         return layer.name, verdict
 
     async def _finish_blocked(
@@ -286,6 +325,7 @@ class Pipeline:
         try:
             payload: dict[str, JsonValue] = {
                 "request_id": str(ctx.request_id),
+                "client_name": ctx.client.name,
                 "protocol_version": ctx.protocol_version,
                 "pipeline_config_sha256": self._config.sha256,
                 "enabled_layers": list(self._config.enabled_layers),

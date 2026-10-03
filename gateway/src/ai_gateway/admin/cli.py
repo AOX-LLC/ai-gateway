@@ -22,6 +22,7 @@ from ai_gateway.registry import MIGRATIONS_PACKAGE
 from ai_gateway.registry.models import CREDENTIAL_ENV_SUFFIX, ClientStatus
 from ai_gateway.registry.repo import AdminRegistry, ClientNotFoundError
 from ai_gateway.registry.tool_policies import ToolPolicyFileError, load_tool_policies
+from ai_gateway.telemetry.setup import TelemetryPasswords, setup_telemetry
 from mcp_common.migrate import apply_migrations
 
 _DATABASE_URL_ENV = "GATEWAY_MIGRATE_DATABASE_URL"
@@ -90,6 +91,12 @@ def _parser() -> argparse.ArgumentParser:
 
     migrate = commands.add_parser("migrate", help="apply database migrations")
     migrate.set_defaults(handler=_migrate)
+
+    telemetry_setup = commands.add_parser(
+        "telemetry-setup",
+        help="create the telemetry roles and schema, migrate and grant (safe to repeat)",
+    )
+    telemetry_setup.set_defaults(handler=_telemetry_setup)
 
     client_add = commands.add_parser("client-add", help="create or update a client")
     client_add.add_argument("name")
@@ -184,6 +191,26 @@ def _verb(status: ClientStatus) -> str:
 async def _migrate(database_url: str, _: argparse.Namespace) -> None:
     applied = await apply_migrations(database_url, MIGRATIONS_PACKAGE)
     print(f"applied migrations: {applied}" if applied else "database is up to date")
+
+
+async def _telemetry_setup(database_url: str, _: argparse.Namespace) -> None:
+    variables = (
+        "TELEMETRY_WRITER_DB_PASSWORD",
+        "TELEMETRY_READER_DB_PASSWORD",
+        "TELEMETRY_PURGER_DB_PASSWORD",
+    )
+    missing = [name for name in variables if not os.environ.get(name)]
+    if missing:
+        raise AdminError(f"{', '.join(missing)} is not set (python3 scripts/init_env.py adds it)")
+    await setup_telemetry(
+        database_url,
+        TelemetryPasswords(
+            writer=os.environ["TELEMETRY_WRITER_DB_PASSWORD"],
+            reader=os.environ["TELEMETRY_READER_DB_PASSWORD"],
+            purger=os.environ["TELEMETRY_PURGER_DB_PASSWORD"],
+        ),
+    )
+    print("telemetry schema is set up")
 
 
 async def _client_add(database_url: str, args: argparse.Namespace) -> None:

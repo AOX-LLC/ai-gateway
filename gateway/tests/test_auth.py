@@ -5,6 +5,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
+import anyio
 import httpx2
 import pytest
 from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
@@ -21,7 +22,7 @@ from ai_gateway.auth.verifier import (
     VerifiedClient,
 )
 from ai_gateway.registry.models import ClientStatus, StoredToken
-from ai_gateway.seams.events import MemoryEventSink
+from ai_gateway.seams.events import EventSink, GatewayEvent, MemoryEventSink
 
 NOW = datetime(2026, 10, 1, 12, 0, tzinfo=UTC)
 
@@ -243,3 +244,41 @@ async def test_raw_tokens_never_reach_logs_or_events(
     for token in (good, revoked):
         secret = token.plaintext.split("_", 2)[2]
         assert secret not in recorded
+
+
+# A sink that fails or stalls must never delay or fail a 401
+
+
+class _RaisingSink:
+    async def emit(self, event: GatewayEvent) -> None:
+        raise RuntimeError("sink is broken")
+
+
+class _HangingSink:
+    async def emit(self, event: GatewayEvent) -> None:
+        await anyio.sleep_forever()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("sink", [_RaisingSink(), _HangingSink()], ids=["raising", "hanging"])
+async def test_a_failing_sink_leaves_the_401_unchanged(
+    verifier: TokenVerifier, sink: EventSink, caplog: pytest.LogCaptureFixture
+) -> None:
+    app = BearerAuthMiddleware(_whoami, verifier, sink, emit_timeout_s=0.05)
+    reference = MemoryEventSink()
+    async with _client(verifier, reference) as client:
+        expected = await client.get("/")
+
+    caplog.set_level(logging.ERROR, logger="ai_gateway.auth.middleware")
+    async with httpx2.AsyncClient(
+        transport=httpx2.ASGITransport(app=app), base_url="http://127.0.0.1"
+    ) as client:
+        with anyio.fail_after(2):
+            missing = await client.get("/")
+            malformed = await client.get("/", headers={"Authorization": "Bearer nonsense"})
+
+    assert missing.status_code == malformed.status_code == 401
+    assert missing.content == expected.content
+    assert missing.headers["www-authenticate"] == expected.headers["www-authenticate"]
+    assert malformed.headers["www-authenticate"].endswith('error="invalid_token"')
+    assert "could not record" in caplog.text

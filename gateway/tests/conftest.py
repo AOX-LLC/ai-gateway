@@ -9,13 +9,19 @@ from uuid import UUID, uuid4
 
 import psycopg
 import pytest
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from psycopg import sql
-from psycopg.conninfo import make_conninfo
+from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from psycopg_pool import AsyncConnectionPool
 
 from ai_gateway.auth.tokens import IssuedToken, generate_token
 from ai_gateway.registry import MIGRATIONS_PACKAGE
 from ai_gateway.registry.repo import AdminRegistry
+from ai_gateway.telemetry import SCHEMA as TELEMETRY_SCHEMA
+from ai_gateway.telemetry.setup import TelemetryPasswords, setup_telemetry
 from crm_server import CONNECTION_KWARGS as CRM_CONNECTION_KWARGS
 from crm_server import MIGRATIONS_PACKAGE as CRM_MIGRATIONS_PACKAGE
 from crm_server import ROLE as CRM_ROLE
@@ -34,9 +40,9 @@ from harborline_setup.handbook import grant_handbook_access, prepare_schema
 from harborline_setup.handbook_seed import Dataset as HandbookDataset
 from harborline_setup.handbook_seed import build_dataset as build_handbook_dataset
 from harborline_setup.handbook_seed import insert_dataset as insert_handbook_dataset
-from harborline_setup.shared import restrict_database_access
 from harborline_setup.ticketing import grant_ticketing_access
 from mcp_common.migrate import apply_migrations
+from mcp_common.roles import restrict_database_access
 from tests.helpers import HANDBOOK_DOCUMENTS, serve_in_thread
 from ticketing_server import CONNECTION_KWARGS as TICKETING_CONNECTION_KWARGS
 from ticketing_server import MIGRATIONS_PACKAGE as TICKETING_MIGRATIONS_PACKAGE
@@ -303,3 +309,67 @@ async def scratch_database(test_database_url: str) -> AsyncIterator[tuple[str, s
                 sql.SQL("DROP DATABASE {} WITH (FORCE)").format(sql.Identifier(database))
             )
             await conn.execute(sql.SQL("DROP ROLE IF EXISTS {}").format(sql.Identifier(role)))
+
+
+@pytest.fixture(scope="session")
+def _recording_tracer() -> InMemorySpanExporter:
+    """Install a real tracer provider once for the test run (OpenTelemetry allows it once),
+    exporting every finished span to memory."""
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    trace.set_tracer_provider(provider)
+    return exporter
+
+
+@pytest.fixture
+def spans(_recording_tracer: InMemorySpanExporter) -> Iterator[InMemorySpanExporter]:
+    """The spans finished during one test."""
+    _recording_tracer.clear()
+    yield _recording_tracer
+    _recording_tracer.clear()
+
+
+# --- telemetry ----------------------------------------------------------------------------------
+
+
+def _url(variable: str) -> str:
+    url = os.environ.get(variable)
+    if not url:
+        pytest.skip(f"{variable} is not set")
+    return url
+
+
+@pytest.fixture
+def writer_url() -> str:
+    return _url("TELEMETRY_WRITER_TEST_DATABASE_URL")
+
+
+@pytest.fixture
+def reader_url() -> str:
+    return _url("TELEMETRY_READER_TEST_DATABASE_URL")
+
+
+@pytest.fixture
+def purger_url() -> str:
+    return _url("TELEMETRY_PURGER_TEST_DATABASE_URL")
+
+
+def password_of(url: str) -> str:
+    return str(conninfo_to_dict(url)["password"])
+
+
+@pytest.fixture
+async def telemetry(
+    test_database_url: str, writer_url: str, reader_url: str, purger_url: str
+) -> None:
+    """A fresh telemetry schema, set up the way `gateway-admin telemetry-setup` sets it up.
+    The roles use the passwords the rest of the suite logs in with."""
+    async with await psycopg.AsyncConnection.connect(test_database_url, autocommit=True) as conn:
+        await conn.execute(f"DROP SCHEMA IF EXISTS {TELEMETRY_SCHEMA} CASCADE".encode())
+    await setup_telemetry(
+        test_database_url,
+        TelemetryPasswords(
+            password_of(writer_url), password_of(reader_url), password_of(purger_url)
+        ),
+    )

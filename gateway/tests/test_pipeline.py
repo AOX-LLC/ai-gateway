@@ -1,7 +1,8 @@
 """The request pipeline: configuration, ordering, modes, failing closed, and records."""
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import replace
 from typing import Any
 from uuid import uuid4
@@ -9,11 +10,12 @@ from uuid import uuid4
 import anyio
 import pytest
 from mcp.types import CallToolResult, TextContent, Tool
+from opentelemetry import trace
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from ai_gateway.pipeline.config import PipelineConfigError, parse_pipeline_config
 from ai_gateway.pipeline.layers.scope import ScopeLayer
 from ai_gateway.pipeline.runner import (
-    DEFAULT_EMIT_TIMEOUT_S,
     Blocked,
     Forwarded,
     Pipeline,
@@ -32,7 +34,12 @@ from ai_gateway.pipeline.types import (
     ToolCall,
     Verdict,
 )
-from ai_gateway.seams.events import EventSink, GatewayEvent, MemoryEventSink
+from ai_gateway.seams.events import (
+    DEFAULT_EMIT_TIMEOUT_S,
+    EventSink,
+    GatewayEvent,
+    MemoryEventSink,
+)
 
 
 class TraceLayer(BaseLayer):
@@ -373,6 +380,78 @@ async def test_a_failing_filter_hides_every_tool_in_enforce_mode() -> None:
 
     assert listed == []
     assert _layer_decisions(events)[0]["verdict"] == "error"
+
+
+# What a record carries for the telemetry store
+
+
+@contextmanager
+def tracer_provider_span(name: str) -> Iterator[None]:
+    """Run the body inside an ambient span, as if a client's trace were already current."""
+    with trace.get_tracer("test").start_as_current_span(name):
+        yield
+
+
+@pytest.mark.anyio
+async def test_a_tool_call_record_names_the_client_namespace_hooks_and_upstream_time() -> None:
+    calls: list[str] = []
+    events = MemoryEventSink()
+    pipeline, _, _ = _pipeline({}, calls, events)
+
+    await pipeline.call_tool(_context({"echo__say"}), _call(), _forwarder(calls))
+
+    payload = events.events[-1].payload
+    assert payload["client_name"] == "harborline-support-bot"
+    assert payload["namespace"] == "echo"
+    assert isinstance(payload["upstream_duration_ms"], float)
+    assert [(d["layer"], d["hook"]) for d in _layer_decisions(events)] == [
+        ("first", "before_call"),
+        ("second", "before_call"),
+        ("first", "after_call"),
+        ("second", "after_call"),
+    ]
+
+
+@pytest.mark.anyio
+async def test_a_record_carries_the_trace_id_of_its_own_root_span(
+    spans: InMemorySpanExporter,
+) -> None:
+    calls: list[str] = []
+    events = MemoryEventSink()
+    pipeline, _, _ = _pipeline({}, calls, events)
+    ctx = _context({"echo__say"})
+
+    with tracer_provider_span("client-trace"):
+        await pipeline.call_tool(ctx, _call(), _forwarder(calls))
+
+    root = next(s for s in spans.get_finished_spans() if s.name == "gateway.tool_call")
+    assert events.events[-1].payload["trace_id"] == format(root.context.trace_id, "032x")
+    assert root.parent is None
+    assert root.attributes is not None
+    assert root.attributes["gateway.request_id"] == str(ctx.request_id)
+    assert root.attributes["gateway.client"] == "harborline-support-bot"
+
+
+@pytest.mark.anyio
+async def test_a_listing_record_marks_its_verdicts_as_filters_and_names_the_client() -> None:
+    events = MemoryEventSink()
+    pipeline, _, _ = _pipeline({}, [], events)
+
+    await pipeline.list_tools(_context({"echo__say"}), [_catalog_tool("echo__say")])
+
+    assert events.events[-1].payload["client_name"] == "harborline-support-bot"
+    assert {d["hook"] for d in _layer_decisions(events)} == {"filter"}
+
+
+@pytest.mark.anyio
+async def test_a_blocked_call_has_no_upstream_time() -> None:
+    events = MemoryEventSink()
+    pipeline, first, _ = _pipeline({}, [], events)
+    first.deny_before = True
+
+    await pipeline.call_tool(_context(set()), _call(), _forwarder([]))
+
+    assert "upstream_duration_ms" not in events.events[-1].payload
 
 
 # A sink that fails or stalls must never change what the client gets

@@ -66,3 +66,7 @@ Desktop.ini
 
 # Embedding model fetched for the tests (scripts/fetch_model.py)
 .model-cache/
+
+# Tokens printed by `gateway-admin seed-demo`, for scripts/simulate_traffic.py
+/demo.json
+/seed.json

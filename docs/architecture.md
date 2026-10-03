@@ -10,7 +10,8 @@ That is what makes the project's headline result possible: a red-team scorecard 
 the attack success rate with each defense layer on and off.
 
 This document describes Phase 1, the skeleton, Phase 2, the three MCP servers behind it
-(ticketing, CRM and the handbook), and the seams later phases build on.
+(ticketing, CRM and the handbook), Phase 5's telemetry (the dashboard that reads it comes
+next), and the seams later phases build on.
 
 ## At a glance
 
@@ -86,7 +87,9 @@ upstream call, so no layer can skip the layers after it or call a tool twice.
   at ERROR on `ai_gateway.pipeline.runner`, with the request id, and the request goes on;
   cancellation is not swallowed. A request can therefore end with no record, and that log
   line is the only trace of it. The 2-second bound cannot interrupt a sink that blocks the
-  event loop without awaiting, so a sink must not.
+  event loop without awaiting, so a sink must not. The same holds for the
+  `gateway.auth_failure` event: the 401 is sent whether or not the event was recorded, and
+  neither a raising nor a stalled sink delays it.
 
 ### Configuration
 
@@ -409,11 +412,12 @@ On every forwarded `tools/call` the gateway sends only its own `_meta`:
 `_meta`, including that same key, is dropped and never forwarded, so a client cannot claim
 to be another one.
 
-One exception is not a key the gateway forwards but trace context: the MCP SDK's
-OpenTelemetry integration reads a client-supplied `traceparent` on the way in and injects
-trace context on the way out, so a client can choose which trace the upstream call joins.
-It carries no identity and no authority. Phase 5, which configures tracing, should start a
-new trace at the gateway instead of continuing the client's. A server may record the name, for example as a ticket's `requested_by`, and
+One exception is not a key the gateway forwards but trace context. The gateway's own trace
+context rides along on the upstream call, and it is always a trace the gateway started: a
+client's `traceparent`, `tracestate` and `baggage` are not forwarded (see
+[Fresh trace at the gateway](#fresh-trace-at-the-gateway)).
+
+A server may record the client name from `_meta`, for example as a ticket's `requested_by`, and
 uses `direct` when the key is absent or not a valid client name. **It is attribution only.**
 Anything that can reach a server directly can write any value there, so a server must never
 use it to decide what a caller may do. Authorization is the gateway's scope check.
@@ -427,9 +431,149 @@ it or copy its code.
 
 | Seam | Phase 1 | Later |
 | --- | --- | --- |
-| `EventSink` (`seams/events.py`) | Writes JSON lines to the log. Events already follow the audit log's record shape: dotted action, actor id `client:<uuid>`, subject, a small payload with no secret-named keys. | Phase 3 appends them to agent-core's hash-chained audit log. Phase 3 must decide again whether writing the audit record is fail-open: today a record that cannot be written is dropped, which is wrong for an audit trail of `write` tools. |
+| `EventSink` (`seams/events.py`) | Writes JSON lines to the log and, with a telemetry database, queues rows for it. Events already follow the audit log's record shape: dotted action, actor id `client:<uuid>`, subject, a small payload with no secret-named keys. | Phase 3 appends them to agent-core's hash-chained audit log. Phase 3 must decide again whether writing the audit record is fail-open: today a record that cannot be written is dropped, which is wrong for an audit trail of `write` tools. |
 | `ApprovalGate` (`seams/approvals.py`) | Protocol only | Phase 3's `approval` layer submits the call, waits for a person, and checks the approval matches the exact argument hash. |
-| Tracing | OpenTelemetry API only, so it records nothing until an SDK is configured. Span names are in `telemetry/attributes.py`. | Phase 5 configures a self-hosted exporter for the dashboard. |
+| Tracing | The OpenTelemetry SDK, configured when a telemetry database is set: the gateway's spans are queued and stored in Postgres (see [Telemetry](#telemetry-phase-5)). Span names are in `telemetry/attributes.py`. | Another processor, such as an OTLP exporter, can be added without changing the gateway. |
+
+## Telemetry (Phase 5)
+
+Every request leaves a decision record and spans. They are stored in Postgres, in a `telemetry`
+schema of their own, and a dashboard (Phase 5c) reads four views of it. **Nothing here ever
+holds a tool argument, a tool result, a credential or a client address**: the tables have no
+column for them, the rows are built from named fields of a record and never from the record
+as a whole, only the gateway's own spans are kept with an allowlist of attributes, and every
+free-text column is bounded by a CHECK. An end-to-end test sends a marker argument through the
+gateway and finds it in no column of any table.
+
+### Data model
+
+| Table | One row per | Holds |
+| --- | --- | --- |
+| `requests` | decision record (a `tools/call` or a `tools/list`) | time, kind, client id and name, tool and namespace, effect, `outcome` (`forwarded`, `blocked`, `listed`), `blocked_by` and `deny_code`, upstream status, total and upstream duration, the argument **hash**, protocol version, pipeline fingerprint, trace id |
+| `layer_verdicts` | request × layer × hook | the layer's name, the hook (`filter`, `before_call`, `after_call`), its mode, the verdict (`allow`, `deny`, `would_block`, `off`, `error`), code, time |
+| `auth_failures` | failed authentication | time, reason, the token's lookup id (the non-secret part); not the address |
+| `spans` | span of the gateway's own instrumentation | trace and span ids, parent, name, start, duration, status, request id, allowlisted attributes |
+| `pipeline_configs` | configuration fingerprint | the layers and their modes, in order |
+
+Indexes serve the dashboard's queries: `requests` by time (newest first, for keyset paging), by
+client, by tool, and a partial index on blocked requests; `layer_verdicts` by layer and verdict;
+a B-tree on the time of each table, which the purge's "oldest row" question and the time
+ranges use. A tool no upstream offers is stored under its name (bounded, and a valid tool-name
+shape) but with no namespace, so a client cannot invent namespaces in the store.
+
+**How later phases add to it without a redesign.** Layer names, deny codes and upstream
+statuses are checked by shape, not listed, so a new layer or code is new rows and no DDL.
+Phase 3's approvals add an `approvals` table and a `dash_approvals` view; Phase 4's model calls
+add a `model_usage` table (model, tokens, cost) and a view; both join on `request_id`. The
+Phase 6 scorecard reads `layer_verdicts`: for each layer, verdicts with it on and off, joined
+to the harness's own labels by client, tool, argument hash and time (or by a harness table that
+joins on `request_id`; a `run_id` column is not added until that is decided). The dashboard tells
+a layer that does not exist yet from one that exists and blocked nothing through
+`dash_pipeline_layers`, which lists the layers of the configuration in use.
+
+### How records reach Postgres
+
+| Route | Trade-offs |
+| --- | --- |
+| **In-process: a bounded buffer and a background writer (used)** | No new service, one drop policy for records and spans, easy to test. The gateway carries `opentelemetry-sdk` and the writer. |
+| OTLP to a Collector, then Postgres | The standard route, vendor neutral. A new container and configuration, and no mature Postgres trace exporter that I know of; decision records are not spans and would need their own path anyway. |
+| OTLP to a receiver written for this | Isolates the writer, but is a new service, a new network hop and a new way to fail. |
+| Log lines and a shipper | Simple, but gives up structure, and the shipper still has to write to Postgres. |
+
+The route stays vendor neutral: the spans are ordinary OpenTelemetry, and a second processor
+exporting OTLP can be added without touching the gateway's code.
+
+The `PostgresEventSink` turns each event into rows and appends them to a `TelemetryBuffer`
+(`telemetry/buffer.py`); a `BufferSpanProcessor` does the same for finished spans. A
+`TelemetryWriter` task takes batches of up to 200 rows every second and inserts each batch in
+one transaction as `telemetry_writer`, with `ON CONFLICT DO NOTHING` on every key, so a batch
+retried after an ambiguous failure writes nothing twice.
+
+### When writing fails
+
+**Telemetry never blocks or fails a tool call.**
+
+- The request path only appends to the buffer: a lock and an append, never a database call.
+- The buffer is bounded (10 000 rows by default). When it is full the oldest row is dropped and
+  counted, so a database that stays down costs memory up to the bound and no latency.
+- A database that is down or silent keeps the current batch in the writer; connect, statement
+  and total time are bounded, and it retries with backoff from 1 s to 30 s. The gateway starts
+  and serves with the telemetry database unreachable.
+- A row the database refuses (a CHECK) can never succeed, so it is not retried: the batch is
+  split, the refused row is dropped and counted, and the rest are written. If the database fails
+  during that split instead, the whole batch stays queued and the writer reports `degraded`;
+  nothing is counted written or dropped that was not.
+- Failed logins have a bounded quota of their own in the buffer and a tenth of every batch, so an
+  unauthenticated peer who fails login at will can only evict other failed logins, and a steady
+  stream of decision records cannot starve them.
+- An extra sink that raises (the Postgres one) is logged, with the request id (the first failure in
+  full, then at most a line a minute) and does not stop the next sink; the primary sink (the log,
+  later the audit log) is not wrapped, so its failure reaches the pipeline and is logged with the
+  request id as described above; a span that cannot be converted never raises into a request; the pipeline
+  and the authentication middleware bound recording to 2 s whatever the sink does.
+- On shutdown the writer makes one last, time-boxed attempt to flush.
+- `/healthz` reports `telemetry: {status, queue_depth, dropped_total, rejected_total,
+  written_total}` with `status` `ok`, `degraded` while writes fail, or `disabled`. It is never the
+  reason the gateway is unhealthy: a restart would not help and tool calls do not depend on it.
+
+Tests stop the database, make it hang, make it refuse a row, and cancel the writer, and check
+that the request path is not slowed and that nothing is lost that should not be.
+
+### Roles, and what the dashboard can see
+
+| Role | Can | Cannot |
+| --- | --- | --- |
+| `telemetry_writer` (the gateway) | `INSERT` into the five tables | read, update or delete anything, in any schema |
+| `telemetry_reader` (the dashboard) | `SELECT` four views: `dash_requests`, `dash_layer_verdicts`, `dash_auth_failures`, `dash_pipeline_layers`; at most 5 connections; session *defaults* of read-only, 5 s per statement and 10 s idle in a transaction | read a base table, the registry or any server's schema; write |
+| `telemetry_purger` | `DELETE` from the four purgeable tables, and `SELECT` on their `ts` column only | read anything else, insert, update |
+
+The views run with their owner's rights, so the reader needs no access to the tables, and they
+leave out hashes, trace ids, lookup ids and the pipeline fingerprint. So the dashboard can see
+counts, timings and names of clients, tools, layers and codes; it cannot see arguments or
+results (they are not stored), tokens, scopes, addresses or any server's data. Privilege tests
+assert each of these, and that a grant widened by hand, a role attribute added by hand
+(`CREATEDB`, `CREATEROLE`) or a role membership granted by hand (`pg_read_all_data`) is taken
+away again by the next `gateway-admin telemetry-setup`, which runs on every `docker compose up`
+before the gateway.
+
+Two limits of what is enforced, stated plainly:
+
+- The reader's read-only, 5 s and 10 s settings are session **defaults**: Postgres lets a session
+  change them, so a compromised dashboard could run an unbounded query. What binds is the grants
+  and the five-connection limit. The dashboard (5c) sets the same timeouts on its own
+  connections; a hard bound would need a watchdog or a connection pooler.
+- Every role can run `lo_from_bytea` and the other large-object functions, because Postgres grants
+  `EXECUTE` on them to PUBLIC. That lets the writer, purger or reader store data outside the
+  schema, in the database's large-object store. Revoking it database-wide would change the other
+  schemas' roles too, so it is left as it is; nothing in the gateway calls them.
+
+### Retention
+
+`telemetry-purge` runs hourly in its own service as the purger role. It deletes **spans after 7
+days and everything else after 30** (`TELEMETRY_RETENTION_SPAN_DAYS`,
+`TELEMETRY_RETENTION_DAYS`). Because the role can read only each table's time column it deletes in
+windows of one hour (the oldest row comes from a B-tree), never a whole backlog in one statement. A pass that fails is retried at the
+next interval. At demo volumes plain deletes are enough; at much larger volumes the tables would
+be partitioned by day and old partitions dropped.
+
+### Fresh trace at the gateway
+
+The MCP SDK parents its server span under a `traceparent` the client sends in `_meta`, and the call
+to an upstream carries whatever trace context is current, so a client used to be able to choose
+which trace an upstream call joined. The gateway now starts `gateway.tool_call` and
+`gateway.tools_list` in an empty context, so each request is a trace of its own and the upstream
+receives only the gateway's trace id; a client's `tracestate` and `baggage` are not forwarded. A
+test sends all three and checks the upstream and the stored spans.
+
+### The traffic simulator
+
+`scripts/simulate_traffic.py` sends a seeded, repeatable mix through the gateway as both bots with
+no API key: normal calls (reads, and a few writes to the fictional ticketing data), calls the scope
+layer refuses (a tool the bot was not granted, a tool that does not exist) and failed
+authentications. The same seed gives the same counts; `--duration` spreads the run over time.
+`--verify` reads the dashboard's views as the reader role and requires that what was stored equals
+what was sent. CI runs it after the Harborline scenarios. It is what fills the dashboard for demos
+and screenshots.
 
 ## Data model
 
@@ -441,6 +585,8 @@ it or copy its code.
 | `upstream_servers` | namespace, URL, timeouts, the *name* of an environment variable holding its credential (never the value) |
 | `tool_policies` | namespace, upstream tool name, `effect` (`read` or `write`), notes, when it was reviewed |
 
+The `telemetry` schema is described under [Telemetry](#telemetry-phase-5).
+
 ### Database roles
 
 - **Owner:** the admin CLI and migrations run as the owner, from a separate `admin` Compose
@@ -448,6 +594,8 @@ it or copy its code.
 - **`gateway_app`:** the gateway itself connects as `gateway_app`. It may read the
   registry and update `client_tokens.last_used_at`, and nothing else. It has no access to
   any server's schema.
+- **`telemetry_writer`, `telemetry_reader`, `telemetry_purger`:** see
+  [Roles, and what the dashboard can see](#roles-and-what-the-dashboard-can-see).
 - **`ticketing_app`, `crm_app`, `handbook_app`:** each server connects as its own role,
   described under [MCP servers](#mcp-servers-phase-2). None has access to the registry or to
   another server's schema.
@@ -487,6 +635,7 @@ itself).
 | `version` | The `ai-gateway` package version |
 | `schema_version` | The newest applied migration of the registry, zero-padded (`"0004"`). Re-read at most every 30 s by one caller at a time, with the read bounded to 2 s; `null` if it cannot be read in time |
 | `uptime_s` | Seconds since the process started |
+| `telemetry` | The gateway only: `{status, queue_depth, dropped_total, rejected_total, written_total}`; `status` is `ok`, `degraded` while writes fail, or `disabled`. It never makes the gateway unhealthy. |
 
 ## Ports
 
@@ -506,7 +655,7 @@ Compose has two networks:
 | Network | Kind | Members |
 | --- | --- | --- |
 | `edge` | ordinary bridge | the gateway and PostgreSQL, the two services that publish a port |
-| `backend` | `internal: true` | the three MCP servers, `servers-setup`, `migrate`, `admin`, `direct-check`, the test upstream, and also the gateway and PostgreSQL |
+| `backend` | `internal: true` | the three MCP servers, `servers-setup`, `telemetry-setup`, `telemetry-purge`, `migrate`, `admin`, `direct-check`, the test upstream, and also the gateway and PostgreSQL |
 
 Docker gives an internal network no route to the outside world and publishes no port from
 it. That alone is not enough: Docker filters traffic that is forwarded off the network, not

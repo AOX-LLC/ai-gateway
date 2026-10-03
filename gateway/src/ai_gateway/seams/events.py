@@ -19,6 +19,9 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, JsonValue, fie
 
 MAX_PAYLOAD_BYTES = 8_192
 
+DEFAULT_EMIT_TIMEOUT_S = 2.0
+"""How long recording one event may take before the request goes on without it."""
+
 # The audit log rejects keys that look like they name a secret. Checking here as well
 # means a bad key fails in this repo's tests, not after the audit log is wired in.
 _SECRET_LOOKING_KEY = re.compile(

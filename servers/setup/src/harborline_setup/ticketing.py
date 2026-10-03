@@ -5,13 +5,13 @@ from pathlib import Path
 
 from psycopg import AsyncConnection, sql
 
-from harborline_setup.shared import (
+from mcp_common.migrate import apply_migrations
+from mcp_common.roles import (
     ensure_role,
     ensure_schema,
     restrict_database_access,
     revoke_role_access,
 )
-from mcp_common.migrate import apply_migrations
 from ticketing_server import MIGRATIONS_PACKAGE, ROLE, SCHEMA
 from ticketing_server.seed import build_dataset, insert_dataset, is_seeded, load_extra_records
 

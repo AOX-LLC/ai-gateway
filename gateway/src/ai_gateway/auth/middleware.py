@@ -9,14 +9,16 @@ Authentication sits outside the request pipeline: no configuration can switch it
 """
 
 import json
+import logging
 
+import anyio
 from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 from starlette.authentication import AuthCredentials
 from starlette.datastructures import Headers
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from ai_gateway.auth.verifier import AuthFailure, AuthFailureReason, TokenVerifier
-from ai_gateway.seams.events import EventSink, GatewayEvent
+from ai_gateway.seams.events import DEFAULT_EMIT_TIMEOUT_S, EventSink, GatewayEvent
 
 _REALM = 'Bearer realm="ai-gateway"'
 _UNAUTHORIZED_BODY = json.dumps(
@@ -25,12 +27,21 @@ _UNAUTHORIZED_BODY = json.dumps(
 
 ANONYMOUS_ACTOR = "anonymous"
 
+logger = logging.getLogger(__name__)
+
 
 class BearerAuthMiddleware:
-    def __init__(self, app: ASGIApp, verifier: TokenVerifier, events: EventSink) -> None:
+    def __init__(
+        self,
+        app: ASGIApp,
+        verifier: TokenVerifier,
+        events: EventSink,
+        emit_timeout_s: float = DEFAULT_EMIT_TIMEOUT_S,
+    ) -> None:
         self._app = app
         self._verifier = verifier
         self._events = events
+        self._emit_timeout_s = emit_timeout_s
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -57,8 +68,10 @@ class BearerAuthMiddleware:
         # The direct peer address. Behind a tunnel or proxy this is the proxy; trusting a
         # forwarded-for header is a decision for whichever phase puts one in front.
         client_address = scope.get("client")
-        await self._events.emit(
-            GatewayEvent(
+        # Recording is best effort: a sink that raises or does not answer in time must not
+        # delay or fail the 401, which is sent either way.
+        try:
+            event = GatewayEvent(
                 action="gateway.auth_failure",
                 actor_id=ANONYMOUS_ACTOR,
                 payload={
@@ -67,7 +80,11 @@ class BearerAuthMiddleware:
                     "remote_addr": client_address[0] if client_address else None,
                 },
             )
-        )
+            with anyio.fail_after(self._emit_timeout_s):
+                await self._events.emit(event)
+        except Exception:
+            # Catching broadly is deliberate. The traceback is logged; the event is not.
+            logger.exception("could not record a gateway.auth_failure event")
 
 
 def _bearer_token(headers: Headers) -> str | None:

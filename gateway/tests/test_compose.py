@@ -20,6 +20,8 @@ INTERNAL_ONLY = [
     "admin",
     "direct-check",
     "echo",
+    "telemetry-setup",
+    "telemetry-purge",
 ]
 
 
@@ -80,3 +82,25 @@ def test_every_published_port_is_bound_to_loopback(compose: dict[str, Any]) -> N
 
     assert published, "the gateway and Postgres publish ports"
     assert [(n, p) for n, p in published if not str(p).startswith("127.0.0.1:")] == []
+
+
+MEMORY_BUDGET_MIB = 3072
+"""All services together may be limited to this much. The machine this runs on is shared and
+has 7 GB; the whole stack, Postgres included, has to leave room for the other work."""
+
+
+def _mib(limit: str) -> int:
+    units = {"m": 1, "g": 1024}
+    return int(limit[:-1]) * units[limit[-1]]
+
+
+def test_every_service_has_a_memory_limit(compose: dict[str, Any]) -> None:
+    unlimited = [name for name, svc in compose["services"].items() if "mem_limit" not in svc]
+
+    assert unlimited == []
+
+
+def test_the_memory_limits_together_fit_a_shared_machine(compose: dict[str, Any]) -> None:
+    total = sum(_mib(str(svc["mem_limit"])) for svc in compose["services"].values())
+
+    assert total <= MEMORY_BUDGET_MIB

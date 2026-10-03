@@ -2,6 +2,8 @@
 
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from dataclasses import asdict
+from datetime import UTC, datetime
 from importlib.metadata import version
 
 import anyio
@@ -26,6 +28,9 @@ from ai_gateway.proxy.sessions import UpstreamSessionPool
 from ai_gateway.registry.repo import GatewayRegistry
 from ai_gateway.seams.events import EventSink, LogEventSink
 from ai_gateway.settings import GatewaySettings
+from ai_gateway.telemetry.rows import pipeline_config_row
+from ai_gateway.telemetry.runtime import build_telemetry, install_tracing
+from ai_gateway.telemetry.sinks import FanOutEventSink
 from mcp_common.health import BuildIdentity, SchemaVersionCache
 
 MCP_PATH = "/mcp"
@@ -50,9 +55,17 @@ class _McpEndpoint:
 def create_app(settings: GatewaySettings, events: EventSink | None = None) -> FastAPI:
     """Build the app. Configuration errors, such as a bad pipeline file, raise here,
     before the gateway accepts a single request."""
-    event_sink = events or LogEventSink()
+    telemetry = build_telemetry(settings)
+    event_sink: EventSink = events or LogEventSink()
+    if telemetry is not None:
+        # The queueing sink never waits, so it goes first: a sink that stalls cannot hold it up.
+        event_sink = FanOutEventSink([("postgres", telemetry.sink)], event_sink)
     pipeline_config = load_pipeline_config(settings.pipeline_file, LAYER_ORDER)
     pipeline = Pipeline.build(pipeline_config, event_sink)
+    if telemetry is not None:
+        telemetry.buffer.put(
+            pipeline_config_row(pipeline_config.sha256, pipeline.describe(), datetime.now(UTC))
+        )
     endpoint = _McpEndpoint()
     identity = BuildIdentity(
         commit=settings.git_commit, branch=settings.git_branch, version=version("ai-gateway")
@@ -90,15 +103,20 @@ def create_app(settings: GatewaySettings, events: EventSink | None = None) -> Fa
                 event_sink,
             )
 
+            span_processor = install_tracing(telemetry.buffer) if telemetry else None
             async with anyio.create_task_group() as task_group:
                 await task_group.start(sessions.run)
                 await task_group.start(catalog.run)
+                if telemetry is not None:
+                    await task_group.start(telemetry.writer.run)
                 async with session_manager.run():
                     try:
                         yield
                     finally:
                         endpoint.app = None
                         endpoint.schema_versions = None
+                if span_processor is not None:
+                    span_processor.shutdown()
                 task_group.cancel_scope.cancel()
 
     app = FastAPI(
@@ -111,9 +129,20 @@ def create_app(settings: GatewaySettings, events: EventSink | None = None) -> Fa
         schema_version = (
             await endpoint.schema_versions.current() if endpoint.schema_versions else None
         )
+        # Telemetry that cannot be stored is reported here, but never makes the gateway unhealthy:
+        # a restart would not help, and tool calls do not depend on it.
+        telemetry_status: dict[str, object] = (
+            {"status": "disabled"} if telemetry is None else asdict(telemetry.status())
+        )
         if endpoint.app is None:
-            return JSONResponse(identity.payload("unavailable", schema_version), status_code=503)
-        return JSONResponse(identity.payload("ok", schema_version))
+            body = {
+                **identity.payload("unavailable", schema_version),
+                "telemetry": telemetry_status,
+            }
+            return JSONResponse(body, status_code=503)
+        return JSONResponse(
+            {**identity.payload("ok", schema_version), "telemetry": telemetry_status}
+        )
 
     app.router.routes.append(Route(MCP_PATH, endpoint=endpoint, methods=["GET", "POST", "DELETE"]))
     return app
