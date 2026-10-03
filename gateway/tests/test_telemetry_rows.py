@@ -261,7 +261,7 @@ async def test_a_failing_sink_is_logged_once_and_the_next_sink_still_gets_the_ev
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     failing, recording = _RaisingSink(), _RecordingSink()
-    fan_out = FanOutEventSink([("broken", failing), ("recording", recording)])
+    fan_out = FanOutEventSink([("broken", failing)], recording)
 
     with caplog.at_level(logging.ERROR, logger="ai_gateway.telemetry.sinks"):
         for _ in range(5):
@@ -270,6 +270,19 @@ async def test_a_failing_sink_is_logged_once_and_the_next_sink_still_gets_the_ev
     assert failing.calls == 5
     assert len(recording.events) == 5
     assert caplog.text.count("event sink broken failed") == 1, "logged once, then rate limited"
+    assert str(REQUEST_ID) in caplog.text
+
+
+@pytest.mark.anyio
+async def test_a_failing_primary_sink_still_reaches_the_pipeline_which_logs_the_request() -> None:
+    """The primary sink is the audit trail in Phase 3: its failure must not be swallowed here."""
+    extra = _RecordingSink()
+    fan_out = FanOutEventSink([("recording", extra)], _RaisingSink())
+
+    with pytest.raises(RuntimeError, match="sink is broken"):
+        await fan_out.emit(_call_event())
+
+    assert len(extra.events) == 1, "the extra sinks still got the event first"
 
 
 @pytest.mark.anyio

@@ -59,7 +59,7 @@ def create_app(settings: GatewaySettings, events: EventSink | None = None) -> Fa
     event_sink: EventSink = events or LogEventSink()
     if telemetry is not None:
         # The queueing sink never waits, so it goes first: a sink that stalls cannot hold it up.
-        event_sink = FanOutEventSink([("postgres", telemetry.sink), ("primary", event_sink)])
+        event_sink = FanOutEventSink([("postgres", telemetry.sink)], event_sink)
     pipeline_config = load_pipeline_config(settings.pipeline_file, LAYER_ORDER)
     pipeline = Pipeline.build(pipeline_config, event_sink)
     if telemetry is not None:

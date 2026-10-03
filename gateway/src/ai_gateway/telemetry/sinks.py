@@ -25,7 +25,8 @@ class PostgresEventSink:
 
 class SafeEventSink:
     """Wraps a sink so that its failure is logged, not raised. The log is rate limited: the
-    first failure is logged in full, then at most one line a minute with a count."""
+    first failure is logged in full, then at most one line a minute with a count, and says which
+    request the failed event belonged to."""
 
     def __init__(self, sink: EventSink, name: str) -> None:
         self._sink = sink
@@ -41,8 +42,9 @@ class SafeEventSink:
             now = time.monotonic()
             if self._last_logged is None or now - self._last_logged >= _LOG_EVERY_S:
                 logger.exception(
-                    "event sink %s failed (%d since the last report)",
+                    "event sink %s failed for request %s (%d since the last report)",
                     self._name,
+                    event.payload.get("request_id"),
                     self._failures_since_log,
                 )
                 self._last_logged = now
@@ -50,12 +52,19 @@ class SafeEventSink:
 
 
 class FanOutEventSink:
-    """Sends each event to every sink, in order. A sink that fails does not stop the ones
-    after it. Put a sink that awaits (and so can stall) after the ones that do not."""
+    """Sends each event to the `extra` sinks, then to the `primary` one.
 
-    def __init__(self, sinks: Sequence[tuple[str, EventSink]]) -> None:
-        self._sinks = [SafeEventSink(sink, name) for name, sink in sinks]
+    The extra sinks are guarded: one that fails is logged and does not stop the rest. The primary
+    sink (the log today, the audit log in Phase 3) is not wrapped, so its failure reaches the
+    pipeline, which logs it with the request id: a missing audit record must stay traceable to its
+    request, and rate limiting that log would hide it. Extra sinks that never wait come first, so a
+    primary sink that stalls cannot hold them up."""
+
+    def __init__(self, extra: Sequence[tuple[str, EventSink]], primary: EventSink) -> None:
+        self._extra = [SafeEventSink(sink, name) for name, sink in extra]
+        self._primary = primary
 
     async def emit(self, event: GatewayEvent) -> None:
-        for sink in self._sinks:
+        for sink in self._extra:
             await sink.emit(event)
+        await self._primary.emit(event)
