@@ -154,6 +154,14 @@ BEGIN
            OR NEW.resolved_at IS NOT NULL OR NEW.consumed_at IS NOT NULL THEN
             RAISE EXCEPTION 'an approval request can only be created pending';
         END IF;
+        -- Only the gateway asks for approvals (the table's owner and a superuser, as below).
+        IF current_user <> '{GATEWAY_ROLE}' AND NOT (
+            current_user = (
+                SELECT pg_get_userbyid(c.relowner) FROM pg_class c WHERE c.oid = TG_RELID)
+            OR (SELECT r.rolsuper FROM pg_roles r WHERE r.rolname = current_user)
+        ) THEN
+            RAISE EXCEPTION 'only the gateway role may create an approval request';
+        END IF;
         RETURN NEW;
     END IF;
 
@@ -219,17 +227,9 @@ async def grant_policy_access(connection: AsyncConnection) -> None:
             f" FOR EACH ROW EXECUTE FUNCTION {APPROVALS_TABLE}_guard()".encode()
         )
         # A role that is a member of a policy role inherits its privileges, but the guard keys on
-        # the member's own name; nobody is a member of these roles.
-        cursor = await connection.execute(
-            "SELECT member.rolname, parent.rolname FROM pg_auth_members m"
-            " JOIN pg_roles parent ON parent.oid = m.roleid"
-            " JOIN pg_roles member ON member.oid = m.member WHERE parent.rolname = ANY(%s)",
-            (list(ROLES),),
-        )
-        for member, parent in await cursor.fetchall():
-            await connection.execute(
-                sql.SQL("REVOKE {} FROM {}").format(sql.Identifier(parent), sql.Identifier(member))
-            )
+        # the member's own name; nobody is a member of these roles. A grant is revoked as the role
+        # that made it (PostgreSQL ignores a revoke by anyone else), and the check is made again.
+        await _revoke_memberships(connection)
         for role in ROLES:
             await reset_role(connection, role)
             await revoke_role_access(connection, SCHEMA, role)
@@ -242,3 +242,30 @@ async def grant_policy_access(connection: AsyncConnection) -> None:
                         sql.SQL(privileges), schema, sql.Identifier(table), sql.Identifier(role)
                     )
                 )
+
+
+_MEMBERSHIPS = (
+    "SELECT member.rolname, parent.rolname, grantor.rolname FROM pg_auth_members m"
+    " JOIN pg_roles parent ON parent.oid = m.roleid"
+    " JOIN pg_roles member ON member.oid = m.member"
+    " JOIN pg_roles grantor ON grantor.oid = m.grantor WHERE parent.rolname = ANY(%s)"
+)
+
+
+async def _memberships(connection: AsyncConnection) -> list[tuple[str, str, str]]:
+    cursor = await connection.execute(_MEMBERSHIPS, (list(ROLES),))
+    return [(str(a), str(b), str(c)) for a, b, c in await cursor.fetchall()]
+
+
+async def _revoke_memberships(connection: AsyncConnection) -> None:
+    for member, parent, grantor in await _memberships(connection):
+        await connection.execute(
+            sql.SQL("REVOKE {} FROM {} GRANTED BY {} CASCADE").format(
+                sql.Identifier(parent), sql.Identifier(member), sql.Identifier(grantor)
+            )
+        )
+    remaining = await _memberships(connection)
+    if remaining:
+        raise RuntimeError(
+            f"{len(remaining)} membership(s) of the policy roles could not be revoked"
+        )

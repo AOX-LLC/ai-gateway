@@ -529,6 +529,52 @@ async def test_a_role_that_only_inherits_a_policy_role_cannot_change_an_approval
         await connection.execute("DROP ROLE policy_intruder")
 
 
+async def test_a_membership_granted_by_another_role_is_revoked_and_one_that_stays_is_an_error(
+    policy: None, test_database_url: str
+) -> None:
+    async with await _as(test_database_url) as connection:
+        await connection.execute("DROP ROLE IF EXISTS policy_intruder")
+        await connection.execute("DROP ROLE IF EXISTS policy_grantor")
+        await connection.execute("CREATE ROLE policy_intruder NOLOGIN")
+        await connection.execute("CREATE ROLE policy_grantor NOLOGIN CREATEROLE")
+        try:
+            await connection.execute("GRANT policy_approver TO policy_grantor WITH ADMIN OPTION")
+            await connection.execute(
+                "GRANT policy_approver TO policy_intruder GRANTED BY policy_grantor"
+            )
+            await grant_policy_access(connection)
+            cursor = await connection.execute(
+                "SELECT count(*) FROM pg_auth_members m JOIN pg_roles r ON r.oid = m.member"
+                " WHERE r.rolname = 'policy_intruder'"
+            )
+            assert await cursor.fetchone() == (0,)
+        finally:
+            await connection.execute("DROP OWNED BY policy_intruder, policy_grantor")
+            await connection.execute("DROP ROLE policy_intruder, policy_grantor")
+
+
+async def test_a_role_that_only_inherits_the_gateway_role_cannot_create_a_request(
+    policy: None, test_database_url: str
+) -> None:
+    async with await _as(test_database_url) as connection:
+        await connection.execute("DROP ROLE IF EXISTS policy_intruder")
+        await connection.execute("CREATE ROLE policy_intruder NOLOGIN")
+        await connection.execute("GRANT policy_gateway TO policy_intruder")
+        await connection.execute("SET ROLE policy_intruder")
+        try:
+            with pytest.raises(errors.RaiseException, match="only the gateway role may create"):
+                await connection.execute(
+                    b"INSERT INTO agent_core_approvals (id, action, summary, payload_sha256,"
+                    b" requested_by, required_role, created_at, expires_at, status)"
+                    b" VALUES (gen_random_uuid()::text, 'a', 's', repeat('a', 64), 'c',"
+                    b" 'approver', now()::text, (now() + interval '1 hour')::text, 'pending')"
+                )
+        finally:
+            await connection.execute("RESET ROLE")
+            await connection.execute("DROP OWNED BY policy_intruder")
+            await connection.execute("DROP ROLE policy_intruder")
+
+
 async def test_a_scratch_role_left_by_a_killed_setup_is_dropped_by_the_next_one(
     policy: None,
     test_database_url: str,
