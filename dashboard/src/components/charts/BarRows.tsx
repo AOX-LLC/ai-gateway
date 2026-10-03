@@ -5,10 +5,10 @@ export type BarRow = { label: string; segments: BarSegment[]; text: string };
 
 type Props = { rows: BarRow[]; description: string };
 
-const W = 640;
+const W = 540;
 const ROW = 30;
 const LABEL = 150;
-const TEXT = 170;
+const TEXT = 160;
 
 const shorten = (label: string, max = 22): string => (label.length > max ? `${label.slice(0, max - 1)}…` : label);
 

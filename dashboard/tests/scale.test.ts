@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { barLength, linePath, niceAxis, timeTicks } from "@/components/charts/scale";
+import { barLength, linePath, niceAxis, robustCeiling, timeTicks } from "@/components/charts/scale";
 
 describe("the axis", () => {
   it("rounds the top up to a round number and counts up to it from zero", () => {
@@ -52,5 +52,20 @@ describe("a bar", () => {
     expect(barLength(50, 10, 200)).toBe(200);
     expect(barLength(-1, 10, 200)).toBe(0);
     expect(barLength(5, 0, 200)).toBe(0);
+  });
+});
+
+describe("whole-number axes and spike ceilings", () => {
+  it("never labels a count axis with a fraction", () => {
+    expect(niceAxis(1, 4, true)).toEqual({ max: 1, ticks: [0, 1] });
+    expect(niceAxis(3, 4, true).ticks.every(Number.isInteger)).toBe(true);
+  });
+
+  it("cuts the axis only when one spike would flatten the rest", () => {
+    const calm = Array.from({ length: 50 }, (_, i) => 10 + (i % 5));
+    expect(robustCeiling(calm)).toBeNull();
+    expect(robustCeiling([...calm, 8000])).toBeGreaterThan(30);
+    expect(robustCeiling([...calm, 8000])).toBeLessThan(100);
+    expect(robustCeiling([1, 2, 3])).toBeNull();
   });
 });

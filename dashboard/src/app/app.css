@@ -61,7 +61,18 @@
 @media (min-width: 1100px) { .chart-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .chart-grid .chart-wide { grid-column: 1 / -1; } }
 .chart-body { padding: 12px 16px 8px; display: flex; flex-direction: column; gap: 12px; }
 .chart-note { margin: 0; font-size: 12px; color: var(--pui-text-muted); }
-.chart-legend { align-items: center; }
+.chart-legend { align-items: center; margin: 0; padding: 0; list-style: none; gap: 6px 16px; }
+.chart-panel { display: flex; flex-direction: column; }
+.chart-panel .chart-body { flex: 1; }
+/* A taller neighbour stretches the panel: the tables stay at the foot, the chart at the head. */
+.chart-body > .chart-data:first-of-type { margin-top: auto; }
+/* Every chart is drawn at the pixel width of its panel, so text is one size on screen; narrower
+ * panels shrink it, and a half-width chart never grows past the width it was drawn for. */
+.chart-panel:not(.chart-wide) .pui-chart { max-width: 540px; }
+.chart-wide .pui-chart { max-width: 1120px; }
+.pui-chart .chart-line { stroke-width: 1.5; }
+.pui-chart .chart-clip-label { fill: var(--pui-text-secondary); font-weight: 500; }
+.pui-chart .chart-clip-mark { fill: var(--pui-text-secondary); stroke: none; }
 .legend-swatch { display: inline-block; width: 12px; height: 12px; border-radius: 2px; box-sizing: border-box; }
 .swatch-ok { background: var(--pui-chart-3); }
 .swatch-error { background: var(--pui-chart-6); }
@@ -71,6 +82,7 @@
 .pui-bar.bar-would { fill: var(--pui-warning-soft); stroke: var(--pui-warning); stroke-width: 1.5; stroke-dasharray: 4 3; }
 .pui-chart .chart-label { fill: var(--pui-text-secondary); }
 .chart-data { border-top: 1px solid var(--pui-border); padding-top: 8px; font-size: 12px; }
+.chart-data summary:hover { color: var(--pui-text); }
 .chart-data summary { cursor: pointer; color: var(--pui-text-secondary); padding: 2px 0; }
 .chart-data summary:focus-visible { outline: var(--pui-focus-width) solid var(--pui-focus-ring); outline-offset: 2px; }
 .chart-table-wrap { max-height: 240px; overflow: auto; margin-top: 8px; border: 1px solid var(--pui-border); border-radius: var(--pui-radius-sm); }

@@ -40,6 +40,9 @@ export function ChartsSection({ charts, error, stale, since }: Props) {
           tables={[{ caption: "Request volume as a table", head: ["Time (UTC)", "Forwarded", "Blocked"], rows: charts.volume.map((p) => [at(p.ts), p.forwarded, p.blocked]) }]}
         >
           <TimeLineChart
+            wide
+            height={240}
+            whole
             times={times}
             format={(v) => formatInt(v)}
             description={volumeSummary(charts)}
@@ -60,6 +63,8 @@ export function ChartsSection({ charts, error, stale, since }: Props) {
           tables={[{ caption: "Latency as a table", head: ["Time (UTC)", "Median ms", "95th ms", "99th ms"], rows: charts.latency.map((p) => [at(p.ts), p.p50 === null ? "—" : formatMs(p.p50), p.p95 === null ? "—" : formatMs(p.p95), p.p99 === null ? "—" : formatMs(p.p99)]) }]}
         >
           <TimeLineChart
+            clipSpikes={{ unit: "ms" }}
+            height={200}
             times={times}
             format={(v) => formatInt(v)}
             description={latencySummary(charts)}
@@ -109,7 +114,6 @@ export function ChartsSection({ charts, error, stale, since }: Props) {
 
         <ChartPanel
           id="auth"
-          wide
           title="Failed sign-ins"
           sub={`Failed authentications by reason, and when they happened · last ${window}`}
           empty={noAuth ? { icon: "check", title: "No failed sign-ins", text: "Every client that tried to connect had a valid token." } : null}
@@ -120,7 +124,7 @@ export function ChartsSection({ charts, error, stale, since }: Props) {
           ]}
         >
           <BarRows description={authSummary(charts)} rows={charts.authReasons.map((r) => ({ label: words(r.reason), segments: [{ value: r.count, cls: "pui-s1" }], text: `${formatInt(r.count)} failed` }))} />
-          <TimeLineChart height={120} times={charts.authTrend.map((p) => p.ts)} format={(v) => formatInt(v)} description={`Failed sign-ins over the last ${window}: ${authSummary(charts)}`} series={[{ id: "auth", label: "Failed sign-ins", cls: "pui-s1", values: charts.authTrend.map((p) => p.count) }]} />
+          <TimeLineChart whole height={140} times={charts.authTrend.map((p) => p.ts)} format={(v) => formatInt(v)} description={`Failed sign-ins over the last ${window}: ${authSummary(charts)}`} series={[{ id: "auth", label: "Failed sign-ins", cls: "pui-s1", values: charts.authTrend.map((p) => p.count) }]} />
         </ChartPanel>
       </div>
     </section>
