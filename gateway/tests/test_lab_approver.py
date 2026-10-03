@@ -10,7 +10,6 @@ from aox_agent_core.approvals import Decision
 from aox_agent_core.errors import AuditIntegrityError
 from psycopg import errors
 
-from ai_gateway.admin.cli import _approver_add
 from ai_gateway.approver.cli import Approvals
 from ai_gateway.policy import audit_log_on, policy_url
 from ai_gateway.policy.anchors import verify_with_anchors
@@ -30,14 +29,9 @@ def _lab_url(owner_url: str) -> str:
     return urlunsplit(parts._replace(netloc=netloc))
 
 
-async def _setup(
-    owner: str, gateway: str, approver: str, auditor: str, lab: str | None = None
-) -> None:
+async def _setup(owner: str, gateway: str, auditor: str, lab: str | None = None) -> None:
     await setup_policy(
-        owner,
-        PolicyPasswords(
-            password_of(gateway), password_of(approver), password_of(auditor), lab_approver=lab
-        ),
+        owner, PolicyPasswords(password_of(gateway), password_of(auditor), lab_approver=lab)
     )
 
 
@@ -53,10 +47,9 @@ async def test_without_a_password_there_is_no_lab_role_and_a_later_setup_removes
     policy: None,
     test_database_url: str,
     policy_gateway_url: str,
-    policy_approver_url: str,
     policy_auditor_url: str,
 ) -> None:
-    args = (test_database_url, policy_gateway_url, policy_approver_url, policy_auditor_url)
+    args = (test_database_url, policy_gateway_url, policy_auditor_url)
     assert not await _lab_role_exists(test_database_url), "the default stack has none"
 
     await _setup(*args, lab=LAB_PASSWORD)
@@ -70,26 +63,14 @@ async def test_the_lab_role_decides_requests_like_the_approver_and_does_nothing_
     policy: None,
     test_database_url: str,
     policy_gateway_url: str,
-    policy_approver_url: str,
     policy_auditor_url: str,
 ) -> None:
-    await _setup(
-        test_database_url,
-        policy_gateway_url,
-        policy_approver_url,
-        policy_auditor_url,
-        lab=LAB_PASSWORD,
-    )
-    await _approver_add(
-        test_database_url, argparse.Namespace(id="lab-approver", name="Lab approver", role=None)
-    )
+    await _setup(test_database_url, policy_gateway_url, policy_auditor_url, lab=LAB_PASSWORD)
     gate, ctx, call = _gate(policy_gateway_url, hold_s=0), _context(), _call()
     pending = await gate.decide(ctx, call)
     lab = Approvals(_lab_url(test_database_url), ROLES)
 
-    decided = await lab.decide(
-        UUID(pending.approval_id or ""), "lab-approver", Decision.APPROVE, None
-    )
+    decided = await lab.decide(UUID(pending.approval_id or ""), Decision.APPROVE, None)
 
     assert decided.status.value == "approved"
     async with await psycopg.AsyncConnection.connect(
@@ -111,23 +92,13 @@ async def test_a_decision_by_the_lab_role_passes_the_audit_check_and_a_forgery_b
     policy: None,
     test_database_url: str,
     policy_gateway_url: str,
-    policy_approver_url: str,
     policy_auditor_url: str,
 ) -> None:
-    await _setup(
-        test_database_url,
-        policy_gateway_url,
-        policy_approver_url,
-        policy_auditor_url,
-        lab=LAB_PASSWORD,
-    )
-    await _approver_add(
-        test_database_url, argparse.Namespace(id="lab-approver", name="Lab approver", role=None)
-    )
+    await _setup(test_database_url, policy_gateway_url, policy_auditor_url, lab=LAB_PASSWORD)
     gate, ctx, call = _gate(policy_gateway_url, hold_s=0), _context(), _call()
     pending = await gate.decide(ctx, call)
     await Approvals(_lab_url(test_database_url), ROLES).decide(
-        UUID(pending.approval_id or ""), "lab-approver", Decision.APPROVE, None
+        UUID(pending.approval_id or ""), Decision.APPROVE, None
     )
     from aox_agent_core.storage import open_database
     from pydantic import SecretStr
@@ -145,10 +116,9 @@ async def test_a_grant_or_membership_made_by_hand_does_not_survive_a_lab_mode_se
     policy: None,
     test_database_url: str,
     policy_gateway_url: str,
-    policy_approver_url: str,
     policy_auditor_url: str,
 ) -> None:
-    args = (test_database_url, policy_gateway_url, policy_approver_url, policy_auditor_url)
+    args = (test_database_url, policy_gateway_url, policy_auditor_url)
     await _setup(*args, lab=LAB_PASSWORD)
     async with await psycopg.AsyncConnection.connect(
         test_database_url, autocommit=True
@@ -177,25 +147,15 @@ async def test_audit_verify_says_when_a_stack_has_been_used_as_a_lab(
     policy: None,
     test_database_url: str,
     policy_gateway_url: str,
-    policy_approver_url: str,
     policy_auditor_url: str,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     from ai_gateway.admin.cli import _audit_verify
 
-    await _setup(
-        test_database_url,
-        policy_gateway_url,
-        policy_approver_url,
-        policy_auditor_url,
-        lab=LAB_PASSWORD,
-    )
-    await _approver_add(
-        test_database_url, argparse.Namespace(id="lab-approver", name="Lab approver", role=None)
-    )
+    await _setup(test_database_url, policy_gateway_url, policy_auditor_url, lab=LAB_PASSWORD)
     pending = await _gate(policy_gateway_url, hold_s=0).decide(_context(), _call())
     await Approvals(_lab_url(test_database_url), ROLES).decide(
-        UUID(pending.approval_id or ""), "lab-approver", Decision.APPROVE, None
+        UUID(pending.approval_id or ""), Decision.APPROVE, None
     )
 
     await _audit_verify(policy_auditor_url, argparse.Namespace(anchors=None))

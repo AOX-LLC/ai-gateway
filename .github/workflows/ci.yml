@@ -80,7 +80,6 @@ jobs:
       TELEMETRY_PURGER_TEST_DATABASE_URL: postgresql://telemetry_purger:ci-only-telemetry-purger-password@localhost:5432/ai_gateway_test
       # The policy roles are created by the policy tests' own setup, with these passwords.
       POLICY_GATEWAY_TEST_DATABASE_URL: postgresql://policy_gateway:ci-only-policy-gateway-password@localhost:5432/ai_gateway_test
-      POLICY_APPROVER_TEST_DATABASE_URL: postgresql://policy_approver:ci-only-policy-approver-password@localhost:5432/ai_gateway_test
       POLICY_AUDITOR_TEST_DATABASE_URL: postgresql://policy_auditor:ci-only-policy-auditor-password@localhost:5432/ai_gateway_test
       # Where the tests find the embedding model (they fetch it there if it is missing).
       HANDBOOK_MODEL_PATH: ${{ github.workspace }}/.model-cache/potion-base-8M

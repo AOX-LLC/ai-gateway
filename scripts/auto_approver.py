@@ -48,13 +48,15 @@ async def auto_approving(approver_id: str | None) -> AsyncGenerator[AutoApproval
     print(f"AUTO-APPROVING pending writes as {approver_id} (test tooling, LAB_AUTO_APPROVE=yes)")
     roles_file = Path(os.environ.get("APPROVAL_ROLES_FILE", "config/approval_roles.toml"))
     approvals = Approvals(url, load_roles_by_action(roles_file))
-    principal = await approvals.principal(approver_id)
+    principal = await approvals.principal()
+    if principal.id != f"human:{approver_id}":
+        sys.exit(f"auto approval: the login is {principal.id}, not {approver_id}")
 
     async def loop() -> None:
         while True:
             for request in await approvals.queue.list_pending(principal):
                 try:
-                    await approvals.decide(request.id, approver_id, Decision.APPROVE, None)
+                    await approvals.decide(request.id, Decision.APPROVE, None)
                     result.approved += 1
                 except Exception:
                     result.refused += 1

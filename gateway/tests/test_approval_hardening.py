@@ -1,6 +1,5 @@
 """What must stay true of how approvals are configured and who can reach the test approver."""
 
-import argparse
 import ast
 import importlib.util
 import os
@@ -19,7 +18,6 @@ import yaml
 from aox_agent_core.approvals import Decision, Principal, PrincipalKind
 from aox_agent_core.errors import NotAuthorizedToResolveError
 
-from ai_gateway.admin.cli import _approver_add
 from ai_gateway.approver.cli import Approvals
 from ai_gateway.policy.approvals import expire_due_forever
 from ai_gateway.policy.roles import ApprovalRolesError, load_roles_by_action
@@ -113,34 +111,26 @@ class TestWithTheDatabase:
         policy: None,
         policy_gateway_url: str,
         policy_approver_url: str,
-        test_database_url: str,
     ) -> None:
-        await _approver_add(
-            test_database_url, argparse.Namespace(id="aiden", name="Aiden", role=None)
-        )
         pending = await _gate(policy_gateway_url).decide(_context(), _call())
         elsewhere = Approvals(policy_approver_url, {"tickets__assign": "approver"})
 
         with pytest.raises(NotAuthorizedToResolveError):
-            await elsewhere.decide(UUID(pending.approval_id or ""), "aiden", Decision.APPROVE, None)
+            await elsewhere.decide(UUID(pending.approval_id or ""), Decision.APPROVE, None)
 
     async def test_a_request_with_another_role_than_the_list_names_is_refused(
         self,
         policy: None,
         policy_gateway_url: str,
         policy_approver_url: str,
-        test_database_url: str,
     ) -> None:
         """The requester writes required_role; the approver's own list decides what it must be."""
-        await _approver_add(
-            test_database_url, argparse.Namespace(id="aiden", name="Aiden", role=None)
-        )
         gate = _gate(policy_gateway_url, roles_by_action={"tickets__change_status": "anyone"})
         pending = await gate.decide(_context(), _call())
 
         with pytest.raises(NotAuthorizedToResolveError):
             await Approvals(policy_approver_url, ROLES).decide(
-                UUID(pending.approval_id or ""), "aiden", Decision.APPROVE, None
+                UUID(pending.approval_id or ""), Decision.APPROVE, None
             )
 
     async def test_requests_past_their_lifetime_are_stored_as_expired_and_asked_for_afresh(

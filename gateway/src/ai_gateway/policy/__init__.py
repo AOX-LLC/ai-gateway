@@ -15,7 +15,25 @@ SCHEMA = "policy"
 GATEWAY_ROLE = "policy_gateway"
 """The gateway: appends audit records, asks for approvals and consumes approved ones."""
 APPROVER_ROLE = "policy_approver"
-"""A person's tool (`gateway-approver`; Phase 6's lab approver): decides pending requests."""
+"""The approver role: decides pending requests. A group role that cannot log in: each person
+decides through a login of their own that is a member of it (`approver-add`), and Phase 6's lab
+approver through the lab role below."""
+APPROVER_LOGIN_PREFIX = "policy_approver_"
+"""A person's database login is this and their approver id, with `.` and `-` made `_`."""
+APPROVER_ID_MAX_LENGTH = 40
+"""Longest id `approver-add` takes: a role name is at most 63 bytes, and the prefix is 16."""
+APPROVER_LOGIN_VALID_DAYS = 90
+"""A login's password stops working this long after it was set; `approver-rotate` sets a new one."""
+APPROVER_LOGIN_CONNECTION_LIMIT = 2
+APPROVER_LOGINS_VIEW = "approver_logins"
+"""Which login is which approver, for the auditor: `audit-verify` checks a decision's author
+against it. Includes removed approvers, whose decisions stay in the log."""
+LAB_APPROVER_ID = "lab-approver"
+ACTIVE_APPROVERS_VIEW = "active_approvers"
+"""The approvers who may still decide, as principals (`human:<id>`), for the gateway: it will not
+use an approval whose approver has been removed since."""
+RESERVED_APPROVER_IDS = frozenset({LAB_APPROVER_ID})
+"""Ids `approver-add` refuses: the lab approver's login is set up by `policy-setup` alone."""
 LAB_APPROVER_ROLE = "policy_lab_approver"
 """Phase 6's lab approver, which approves automatically. It exists only while `policy-setup` is
 given its password (POLICY_LAB_APPROVER_DB_PASSWORD), as a member of the approver role, and the next
@@ -39,6 +57,11 @@ DASHBOARD_VIEW = "dash_approvals"
 """The approval requests as the dashboard may see them: no arguments, no reasons."""
 ARGUMENTS_PURGE_FUNCTION = "purge_approval_arguments"
 ARGUMENTS_RETENTION_DAYS = 7
+
+
+def approver_login_name(approver_id: str) -> str:
+    """The database login that is this approver: the same id always gives the same name."""
+    return APPROVER_LOGIN_PREFIX + approver_id.replace(".", "_").replace("-", "_")
 
 
 def policy_url(

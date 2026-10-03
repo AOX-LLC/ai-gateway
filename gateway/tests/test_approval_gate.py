@@ -551,11 +551,7 @@ async def test_a_hand_given_create_on_the_schema_does_not_survive_setup(
         await connection.execute("GRANT CREATE ON SCHEMA policy TO policy_approver, policy_gateway")
     await setup_policy(
         test_database_url,
-        PolicyPasswords(
-            password_of(policy_gateway_url),
-            password_of(policy_approver_url),
-            password_of(policy_auditor_url),
-        ),
+        PolicyPasswords(password_of(policy_gateway_url), password_of(policy_auditor_url)),
     )
 
     async with await psycopg.AsyncConnection.connect(

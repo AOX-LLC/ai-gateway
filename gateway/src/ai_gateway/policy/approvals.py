@@ -34,7 +34,7 @@ from aox_agent_core.errors import AgentCoreError, ApprovalExpiredError
 from psycopg.errors import UniqueViolation
 
 from ai_gateway.pipeline.types import CallContext, ToolCall
-from ai_gateway.policy import ARGUMENTS_PURGE_FUNCTION, SCHEMA
+from ai_gateway.policy import ACTIVE_APPROVERS_VIEW, ARGUMENTS_PURGE_FUNCTION, SCHEMA
 from ai_gateway.policy.database import BoundedPostgresDatabase
 from ai_gateway.seams.approvals import ApprovalDecision, ApprovalOutcome
 from ai_gateway.text import printable
@@ -168,6 +168,11 @@ class PostgresApprovalGate:
         if request.requested_by != requester.id:
             logger.error("approval %s was asked for by another client; refused", approval_id)
             return ApprovalDecision(ApprovalOutcome.UNAVAILABLE, approval_id)
+        if not await self._decided_by_an_active_approver(request):
+            logger.error(
+                "approval %s was decided by someone who may no longer approve", approval_id
+            )
+            return ApprovalDecision(ApprovalOutcome.UNAVAILABLE, approval_id)
         try:
             await self._queue.consume(
                 request.id, action=call.exposed_name, payload=payload, principal=requester
@@ -242,6 +247,20 @@ class PostgresApprovalGate:
                 f"request {request.id} is for this call but its {', '.join(differs)} differ"
                 " (a changed approval setting takes effect once the old request expires)"
             )
+
+    async def _decided_by_an_active_approver(self, request: ApprovalRequest) -> bool:
+        """A person approved this, and they are still an approver. Removing an approver takes effect
+        on the requests they approved but nobody has used yet, at once, not at the next setup."""
+        decider = request.resolved_by
+
+        def read(session: Any) -> list[tuple[Any, ...]]:
+            rows: list[tuple[Any, ...]] = session.execute(
+                f"SELECT 1 FROM policy.{ACTIVE_APPROVERS_VIEW} WHERE principal = ?",  # noqa: S608
+                (decider,),
+            )
+            return rows
+
+        return decider is not None and bool(await self._database.run(read))
 
     async def _find_approved(
         self, requested_by: str, payload_hash: str, *, besides: UUID

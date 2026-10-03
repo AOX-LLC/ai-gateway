@@ -99,7 +99,8 @@ services:
         condition: service_healthy
     restart: "no"
 
-  # Creates the policy schema's three roles, installs agent-core's audit log and approval queue
+  # Creates the policy schema's roles (the approver role is a group nobody logs in as: each approver
+  # has a login of their own, made by `admin approver-add`), installs agent-core's audit log and approval queue
   # once, and grants (as the database owner).
   policy-setup:
     build: *gateway-build
@@ -111,7 +112,6 @@ services:
     environment:
       GATEWAY_MIGRATE_DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       POLICY_GATEWAY_DB_PASSWORD: ${POLICY_GATEWAY_DB_PASSWORD:?set it in .env}
-      POLICY_APPROVER_DB_PASSWORD: ${POLICY_APPROVER_DB_PASSWORD:?set it in .env}
       POLICY_AUDITOR_DB_PASSWORD: ${POLICY_AUDITOR_DB_PASSWORD:?set it in .env}
       # Empty (the default): there is no lab approver role. Set it to create one for the lab profile.
       POLICY_LAB_APPROVER_DB_PASSWORD: ${POLICY_LAB_APPROVER_DB_PASSWORD:-}
@@ -315,13 +315,20 @@ services:
       GATEWAY_MIGRATE_DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       # For audit-anchor and audit-verify, which run as the auditor role and can only read.
       POLICY_AUDITOR_DATABASE_URL: postgresql://policy_auditor:${POLICY_AUDITOR_DB_PASSWORD:?set it in .env}@postgres:5432/${POSTGRES_DB}
+      # For approver-add, -rotate and -remove: the change is appended to the audit log as the gateway
+      # role (agent-core refuses an append from the owner, which owns the table).
+      POLICY_GATEWAY_DATABASE_URL: postgresql://policy_gateway:${POLICY_GATEWAY_DB_PASSWORD:?set it in .env}@postgres:5432/${POSTGRES_DB}
     depends_on:
       postgres:
         condition: service_healthy
 
-  # A person's tool for writes that wait for approval: `docker compose run --rm approver --as
-  # <approver id> list`. It runs as the approver role, which can decide requests and read the
-  # arguments, and can do nothing else. Register approvers with `admin approver-add`.
+  # A person's tool for writes that wait for approval. Each approver has a database login of their
+  # own (`docker compose run --rm admin approver-add <id> --name "..."` prints it once), and the tool
+  # reads who they are from that login: there is no --as to claim. Sign in with
+  #   docker compose run --rm -e APPROVER_LOGIN -e APPROVER_PASSWORD approver list
+  # or leave the two variables out to be asked. The URL below names the database and no login: no
+  # shared approver password exists. The login is a member of the approver role, which can decide
+  # requests and read the arguments, and can do nothing else.
   approver:
     profiles: [tools]
     build: *gateway-build
@@ -331,7 +338,10 @@ services:
     networks: [backend]
     mem_limit: 96m
     environment:
-      POLICY_APPROVER_DATABASE_URL: postgresql://policy_approver:${POLICY_APPROVER_DB_PASSWORD:?set it in .env}@postgres:5432/${POSTGRES_DB}
+      POLICY_APPROVER_DATABASE_URL: postgresql://postgres:5432/${POSTGRES_DB}
+      # Passed through from your shell when set (never from .env), else the tool asks.
+      APPROVER_LOGIN:
+      APPROVER_PASSWORD:
       APPROVAL_ROLES_FILE: /app/config/approval_roles.toml
     stdin_open: true
     depends_on:
@@ -341,8 +351,8 @@ services:
   # The lab approver, for Phase 6's red-team runs: approves every pending write automatically.
   # Off unless asked for twice: the `lab` profile, and LAB_AUTO_APPROVE=yes in the environment (the
   # service exits at once without it); it also needs the lab database role, which exists only when
-  # POLICY_LAB_APPROVER_DB_PASSWORD is set for `policy-setup`. Register its approver first:
-  # `docker compose run --rm admin approver-add lab-approver --name "Lab approver"`.
+  # POLICY_LAB_APPROVER_DB_PASSWORD is set for `policy-setup`, which also records the lab approver
+  # (id lab-approver) as the approver that login is.
   # Compose interpolates every service's variables whatever the profile, so none is marked
   # required here: the service itself refuses to run without the flag.
   # Never use it against anything real: it defeats approval.
