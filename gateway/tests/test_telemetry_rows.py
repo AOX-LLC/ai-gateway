@@ -208,6 +208,17 @@ def test_decision_records_are_taken_before_auth_failures() -> None:
     assert [row.table for row in buffer.take(10)] == ["requests", "spans", "auth_failures"]
 
 
+def test_failed_logins_are_not_starved_by_a_steady_stream_of_decision_records() -> None:
+    buffer = TelemetryBuffer(5000, noisy_capacity=50)
+    buffer.put(*(Row("requests", {"n": n}) for n in range(1000)))
+    buffer.put(*(Row("auth_failures", {"n": n}) for n in range(5)))
+
+    batch = buffer.take(100)
+
+    assert len(batch) == 100
+    assert 0 < sum(row.table == "auth_failures" for row in batch) <= 10
+
+
 def test_take_returns_the_oldest_rows_first_and_removes_them() -> None:
     buffer = TelemetryBuffer(10)
     buffer.put(*(Row("requests", {"n": n}) for n in range(5)))
