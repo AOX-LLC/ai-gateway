@@ -20,7 +20,7 @@ from pathlib import Path
 from aox_agent_core.audit import GENESIS_HASH, AuditHead, SQLAuditLog
 from aox_agent_core.errors import AuditIntegrityError
 
-from ai_gateway.policy import APPROVER_ROLE, GATEWAY_ROLE
+from ai_gateway.policy import APPROVER_ROLE, GATEWAY_ROLE, LAB_APPROVER_ROLE
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 
@@ -96,22 +96,32 @@ _WRITTEN_BY = {
 (it writes its own decisions), so without this a holder of its credential could add a
 `gateway.tool_call` that no gateway wrote, and the hash chain would still verify. `db_role` is set
 by a trigger, whoever the writer claims to be. Records from before audit schema 3 have none."""
+_ALSO_WRITES = {"approval.resolved": LAB_APPROVER_ROLE}
+"""The lab approver (when the stack has one) decides requests as a member of the approver role."""
 
 
 def _check_provenance(seq: int, action: str, db_role: str | None) -> None:
     expected = GATEWAY_ROLE if action.startswith("gateway.") else _WRITTEN_BY.get(action)
-    if expected is not None and db_role is not None and db_role != expected:
+    if (
+        expected is not None
+        and db_role is not None
+        and db_role != expected
+        and db_role != _ALSO_WRITES.get(action)
+    ):
         raise AuditIntegrityError(
             f"record {seq} ({action}) was written by role {db_role}, not {expected}"
         )
 
 
-async def verify_with_anchors(log: SQLAuditLog, anchors: list[Anchor]) -> AuditHead:
+async def verify_with_anchors(
+    log: SQLAuditLog, anchors: list[Anchor], *, lab_decisions: list[int] | None = None
+) -> AuditHead:
     """Walk the whole chain, then check every anchor against it. Returns the chain's head.
 
     Raises AuditIntegrityError if a record's hash or link is wrong, if the log is shorter than an
     anchor says, or if the record at an anchor's sequence number is not the one that was
     anchored."""
+    lab_decisions = [] if lab_decisions is None else lab_decisions
     for anchor in anchors:
         if anchor.seq == 0 and anchor.record_hash != GENESIS_HASH:
             raise AuditIntegrityError("an anchor of the empty log does not hold the genesis hash")
@@ -128,6 +138,8 @@ async def verify_with_anchors(log: SQLAuditLog, anchors: list[Anchor]) -> AuditH
     head = await log.verify(expected_head=newest.head if newest else None)
     async for record in log.iter_records():
         _check_provenance(record.seq, record.action, record.db_role)
+        if record.action == "approval.resolved" and record.db_role == LAB_APPROVER_ROLE:
+            lab_decisions.append(record.seq)
         for anchor in wanted.pop(record.seq, []):
             if record.record_hash != anchor.record_hash:
                 raise AuditIntegrityError(

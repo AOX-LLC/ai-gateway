@@ -3,7 +3,10 @@
 import argparse
 import ast
 import importlib.util
+import os
 import re
+import shutil
+import subprocess
 import sys
 import tomllib
 from pathlib import Path
@@ -27,13 +30,17 @@ ROOT = Path(__file__).resolve().parents[2]
 SOURCES = [*(ROOT / "gateway" / "src").rglob("*.py"), *(ROOT / "scripts").rglob("*.py")]
 
 
-def _keyword_uses(name: str) -> list[str]:
+def _keyword_uses(name: str, *, attributes: bool = True) -> list[str]:
     found = []
     for path in SOURCES:
         for node in ast.walk(ast.parse(path.read_text())):
             if isinstance(node, ast.keyword) and node.arg == name:
                 found.append(f"{path.relative_to(ROOT)}:{node.value.lineno}")
-            if isinstance(node, ast.Name | ast.Attribute) and getattr(node, "attr", "") == name:
+            if (
+                attributes
+                and isinstance(node, ast.Name | ast.Attribute)
+                and getattr(node, "attr", "") == name
+            ):
                 found.append(f"{path.relative_to(ROOT)}:{node.lineno}")
     return found
 
@@ -47,7 +54,8 @@ def test_trust_requester_role_is_never_set_outside_tests() -> None:
 
 
 def test_the_gateway_never_names_delegates_so_only_the_asking_client_can_use_an_approval() -> None:
-    assert _keyword_uses("delegates") == []
+    # Passed to nothing: reading `request.delegates` (to refuse a request that has some) is fine.
+    assert _keyword_uses("delegates", attributes=False) == []
 
 
 def test_every_write_tool_has_an_approver_role_and_only_write_tools_do() -> None:
@@ -176,25 +184,117 @@ def _compose() -> dict[str, Any]:
     return loaded
 
 
-def test_no_compose_service_runs_or_enables_the_test_approver() -> None:
-    text = (ROOT / "compose.yaml").read_text()
+def test_the_test_approver_exists_in_compose_only_as_the_lab_service_behind_both_switches() -> None:
+    """Off in the default stack: it is the `lab` profile's one service, which holds no default for
+    the switch (an empty one: the service refuses to run) and is not restarted. Nothing else in
+    Compose names the switch or the script."""
+    services = _compose()["services"]
 
-    assert "LAB_AUTO_APPROVE" not in text
-    assert "auto_approver" not in text
-    assert "--approve-as" not in text
+    mentions = [
+        name
+        for name, service in services.items()
+        if "LAB_AUTO_APPROVE" in str(service) or "auto_approver" in str(service)
+    ]
+    assert mentions == ["lab-approver"]
+    lab = services["lab-approver"]
+    assert lab["profiles"] == ["lab"], "not started by `docker compose up`"
+    assert lab["environment"]["LAB_AUTO_APPROVE"] == "${LAB_AUTO_APPROVE:-}", "no default: empty"
+    assert "policy_lab_approver:${POLICY_LAB_APPROVER_DB_PASSWORD:-}@" in str(
+        lab["environment"]["POLICY_APPROVER_DATABASE_URL"]
+    ), "the lab role's password, empty unless set"
+    assert lab["restart"] == "no"
+    assert lab["volumes"] == [
+        "./scripts/auto_approver.py:/lab/auto_approver.py:ro",
+        "./scripts/lab_approver.py:/lab/lab_approver.py:ro",
+    ]
+    assert [n for n, s in services.items() if "lab" in s.get("profiles", [])] == ["lab-approver"]
+    assert "--approve-as" not in (ROOT / "compose.yaml").read_text()
+
+
+def _docker_config(
+    tmp_path: Path, *profiles: str, **extra: str
+) -> subprocess.CompletedProcess[str]:
+    env_file = tmp_path / ".env"
+    if not env_file.exists():
+        subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "scripts" / "init_env.py"),
+                "--example",
+                str(ROOT / ".env.example"),
+                "--output",
+                str(env_file),
+            ],
+            check=True,
+            capture_output=True,
+        )
+    command = ["docker", "compose", "--env-file", str(env_file)]
+    for profile in profiles:
+        command += ["--profile", profile]
+    return subprocess.run(
+        [*command, "config", "-q"],
+        cwd=ROOT,
+        env={"PATH": os.environ["PATH"], "HOME": str(tmp_path), **extra},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_the_default_stack_and_the_lab_profile_both_resolve_without_the_lab_switches(
+    tmp_path: Path,
+) -> None:
+    """Compose interpolates every service's variables whatever the profile: a variable marked
+    required on the lab service would break `docker compose` for everyone. None is."""
+    if shutil.which("docker") is None:
+        pytest.skip("docker is not installed")
+
+    default = _docker_config(tmp_path)
+    lab = _docker_config(tmp_path, "lab")
+
+    assert default.returncode == 0, default.stderr
+    assert lab.returncode == 0, lab.stderr
+
+
+def test_the_lab_approver_refuses_to_run_without_its_switch(tmp_path: Path) -> None:
+    """The service is the fence: with the lab profile on but LAB_AUTO_APPROVE not set to yes, it
+    exits at once, before it reads a database URL or approves anything."""
+    env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path), "PYTHONPATH": str(ROOT / "scripts")}
+
+    refused = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "lab_approver.py")],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+    wrong_value = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "lab_approver.py")],
+        env={**env, "LAB_AUTO_APPROVE": "true"},
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+
+    for result in (refused, wrong_value):
+        assert result.returncode != 0
+        assert "LAB_AUTO_APPROVE=yes" in result.stderr
 
 
 def test_the_gateway_service_holds_no_approver_credential() -> None:
     services = _compose()["services"]
 
-    holders = [
+    holders = sorted(
         name
         for name, service in services.items()
         if "POLICY_APPROVER_DATABASE_URL" in str(service.get("environment", {}))
-    ]
-    assert holders == ["approver"], "only the person's tool, which is behind the tools profile"
+    )
+    assert holders == ["approver", "lab-approver"], "a person's tool, and the lab's: both opt-in"
     assert services["approver"]["profiles"] == ["tools"]
     assert "POLICY_APPROVER" not in str(services["gateway"].get("environment", {}))
+    assert "POLICY_LAB" not in str(services["gateway"].get("environment", {}))
 
 
 def test_the_images_do_not_contain_the_scripts() -> None:

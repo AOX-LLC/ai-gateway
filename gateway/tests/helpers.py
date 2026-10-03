@@ -115,9 +115,15 @@ def run_gateway(
     policy_database_url: str | None = None,
     unaudited_writes: bool | None = None,
     approvals: dict[str, float] | None = None,
+    allowlist: str = "",
+    rate_limits: str = "",
+    fast_catalog: bool = False,
 ) -> Iterator[RunningGateway]:
     """The whole gateway on a free port, with only the scope layer, recording its events (and,
     given a telemetry database, storing them there too).
+
+    `fast_catalog` makes it look for a changed upstream every 0.3 s, for a test that changes one;
+    left off, the catalogue polls at its default, which keeps the run quiet.
 
     Writes are allowed without an audit record unless a policy database is given: a test that is
     not about the audit log should not need one, and a test that is gets the shipped behaviour."""
@@ -133,18 +139,26 @@ def run_gateway(
         f"allow_unaudited_writes = {unaudited}\n"
         f"allow_floor_override = {str(approvals is None).lower()}\n"
     )
+    allowlist_file = workdir / "allowlist.toml"
+    allowlist_file.write_text(allowlist)
+    limits_file = workdir / "rate_limits.toml"
+    limits_file.write_text(rate_limits)
     roles_file = workdir / "approval_roles.toml"
     roles_file.write_text('[roles_by_action]\necho__shout = "approver"\n')
+    catalog = {"catalog_refresh_s": 0.3, "catalog_registry_poll_s": 0.3} if fast_catalog else {}
     events = MemoryEventSink()
     settings = GatewaySettings(
         database_url=SecretStr(database_url),
         pipeline_file=pipeline_file,
         approval_roles_file=roles_file,
+        allowlist_file=allowlist_file,
+        rate_limits_file=limits_file,
         telemetry_database_url=(
             SecretStr(telemetry_database_url) if telemetry_database_url else None
         ),
         policy_database_url=SecretStr(policy_database_url) if policy_database_url else None,
         telemetry_flush_interval_s=0.05,
+        **catalog,  # type: ignore[arg-type]
         **{f"approval_{key}": value for key, value in (approvals or {}).items()},  # type: ignore[arg-type]
     )
     with serve_in_thread(create_app(settings, events)) as base_url:

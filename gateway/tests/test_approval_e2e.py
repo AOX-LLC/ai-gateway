@@ -58,6 +58,24 @@ def gateway(
 
 
 @pytest.fixture
+def fast_gateway(
+    test_database_url: str,
+    ops_token: IssuedToken,
+    policy: None,
+    policy_gateway_url: str,
+    tmp_path: Path,
+) -> Iterator[RunningGateway]:
+    with run_gateway(
+        test_database_url,
+        tmp_path,
+        policy_database_url=policy_gateway_url,
+        approvals={"hold_s": 0.3, "poll_s": 0.05},
+        fast_catalog=True,
+    ) as running:
+        yield running
+
+
+@pytest.fixture
 async def person(test_database_url: str, policy_approver_url: str) -> Approvals:
     await _approver_add(test_database_url, argparse.Namespace(id="aiden", name="Aiden", role=None))
     return Approvals(policy_approver_url, SHOUT_ROLES)
@@ -187,8 +205,14 @@ def _settings(url: str, tmp_path: Path) -> GatewaySettings:
     pipeline.write_text('[layers]\napproval = "enforce"\n')
     roles = tmp_path / "approval_roles.toml"
     roles.write_text("[roles_by_action]\n")
+    (tmp_path / "allowlist.toml").write_text("")
+    (tmp_path / "rate_limits.toml").write_text("")
     return GatewaySettings(
-        database_url=SecretStr(url), pipeline_file=pipeline, approval_roles_file=roles
+        database_url=SecretStr(url),
+        pipeline_file=pipeline,
+        approval_roles_file=roles,
+        allowlist_file=tmp_path / "allowlist.toml",
+        rate_limits_file=tmp_path / "rate_limits.toml",
     )
 
 
@@ -243,3 +267,33 @@ async def test_nothing_waits_in_a_gateway_that_was_never_asked(
     async with connect(gateway.url, ops_token.plaintext) as ops:
         with anyio.fail_after(5):
             await ops.call_tool("echo__say", {"text": "read"})
+
+
+async def test_a_registry_change_after_approval_invalidates_it(
+    fast_gateway: RunningGateway,
+    ops_token: IssuedToken,
+    person: Approvals,
+    admin_registry: AdminRegistry,
+    echo_url: str,
+) -> None:
+    """Approve, repoint the namespace at another address, retry the same call: the approval
+    was for the old upstream, so the call is asked for afresh and nothing is forwarded."""
+    async with connect(fast_gateway.url, ops_token.plaintext) as ops:
+        waiting = await ops.call_tool("echo__shout", {"text": "move the namespace"})
+        assert waiting.structured_content is not None
+        first_id = waiting.structured_content["approval_id"]
+        await person.decide(UUID(first_id), "aiden", Decision.APPROVE, None)
+
+        # The same server at another address (a query string the server ignores): still
+        # reachable, but not the upstream that was approved.
+        await admin_registry.upsert_upstream("echo", f"{echo_url}?moved=1", 2000, 5000)
+        await anyio.sleep(1.5)  # the gateway looks for a changed upstream every 0.3 s here
+        for _ in range(50):  # and for it to be back: it is refreshed before it is offered again
+            if "echo__shout" in [tool.name for tool in (await ops.list_tools()).tools]:
+                break
+            await anyio.sleep(0.2)
+        retried = await ops.call_tool("echo__shout", {"text": "move the namespace"})
+
+    assert retried.is_error is True, "the old approval did not cover the repointed upstream"
+    assert retried.structured_content is not None
+    assert retried.structured_content["approval_id"] != first_id

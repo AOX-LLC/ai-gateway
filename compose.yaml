@@ -28,12 +28,15 @@ x-servers-build: &servers-build
 # prompt-injected or compromised server has nowhere to send what it read. The gateway and
 # Postgres are on both, so the host can reach them and they can reach the servers. Postgres
 # can itself open outbound connections for a superuser (see docs/architecture.md, Networks).
-# Memory limits (mem_limit on every service) are sized for a shared 4-core, 7 GB machine, from
-# measured use (docker stats after 300 simulated requests): gateway 75 MiB, handbook 150 MiB,
-# ticketing and CRM 63 MiB each, Postgres 53 MiB, echo 52 MiB, telemetry-purge 27 MiB. Each limit
-# is two to three times that. servers-setup loads the embedding model to seed a fresh volume and
-# was seen to finish within 256 MiB, so it has 384. All limits together are 2.6 GiB, and
-# gateway/tests/test_compose.py keeps the total under a budget.
+# Memory limits (mem_limit on every service) are sized for a shared 4-core, 7 GB machine, at about
+# 1.5 times each service's peak, the higher of two runs, sampled once a second while the acceptance
+# check, the Harborline scenarios and a 200-call traffic simulation ran (Phase 3c): gateway 115 MiB,
+# handbook 159, ticketing and CRM 77 each, echo 64, Postgres 93, telemetry-purge 28, and the setup
+# and admin containers 90 to 103. Floors: 64 MiB for a small service, 256 for Postgres, 96 for
+# one-shots. servers-setup embeds the handbook with a local model, but only on a fresh volume, so
+# its peak was not seen: it keeps 384. The lab approver and the approver were not run in that sample
+# and keep generous limits. All limits together are 2.3 GiB (they were 2.9 GiB), which leaves room
+# for the dashboard; gateway/tests/test_compose.py keeps the total under 3072 MiB.
 x-hardening: &hardening
   read_only: true
   tmpfs:
@@ -45,6 +48,7 @@ x-hardening: &hardening
 services:
   postgres:
     image: pgvector/pgvector:pg17@sha256:ac08538c6f8b9904c33c8224c5e5706dbe760aca29db1d096972b4052c22a75d
+    restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:?set it in .env}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set it in .env}
@@ -53,7 +57,7 @@ services:
     ports:
       - "127.0.0.1:4402:5432"
     networks: [edge, backend]
-    mem_limit: 512m
+    mem_limit: 256m
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./db/init:/docker-entrypoint-initdb.d:ro
@@ -69,7 +73,7 @@ services:
     command: ["gateway-admin", "migrate"]
     <<: *hardening
     networks: [backend]
-    mem_limit: 128m
+    mem_limit: 144m
     environment:
       GATEWAY_MIGRATE_DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
     depends_on:
@@ -84,7 +88,7 @@ services:
     command: ["gateway-admin", "telemetry-setup"]
     <<: *hardening
     networks: [backend]
-    mem_limit: 128m
+    mem_limit: 160m
     environment:
       GATEWAY_MIGRATE_DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       TELEMETRY_WRITER_DB_PASSWORD: ${TELEMETRY_WRITER_DB_PASSWORD:?set it in .env}
@@ -103,12 +107,14 @@ services:
     command: ["gateway-admin", "policy-setup"]
     <<: *hardening
     networks: [backend]
-    mem_limit: 192m
+    mem_limit: 144m
     environment:
       GATEWAY_MIGRATE_DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       POLICY_GATEWAY_DB_PASSWORD: ${POLICY_GATEWAY_DB_PASSWORD:?set it in .env}
       POLICY_APPROVER_DB_PASSWORD: ${POLICY_APPROVER_DB_PASSWORD:?set it in .env}
       POLICY_AUDITOR_DB_PASSWORD: ${POLICY_AUDITOR_DB_PASSWORD:?set it in .env}
+      # Empty (the default): there is no lab approver role. Set it to create one for the lab profile.
+      POLICY_LAB_APPROVER_DB_PASSWORD: ${POLICY_LAB_APPROVER_DB_PASSWORD:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -126,7 +132,7 @@ services:
     restart: unless-stopped
     <<: *hardening
     networks: [backend]
-    mem_limit: 96m
+    mem_limit: 64m
     environment:
       TELEMETRY_PURGE_DATABASE_URL: postgresql://telemetry_purger:${TELEMETRY_PURGER_DB_PASSWORD:?set it in .env}@postgres:5432/${POSTGRES_DB}
       TELEMETRY_RETENTION_SPAN_DAYS: ${TELEMETRY_RETENTION_SPAN_DAYS:-7}
@@ -146,6 +152,8 @@ services:
       GATEWAY_DATABASE_URL: postgresql://gateway_app:${GATEWAY_APP_DB_PASSWORD}@postgres:5432/${POSTGRES_DB}
       GATEWAY_PIPELINE_FILE: ${GATEWAY_PIPELINE_FILE_IN_CONTAINER:-/app/config/pipeline.toml}
       GATEWAY_APPROVAL_ROLES_FILE: /app/config/approval_roles.toml
+      GATEWAY_ALLOWLIST_FILE: /app/config/allowlist.toml
+      GATEWAY_RATE_LIMITS_FILE: /app/config/rate_limits.toml
       GATEWAY_ALLOWED_HOSTS: ${GATEWAY_ALLOWED_HOSTS:-127.0.0.1:*,localhost:*}
       GATEWAY_LOG_LEVEL: ${GATEWAY_LOG_LEVEL:-INFO}
       # Spans and decision records are stored through this append-only role. If the database
@@ -162,7 +170,7 @@ services:
     ports:
       - "127.0.0.1:4401:4401"
     networks: [edge, backend]
-    mem_limit: 256m
+    mem_limit: 176m
     volumes:
       - ./config:/app/config:ro
     depends_on:
@@ -222,7 +230,7 @@ services:
       TICKETING_SERVICE_TOKEN: ${TICKETING_SERVICE_TOKEN:?set it in .env}
       TICKETING_ALLOWED_HOSTS: ticketing:*,127.0.0.1:*,localhost:*
     networks: [backend]
-    mem_limit: 192m
+    mem_limit: 128m
     depends_on:
       servers-setup:
         condition: service_completed_successfully
@@ -250,7 +258,7 @@ services:
       CRM_SERVICE_TOKEN: ${CRM_SERVICE_TOKEN:?set it in .env}
       CRM_ALLOWED_HOSTS: crm:*,127.0.0.1:*,localhost:*
     networks: [backend]
-    mem_limit: 192m
+    mem_limit: 128m
     depends_on:
       servers-setup:
         condition: service_completed_successfully
@@ -279,7 +287,7 @@ services:
       HANDBOOK_SERVICE_TOKEN: ${HANDBOOK_SERVICE_TOKEN:?set it in .env}
       HANDBOOK_ALLOWED_HOSTS: handbook:*,127.0.0.1:*,localhost:*
     networks: [backend]
-    mem_limit: 384m
+    mem_limit: 240m
     depends_on:
       servers-setup:
         condition: service_completed_successfully
@@ -302,7 +310,7 @@ services:
     entrypoint: ["gateway-admin"]
     <<: *hardening
     networks: [backend]
-    mem_limit: 128m
+    mem_limit: 144m
     environment:
       GATEWAY_MIGRATE_DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       # For audit-anchor and audit-verify, which run as the auditor role and can only read.
@@ -321,7 +329,7 @@ services:
     entrypoint: ["gateway-approver"]
     <<: *hardening
     networks: [backend]
-    mem_limit: 128m
+    mem_limit: 96m
     environment:
       POLICY_APPROVER_DATABASE_URL: postgresql://policy_approver:${POLICY_APPROVER_DB_PASSWORD:?set it in .env}@postgres:5432/${POSTGRES_DB}
       APPROVAL_ROLES_FILE: /app/config/approval_roles.toml
@@ -329,6 +337,35 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+
+  # The lab approver, for Phase 6's red-team runs: approves every pending write automatically.
+  # Off unless asked for twice: the `lab` profile, and LAB_AUTO_APPROVE=yes in the environment (the
+  # service exits at once without it); it also needs the lab database role, which exists only when
+  # POLICY_LAB_APPROVER_DB_PASSWORD is set for `policy-setup`. Register its approver first:
+  # `docker compose run --rm admin approver-add lab-approver --name "Lab approver"`.
+  # Compose interpolates every service's variables whatever the profile, so none is marked
+  # required here: the service itself refuses to run without the flag.
+  # Never use it against anything real: it defeats approval.
+  lab-approver:
+    profiles: [lab]
+    build: *gateway-build
+    image: ai-gateway-gateway
+    entrypoint: ["/app/.venv/bin/python", "/lab/lab_approver.py"]
+    restart: "no"
+    <<: *hardening
+    networks: [backend]
+    mem_limit: 96m
+    environment:
+      POLICY_APPROVER_DATABASE_URL: postgresql://policy_lab_approver:${POLICY_LAB_APPROVER_DB_PASSWORD:-}@postgres:5432/${POSTGRES_DB}
+      APPROVAL_ROLES_FILE: /app/config/approval_roles.toml
+      LAB_AUTO_APPROVE: ${LAB_AUTO_APPROVE:-}
+      LAB_APPROVER_ID: ${LAB_APPROVER_ID:-lab-approver}
+    volumes:
+      - ./scripts/auto_approver.py:/lab/auto_approver.py:ro
+      - ./scripts/lab_approver.py:/lab/lab_approver.py:ro
+    depends_on:
+      policy-setup:
+        condition: service_completed_successfully
 
   # Runs scripts/test_client.py in the servers' own network. The servers publish no port, so
   # the host cannot call them directly; scripts/direct_check.sh runs this once per server.
@@ -367,7 +404,7 @@ services:
       ECHO_ALLOWED_HOSTS: echo:*,127.0.0.1:*
     <<: *hardening
     networks: [backend]
-    mem_limit: 128m
+    mem_limit: 96m
 
 networks:
   edge: {}

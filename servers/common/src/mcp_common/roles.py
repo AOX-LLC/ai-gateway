@@ -48,7 +48,18 @@ async def _database_access_lock(connection: AsyncConnection) -> AsyncGenerator[N
         yield
 
 
-async def ensure_role(connection: AsyncConnection, password: str, role: str) -> None:
+IDLE_IN_TRANSACTION_MS = 30_000
+"""How long a session of any role may sit inside a transaction doing nothing before the server ends
+it. An idle transaction holds its locks: one that holds a lock others queue for (agent-core's
+single audit append lock is one any role can take) would stop every write that needs it."""
+
+
+async def ensure_role(
+    connection: AsyncConnection,
+    password: str,
+    role: str,
+    idle_in_transaction_ms: int = IDLE_IN_TRANSACTION_MS,
+) -> None:
     cursor = await connection.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (role,))
     if await cursor.fetchone() is None:
         await connection.execute(sql.SQL("CREATE ROLE {} LOGIN").format(sql.Identifier(role)))
@@ -61,6 +72,11 @@ async def ensure_role(connection: AsyncConnection, password: str, role: str) -> 
     await connection.execute(
         sql.SQL("ALTER ROLE {} WITH LOGIN PASSWORD {}").format(
             sql.Identifier(role), sql.Literal(verifier)
+        )
+    )
+    await connection.execute(
+        sql.SQL("ALTER ROLE {} SET idle_in_transaction_session_timeout = {}").format(
+            sql.Identifier(role), sql.Literal(f"{idle_in_transaction_ms}ms")
         )
     )
     database = sql.Identifier(await database_name(connection))
@@ -143,11 +159,25 @@ async def reset_role(connection: AsyncConnection, role: str) -> None:
             "ALTER ROLE {} NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS"
         ).format(name)
     )
+    # A grant is revoked as the role that made it (PostgreSQL ignores a revoke by anyone else, and
+    # since 16 a role can hold the same membership from several grantors), then checked again.
+    for parent, grantor in await _memberships_of(connection, role):
+        await connection.execute(
+            sql.SQL("REVOKE {} FROM {} GRANTED BY {} CASCADE").format(
+                sql.Identifier(parent), name, sql.Identifier(grantor)
+            )
+        )
+    remaining = await _memberships_of(connection, role)
+    if remaining:
+        raise RuntimeError(f"{len(remaining)} membership(s) of {role} could not be revoked")
+
+
+async def _memberships_of(connection: AsyncConnection, role: str) -> list[tuple[str, str]]:
     cursor = await connection.execute(
-        "SELECT parent.rolname FROM pg_auth_members AS m"
+        "SELECT parent.rolname, grantor.rolname FROM pg_auth_members AS m"
         " JOIN pg_roles AS parent ON parent.oid = m.roleid"
-        " JOIN pg_roles AS member ON member.oid = m.member WHERE member.rolname = %s",
+        " JOIN pg_roles AS member ON member.oid = m.member"
+        " JOIN pg_roles AS grantor ON grantor.oid = m.grantor WHERE member.rolname = %s",
         (role,),
     )
-    for (parent,) in await cursor.fetchall():
-        await connection.execute(sql.SQL("REVOKE {} FROM {}").format(sql.Identifier(parent), name))
+    return [(str(parent), str(grantor)) for parent, grantor in await cursor.fetchall()]

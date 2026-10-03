@@ -105,3 +105,16 @@ def test_the_memory_limits_together_fit_a_shared_machine(compose: dict[str, Any]
     total = sum(_mib(str(svc["mem_limit"])) for svc in compose["services"].values())
 
     assert total <= MEMORY_BUDGET_MIB
+
+
+def test_long_running_services_restart_and_finished_one_shots_do_not(
+    compose: dict[str, Any],
+) -> None:
+    """The purge that enforces the retention limits must not stay down after a reboot or an
+    out-of-memory kill; a setup job that has finished must not start over."""
+    services = compose["services"]
+
+    for name in ("gateway", "postgres", "crm", "ticketing", "handbook", "telemetry-purge"):
+        assert services[name]["restart"] == "unless-stopped", name
+    for name in ("migrate", "telemetry-setup", "policy-setup", "servers-setup", "lab-approver"):
+        assert services[name]["restart"] == "no", name

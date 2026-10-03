@@ -85,6 +85,8 @@ def build_approvals(
         ttl_s=settings.approval_ttl_s,
         hold_s=settings.approval_hold_s,
         poll_s=settings.approval_poll_s,
+        max_holds=settings.approval_max_holds,
+        max_holds_per_client=settings.approval_max_holds_per_client,
         roles_by_action=load_roles_by_action(settings.approval_roles_file),
     )
     return gate, database

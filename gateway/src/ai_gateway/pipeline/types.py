@@ -34,6 +34,8 @@ class DenyCode(StrEnum):
     TOOL_UNAVAILABLE = "tool_unavailable"
     LAYER_ERROR = "layer_error"
     AUDIT_UNAVAILABLE = "audit_unavailable"
+    ALLOWLIST_VIOLATION = "allowlist_violation"
+    RATE_LIMITED = "rate_limited"
     APPROVAL_PENDING = "approval_pending"
     APPROVAL_REJECTED = "approval_rejected"
     APPROVAL_EXPIRED = "approval_expired"
@@ -134,6 +136,8 @@ class ToolCall:
     arguments_json: str = field(repr=False)
     effect: Effect = "write"
     effect_source: EffectSource = "default"
+    upstream_identity: str = ""
+    """Which upstream this call goes to (`UpstreamServer.identity`). An approval is bound to it."""
 
     @classmethod
     def create(
@@ -144,9 +148,18 @@ class ToolCall:
         arguments: dict[str, Any],
         effect: Effect = "write",
         effect_source: EffectSource = "default",
+        upstream_identity: str = "",
     ) -> "ToolCall":
         canonical = json.dumps(arguments, sort_keys=True, separators=(",", ":"))
-        return cls(exposed_name, namespace, upstream_tool, canonical, effect, effect_source)
+        return cls(
+            exposed_name,
+            namespace,
+            upstream_tool,
+            canonical,
+            effect,
+            effect_source,
+            upstream_identity,
+        )
 
     @property
     def arguments(self) -> dict[str, Any]:

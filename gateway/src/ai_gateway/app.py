@@ -17,8 +17,11 @@ from starlette.routing import Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from ai_gateway.auth.middleware import BearerAuthMiddleware
+from ai_gateway.auth.throttle import LoginThrottle, ThrottleConfig
 from ai_gateway.auth.verifier import TokenVerifier
 from ai_gateway.pipeline.config import load_pipeline_config
+from ai_gateway.pipeline.layers.allowlist import load_allowlist
+from ai_gateway.pipeline.layers.rate_limit import load_rate_limits
 from ai_gateway.pipeline.registry import LAYER_ORDER
 from ai_gateway.pipeline.runner import Pipeline
 from ai_gateway.policy.approvals import expire_due_forever, purge_arguments_forever
@@ -71,6 +74,8 @@ def create_app(settings: GatewaySettings, events: EventSink | None = None) -> Fa
         event_sink,
         audit=audit,
         approvals=approvals[0] if approvals else None,
+        allowlist=load_allowlist(settings.allowlist_file),
+        rate_limits=load_rate_limits(settings.rate_limits_file),
     )
     if telemetry is not None:
         telemetry.buffer.put(
@@ -90,7 +95,11 @@ def create_app(settings: GatewaySettings, events: EventSink | None = None) -> Fa
             await db_pool.open(wait=True, timeout=30)
             registry = GatewayRegistry(db_pool)
             endpoint.schema_versions = SchemaVersionCache(registry)
-            catalog = Catalog(registry, refresh_interval_s=settings.catalog_refresh_s)
+            catalog = Catalog(
+                registry,
+                refresh_interval_s=settings.catalog_refresh_s,
+                registry_poll_s=settings.catalog_registry_poll_s,
+            )
             sessions = UpstreamSessionPool(idle_timeout_s=settings.session_idle_timeout_s)
             session_manager = StreamableHTTPSessionManager(
                 GatewayServer(catalog, sessions, pipeline).build(),
@@ -111,6 +120,15 @@ def create_app(settings: GatewaySettings, events: EventSink | None = None) -> Fa
                 ),
                 TokenVerifier(registry),
                 event_sink,
+                throttle=LoginThrottle(
+                    ThrottleConfig(
+                        failures_per_id=settings.login_failures_per_id,
+                        window_s=settings.login_window_s,
+                        lockout_s=settings.login_lockout_s,
+                        global_ceiling=settings.login_global_ceiling,
+                        known_good_ttl_s=settings.login_known_good_ttl_s,
+                    )
+                ),
             )
 
             span_processor = install_tracing(telemetry.buffer) if telemetry else None

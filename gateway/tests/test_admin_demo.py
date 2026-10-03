@@ -60,7 +60,11 @@ async def test_seed_demo_registers_the_upstream_policies_and_clients(
         "SELECT c.name, count(*) FROM clients c JOIN client_scopes s ON s.client_id = c.id"
         " GROUP BY c.name ORDER BY 1",
     )
-    assert sorted(tokens) == ["harborline-ops-bot", "harborline-support-bot"]
+    assert sorted(tokens) == [
+        "harborline-decoy-bot",
+        "harborline-ops-bot",
+        "harborline-support-bot",
+    ]
     assert upstream == [
         ("crm", "http://crm:4411/mcp", "CRM_SERVICE_TOKEN"),
         ("handbook", "http://handbook:4410/mcp", "HANDBOOK_SERVICE_TOKEN"),
@@ -89,8 +93,8 @@ async def test_seed_demo_is_idempotent_and_replaces_the_old_tokens(
         " (SELECT count(*) FROM clients)",
     )
     assert first != second
-    assert live == [(2,)]
-    assert counts == [(3, 11, 2)]
+    assert live == [(3,)]
+    assert counts == [(3, 11, 3)]
 
 
 async def test_tool_policy_set_changes_one_tools_effect(

@@ -44,6 +44,8 @@ class AuthFailureReason(StrEnum):
     REVOKED = "revoked"
     EXPIRED = "expired"
     CLIENT_DISABLED = "client_disabled"
+    THROTTLED = "throttled"
+    """Too many failures for this token id, or too many failures altogether: not verified at all."""
 
 
 @dataclass(frozen=True)

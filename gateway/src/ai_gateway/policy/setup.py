@@ -16,6 +16,7 @@ from dataclasses import dataclass
 import anyio
 from aox_agent_core.storage import install_postgres_schema
 from psycopg import AsyncConnection, sql
+from psycopg.errors import UniqueViolation
 
 from ai_gateway.policy import (
     APPROVALS_TABLE,
@@ -28,6 +29,8 @@ from ai_gateway.policy import (
     AUDITOR_ROLE,
     DASHBOARD_VIEW,
     GATEWAY_ROLE,
+    LAB_APPROVER_ROLE,
+    POLICY_IDLE_IN_TRANSACTION_MS,
     ROLES,
     SCHEMA,
 )
@@ -52,6 +55,8 @@ class PolicyPasswords:
     gateway: str
     approver: str
     auditor: str
+    lab_approver: str | None = None
+    """Set only for a lab stack: creates the lab approver role. Unset, the role is dropped."""
 
 
 async def setup_policy(owner_url: str, passwords: PolicyPasswords) -> None:
@@ -69,7 +74,7 @@ async def setup_policy(owner_url: str, passwords: PolicyPasswords) -> None:
         advisory_lock(connection, _SETUP_LOCK),
     ):
         for role, password in role_passwords:
-            await ensure_role(connection, password, role)
+            await ensure_role(connection, password, role, POLICY_IDLE_IN_TRANSACTION_MS)
             await reset_role(connection, role)
         await ensure_schema(connection, SCHEMA)
         # A role may not create objects in the schema (they could shadow what the owner's setup
@@ -90,8 +95,12 @@ async def setup_policy(owner_url: str, passwords: PolicyPasswords) -> None:
         await _clear_layout_grants(connection)
         await _install(owner_url)
         await _ensure_approval_tables(connection)
+        await _ensure_one_pending_index(connection)
         await grant_policy_access(connection)
-        await restrict_database_access(connection, list(ROLES))
+        await _set_up_lab_role(connection, passwords.lab_approver)
+        await restrict_database_access(
+            connection, [*ROLES, *([LAB_APPROVER_ROLE] if passwords.lab_approver else [])]
+        )
 
 
 async def _install(owner_url: str) -> None:
@@ -151,6 +160,15 @@ CREATE INDEX IF NOT EXISTS policy_approvals_find
 ON {APPROVALS_TABLE} (requested_by, payload_sha256, created_at DESC)
 """  # the gate looks a request up by client and argument hash on every write
 
+_ONE_PENDING_REQUEST = f"""
+CREATE UNIQUE INDEX policy_approvals_one_pending
+ON {APPROVALS_TABLE} (requested_by, action, payload_sha256)
+WHERE status = 'pending'
+"""  # REPLACE WITH AGENT-CORE A5'S INDEX
+# Pending only. An approved request that expires unused is never closed by agent-core a3 (its sweep
+# closes pending ones only), so one in the index would block the same write for good. The gate
+# closes the gap that leaves (a new request made while an approved one exists) itself.
+
 _PURGE_FUNCTION = f"""
 CREATE OR REPLACE FUNCTION {ARGUMENTS_PURGE_FUNCTION}() RETURNS bigint
 LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
@@ -197,6 +215,42 @@ async def _ensure_approval_tables(connection: AsyncConnection) -> None:
         # The dashboard's reader sees the view and nothing else in this schema. If its role does
         # not exist yet (telemetry-setup runs first in Compose), there is nothing to grant.
         await connection.execute(_DASHBOARD_GRANT.encode())
+
+
+async def _ensure_one_pending_index(connection: AsyncConnection) -> None:
+    """At most one pending request per client, tool and payload, enforced by the database.
+
+    An earlier version of this index also covered approved requests; it is replaced. If the
+    volume already holds two pending requests for one intent (identical concurrent calls made them
+    before the index existed), setup stops and says which: it cannot cancel them itself, since
+    only the requester role may, and nothing is guessed about which to keep."""
+    await connection.execute(
+        sql.SQL("DROP INDEX IF EXISTS {}.policy_approvals_one_open").format(sql.Identifier(SCHEMA))
+    )
+    await connection.execute(
+        sql.SQL("DROP INDEX IF EXISTS {}.policy_approvals_one_pending").format(
+            sql.Identifier(SCHEMA)
+        )
+    )
+    try:
+        async with connection.transaction():
+            await connection.execute(
+                sql.SQL("SET LOCAL search_path TO {}").format(sql.Identifier(SCHEMA))
+            )
+            await connection.execute(_ONE_PENDING_REQUEST.encode())
+    except UniqueViolation:
+        cursor = await connection.execute(
+            f"SELECT array_agg(id ORDER BY created_at) FROM {SCHEMA}.{APPROVALS_TABLE}"  # noqa: S608
+            " WHERE status = 'pending' GROUP BY requested_by, action, payload_sha256"
+            " HAVING count(*) > 1 LIMIT 10".encode()
+        )
+        groups = [", ".join(map(str, row[0])) for row in await cursor.fetchall()]
+        raise RuntimeError(
+            "policy-setup cannot make pending approval requests unique: these groups of requests"
+            " are for the same client, tool and payload (up to 10 groups): "
+            + "; ".join(f"[{group}]" for group in groups)
+            + ". Cancel all but one in each group as the requester role, then run it again."
+        ) from None
 
 
 async def grant_policy_access(connection: AsyncConnection) -> None:
@@ -268,11 +322,38 @@ _MEMBERSHIPS = (
     " JOIN pg_roles parent ON parent.oid = m.roleid"
     " JOIN pg_roles member ON member.oid = m.member"
     " JOIN pg_roles grantor ON grantor.oid = m.grantor WHERE parent.rolname = ANY(%s)"
+    " AND member.rolname <> %s"  # the lab approver's membership is set up deliberately, below
 )
 
 
+async def _set_up_lab_role(connection: AsyncConnection, password: str | None) -> None:
+    """The lab approver: a login role that is a member of the approver role, so it has exactly the
+    approver's powers, and nothing else. Without a password it does not exist."""
+    name = sql.Identifier(LAB_APPROVER_ROLE)
+    # Rebuilt every time, not reset: a grant, a table privilege or a role made a member of it by
+    # hand disappears with it, and its running sessions end. The role holds nothing worth keeping.
+    if await _role_exists(connection, LAB_APPROVER_ROLE):
+        await connection.execute(
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = %s",
+            (LAB_APPROVER_ROLE,),
+        )
+        await connection.execute(sql.SQL("DROP OWNED BY {}").format(name))
+        await connection.execute(sql.SQL("DROP ROLE {}").format(name))
+    if not password:
+        return
+    await ensure_role(connection, password, LAB_APPROVER_ROLE, POLICY_IDLE_IN_TRANSACTION_MS)
+    await reset_role(connection, LAB_APPROVER_ROLE)
+    await connection.execute(sql.SQL("GRANT {} TO {}").format(sql.Identifier(APPROVER_ROLE), name))
+    logger.warning("the lab approver role exists: it decides requests as the approver role")
+
+
+async def _role_exists(connection: AsyncConnection, role: str) -> bool:
+    cursor = await connection.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (role,))
+    return await cursor.fetchone() is not None
+
+
 async def _memberships(connection: AsyncConnection) -> list[tuple[str, str, str]]:
-    cursor = await connection.execute(_MEMBERSHIPS, (list(ROLES),))
+    cursor = await connection.execute(_MEMBERSHIPS, (list(ROLES), LAB_APPROVER_ROLE))
     return [(str(a), str(b), str(c)) for a, b, c in await cursor.fetchall()]
 
 

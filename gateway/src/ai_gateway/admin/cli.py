@@ -82,6 +82,12 @@ DEMO_CLIENTS = {
         "Operations assistant for the fictional Harborline Supply Co. (demo data)",
         DEMO_SCOPES_OPS,
     ),
+    # No scopes: the traffic simulator's wrong-secret attempts use this token, because the
+    # failed-login throttle locks out the token id that is guessed at.
+    "harborline-decoy-bot": (
+        "Decoy for the traffic simulator's failed logins; holds no scopes (demo data)",
+        [],
+    ),
 }
 
 
@@ -283,6 +289,7 @@ async def _policy_setup(database_url: str, _: argparse.Namespace) -> None:
             gateway=os.environ["POLICY_GATEWAY_DB_PASSWORD"],
             approver=os.environ["POLICY_APPROVER_DB_PASSWORD"],
             auditor=os.environ["POLICY_AUDITOR_DB_PASSWORD"],
+            lab_approver=os.environ.get("POLICY_LAB_APPROVER_DB_PASSWORD") or None,
         ),
     )
     print("policy schema is set up")
@@ -347,8 +354,14 @@ async def _audit_anchor(database_url: str, args: argparse.Namespace) -> None:
 async def _audit_verify(database_url: str, args: argparse.Namespace) -> None:
     log = _audit_log(database_url)
     anchors = read_anchors(args.anchors) if args.anchors else []
-    head = await verify_with_anchors(log, anchors)
+    lab_decisions: list[int] = []
+    head = await verify_with_anchors(log, anchors, lab_decisions=lab_decisions)
     print(f"ok: {head.seq} records chain correctly and match {len(anchors)} anchors")
+    if lab_decisions:
+        print(
+            f"note: {len(lab_decisions)} approval decision(s) were made by the lab approver role"
+            " (automatic): this stack was used as a lab"
+        )
 
 
 async def _client_add(database_url: str, args: argparse.Namespace) -> None:

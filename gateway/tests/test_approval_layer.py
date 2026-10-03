@@ -170,3 +170,31 @@ def test_the_approval_layer_comes_last() -> None:
     from ai_gateway.pipeline.registry import LAYER_ORDER
 
     assert [layer.name for layer in LAYER_ORDER][-1] == "approval"
+
+
+def test_an_upstream_identity_changes_with_what_it_points_at_and_not_otherwise() -> None:
+    from uuid import uuid4
+
+    from ai_gateway.registry.models import UpstreamServer
+
+    upstream_id = uuid4()
+
+    def make(**changes: object) -> UpstreamServer:
+        values: dict[str, Any] = {
+            "id": upstream_id,
+            "namespace": "tickets",
+            "url": "http://ticketing:4412/mcp",
+            "connect_timeout_s": 5.0,
+            "call_timeout_s": 10.0,
+            "credential_env": "TICKETING_SERVICE_TOKEN",
+            **changes,
+        }
+        return UpstreamServer(**values)
+
+    base = make().identity
+    assert make(call_timeout_s=99.0).identity == base, "a timeout is not what an approval is about"
+    assert make(url="http://elsewhere:4412/mcp").identity != base
+    assert make(credential_env="OTHER_TOKEN").identity != base
+    assert make(credential_env=None).identity != base
+    assert make(namespace="crm").identity != base
+    assert make(id=uuid4()).identity != base

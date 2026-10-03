@@ -22,7 +22,9 @@ from opentelemetry.trace import Span
 from pydantic import JsonValue
 
 from ai_gateway.pipeline.config import PipelineConfig
+from ai_gateway.pipeline.layers.allowlist import AllowlistLayer, AllowlistRule
 from ai_gateway.pipeline.layers.approval import ApprovalLayer
+from ai_gateway.pipeline.layers.rate_limit import RateLimitLayer, RateLimits
 from ai_gateway.pipeline.registry import LAYER_ORDER
 from ai_gateway.pipeline.types import (
     BaseLayer,
@@ -153,11 +155,19 @@ class Pipeline:
         layer_order: Sequence[type[BaseLayer]] = LAYER_ORDER,
         audit: AuditRecorder | None = None,
         approvals: ApprovalGate | None = None,
+        allowlist: Sequence[AllowlistRule] = (),
+        rate_limits: RateLimits | None = None,
     ) -> "Pipeline":
-        layers = [
-            layer_class(approvals) if issubclass(layer_class, ApprovalLayer) else layer_class()
-            for layer_class in layer_order
-        ]
+        def make(layer_class: type[BaseLayer]) -> BaseLayer:
+            if issubclass(layer_class, ApprovalLayer):
+                return layer_class(approvals)
+            if issubclass(layer_class, AllowlistLayer):
+                return layer_class(allowlist)
+            if issubclass(layer_class, RateLimitLayer):
+                return layer_class(rate_limits)
+            return layer_class()
+
+        layers = [make(layer_class) for layer_class in layer_order]
         return cls(layers, config, events, audit=audit)
 
     async def list_tools(self, ctx: CallContext, tools: Sequence[CatalogTool]) -> list[CatalogTool]:
