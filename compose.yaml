@@ -145,6 +145,7 @@ services:
       GATEWAY_PORT: "4401"
       GATEWAY_DATABASE_URL: postgresql://gateway_app:${GATEWAY_APP_DB_PASSWORD}@postgres:5432/${POSTGRES_DB}
       GATEWAY_PIPELINE_FILE: ${GATEWAY_PIPELINE_FILE_IN_CONTAINER:-/app/config/pipeline.toml}
+      GATEWAY_APPROVAL_ROLES_FILE: /app/config/approval_roles.toml
       GATEWAY_ALLOWED_HOSTS: ${GATEWAY_ALLOWED_HOSTS:-127.0.0.1:*,localhost:*}
       GATEWAY_LOG_LEVEL: ${GATEWAY_LOG_LEVEL:-INFO}
       # Spans and decision records are stored through this append-only role. If the database
@@ -323,6 +324,7 @@ services:
     mem_limit: 128m
     environment:
       POLICY_APPROVER_DATABASE_URL: postgresql://policy_approver:${POLICY_APPROVER_DB_PASSWORD:?set it in .env}@postgres:5432/${POSTGRES_DB}
+      APPROVAL_ROLES_FILE: /app/config/approval_roles.toml
     stdin_open: true
     depends_on:
       postgres:

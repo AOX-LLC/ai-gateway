@@ -458,7 +458,7 @@ gateway and finds it in no column of any table.
 ### Audit (Phase 3)
 
 Every tool call is recorded in agent-core's append-only, hash-chained audit log, in the `policy`
-schema. agent-core is pinned by tag (`v0.1.0a2`, in `gateway/pyproject.toml`); the log and, from
+schema. agent-core is pinned by tag (`v0.1.0a3`, in `gateway/pyproject.toml`); the log and, from
 Phase 3b, the approval queue are its. This is not telemetry. Telemetry is best effort and tells the
 dashboard what happened; the audit log is the record of what the gateway did, and a write is not
 made without it.
@@ -538,23 +538,39 @@ record is built once, so a retry does not store either twice.
 The gateway can insert a request's arguments (`approval_arguments`) and never read them back; only
 the approver reads them.
 
-agent-core's installer gives one app role `UPDATE` on approvals, and the rule that only a human
-resolves one lives in library code. That role could therefore approve its own requests with plain
-SQL (confirmed). A guard trigger closes that:
-- the gateway role may only move an *approved*, unexpired request to *consumed*, and change nothing
-  else about it;
-- the approver may only decide a *pending*, unexpired request, with a decision that matches its
-  status and with who and when filled in, and change nothing about what it authorises, who asked or
-  when it expires;
-- nobody may create a request that is already decided;
-- any other role, including one that merely inherits a policy role's privileges (the guard keys on
-  the member's own name), is refused, and setup removes every membership in the policy roles. The gateway cannot decide an approval by any route,
-whatever its code does. `gateway-admin policy-setup` installs agent-core's tables once, for a
-scratch role that cannot log in (so no real role holds a grant before its guard exists), applies the
-grants and the guard in one transaction, guard first, and is safe to repeat and to run twice at
-once, within one database (the scratch role is named per database, and any left by a killed setup is
-dropped by the next run). The audit table's own protections are agent-core's: triggers that refuse
-`UPDATE`, `DELETE` and `TRUNCATE`, and a check that the connecting role cannot do any of them. The
+agent-core v0.1.0a3 ships the two roles and the guard itself. Its installer (`gateway-admin
+policy-setup` runs it every time: it is idempotent and upgrades an a2 schema in place, keeping every
+row) creates the tables in the `policy` schema for a *requester* role (`policy_gateway`) and an
+*approver* role (`policy_approver`), grants each only its layout (the requester may update `status`,
+`consumed_at` and `closed_at`; the approver the decision columns), and installs a guard trigger that
+allows only these changes, using the database's own clock and role membership:
+
+| From | To | Role |
+| --- | --- | --- |
+| (insert) | pending | requester |
+| pending | approved or rejected | approver, not the requester |
+| pending | cancelled | requester |
+| pending | expired | requester or approver, once past its lifetime |
+| approved | consumed | requester |
+
+Everything else is refused, including any change to what a request authorises, DELETE, TRUNCATE and
+a superuser or the owner (they are members of every role, so they are neither side). The gateway
+cannot decide an approval by any route, whatever its code does. This replaces the guard 3a wrote.
+3a's guard tests ran unchanged against a3's guard: every attack was refused. The differences,
+as gaps in what 3a enforced, are these, and none is a way to approve:
+- a role that is a *member* of `policy_gateway` counts as the requester side (3a refused it). It can
+  do only what the requester can, and `policy-setup` revokes every membership in the policy roles
+  on each run;
+- 3a refused the owner and a superuser outside the two roles by name; a3 refuses them as neither
+  side, which is stricter (the tests no longer rewrite a request's lifetime as the owner).
+
+`policy_auditor`, the arguments table, the approvers, the purge function and the dashboard's view
+are this gateway's own, and `policy-setup` takes back anything the gateway or approver role holds
+beyond a3's layout. An approved request that no approver's decision approves (plain SQL could make
+one under a2) is cancelled by the upgrade and logged. The a3 database layer ignores `search_path`,
+so every query here is schema-qualified. The audit table's own protections are agent-core's:
+triggers that refuse `UPDATE`, `DELETE` and `TRUNCATE`, and a check that the connecting role cannot
+do any of them. Audit rows carry the database role that wrote them (`db_role`, audit schema 3). The
 database owner can disable the triggers, which is what the anchor test does; the chain and an
 anchor are what show it.
 
@@ -565,7 +581,9 @@ that is forwarded; a read never asks.
 
 1. The gateway looks for this client's newest unexpired request for this tool and these arguments
    (the hash of `{tool, arguments}`). If there is none it submits one (30 minutes to live,
-   `settings.approval_ttl_s`) and stores the arguments for the approver.
+   `settings.approval_ttl_s`), asking for the role that `config/approval_roles.toml` lists for that
+   tool, with no delegates, and stores the arguments for the approver. A write with no listed role
+   is refused: nobody may approve it.
 2. It **holds** the call for up to 45 s (`approval_hold_s`, polling once a second: agent-core has
    no wait/notify) for a decision. At most 16 calls are held at once; past that a call is answered
    "pending" at once.
@@ -577,6 +595,14 @@ that is forwarded; a read never asks.
    expires, so a retry does not ask again. **Expired:** the next call asks afresh.
 5. **The queue cannot be used** (no policy database, a dead database, arguments over 64 KiB):
    the write is refused. The layer fails closed.
+
+`expire_due()` runs once a minute and stores `expired` on requests past their lifetime; reads treat
+such a request as expired whether or not it has run.
+
+Who may decide is not the requester's choice: the approver's tool builds agent-core's
+`RoleApproverPolicy` from the same `roles_by_action` file, so a request for an unlisted action, or
+with another role than the file names, is refused. `trust_requester_role` is never used, and a test
+fails if it appears outside the tests.
 
 An approval is for exactly one tool with exactly those arguments for the client that asked: other
 arguments are a new request; another client's request is never found, and a direct attempt to use
