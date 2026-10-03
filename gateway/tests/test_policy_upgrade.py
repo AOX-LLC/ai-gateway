@@ -6,14 +6,16 @@ taken from it before any upgrade."""
 
 import shutil
 from pathlib import Path
+from uuid import UUID
 
 import psycopg
 import pytest
+from aox_agent_core.approvals import Decision, Principal, PrincipalKind, RoleApproverPolicy
 from aox_agent_core.errors import AuditIntegrityError
 from aox_agent_core.storage import open_database
 from pydantic import SecretStr
 
-from ai_gateway.policy import audit_log_on, policy_url
+from ai_gateway.policy import approval_queue_on, audit_log_on, policy_url
 from ai_gateway.policy.anchors import read_anchors, verify_with_anchors
 from ai_gateway.policy.setup import PolicyPasswords, setup_policy
 from tests.conftest import password_of
@@ -179,3 +181,54 @@ async def test_a_wrong_anchor_still_fails_against_the_upgraded_chain(
 
     with pytest.raises(AuditIntegrityError):
         await verify_with_anchors(auditor, read_anchors(anchors))
+
+
+async def test_roles_that_held_table_level_grants_get_exactly_the_layout_and_can_still_work(
+    policy: None,
+    test_database_url: str,
+    policy_gateway_url: str,
+    policy_approver_url: str,
+    policy_auditor_url: str,
+) -> None:
+    """3a gave the gateway and the approver table-level UPDATE. The installer grants a role its
+    layout only where it holds nothing, so those grants must go and the layout come in after them,
+    or the approver can no longer decide anything."""
+    await _load_a2(test_database_url)
+    async with await psycopg.AsyncConnection.connect(
+        test_database_url, autocommit=True
+    ) as connection:
+        for role in ("policy_gateway", "policy_approver"):
+            await connection.execute(f"GRANT USAGE ON SCHEMA policy TO {role}".encode())
+            await connection.execute(
+                f"GRANT SELECT, INSERT, UPDATE ON policy.agent_core_approvals TO {role}".encode()
+            )
+            await connection.execute(
+                f"GRANT SELECT, INSERT ON policy.agent_core_audit TO {role}".encode()
+            )
+
+    await _upgrade(test_database_url, policy_gateway_url, policy_approver_url, policy_auditor_url)
+
+    rows = await _rows(
+        test_database_url,
+        "SELECT r.rolname, has_table_privilege(r.oid, 'policy.agent_core_approvals', 'UPDATE'),"
+        " has_column_privilege(r.oid, 'policy.agent_core_approvals', 'decision', 'UPDATE'),"
+        " has_column_privilege(r.oid, 'policy.agent_core_approvals', 'status', 'UPDATE'),"
+        " has_column_privilege(r.oid, 'policy.agent_core_approvals', 'expires_at', 'UPDATE')"
+        " FROM pg_roles r WHERE r.rolname IN ('policy_gateway', 'policy_approver') ORDER BY 1",
+    )
+    assert rows == [
+        ("policy_approver", False, True, True, False),
+        ("policy_gateway", False, False, True, False),
+    ]
+    approver = approval_queue_on(
+        open_database(SecretStr(policy_url(policy_approver_url))),
+        policy=RoleApproverPolicy(roles_by_action={"tickets__change_status": "approver"}),
+    )
+    request = await approver.resolve(
+        UUID(PENDING),
+        decision=Decision.APPROVE,
+        principal=Principal(
+            id="human:fixture", kind=PrincipalKind.HUMAN, roles=frozenset({"approver"})
+        ),
+    )
+    assert request.status.value == "approved"

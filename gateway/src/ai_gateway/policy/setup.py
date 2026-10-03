@@ -77,7 +77,11 @@ async def setup_policy(owner_url: str, passwords: PolicyPasswords) -> None:
         await _revoke_memberships(connection)
         report = await _install(owner_url)
         await _ensure_approval_tables(connection)
-        await grant_policy_access(connection, report)
+        if await grant_policy_access(connection, report):
+            # The installer grants a role its layout only on a table where it holds nothing yet, so
+            # a role that held a wider grant (3a's table-level UPDATE) got nothing until it was
+            # taken back. Install again, so it gets exactly its layout.
+            await _install(owner_url)
         await restrict_database_access(connection, list(ROLES))
 
 
@@ -174,7 +178,7 @@ async def _ensure_approval_tables(connection: AsyncConnection) -> None:
 
 async def grant_policy_access(
     connection: AsyncConnection, report: InstallReport | None = None
-) -> None:
+) -> int:
     """Make the roles' grants what they should be.
 
     The tables and roles must exist. Nobody may be a member of a policy role (a member inherits its
@@ -204,8 +208,9 @@ async def grant_policy_access(
                         sql.SQL(privileges), schema, sql.Identifier(table), name
                     )
                 )
+        revoked = 0
         if report is not None:
-            await _revoke_beyond_layout(connection, report)
+            revoked = await _revoke_beyond_layout(connection, report)
         # The purge runs with its owner's rights, so who may call it is the whole control.
         purge = sql.SQL("{}.{}()").format(schema, sql.Identifier(ARGUMENTS_PURGE_FUNCTION))
         await connection.execute(sql.SQL("REVOKE ALL ON FUNCTION {} FROM PUBLIC").format(purge))
@@ -216,15 +221,18 @@ async def grant_policy_access(
                 else ("REVOKE ALL ON FUNCTION {} FROM {}")
             )
             await connection.execute(sql.SQL(verb).format(purge, sql.Identifier(role)))
+    return revoked
 
 
 _PRIVILEGE = re.compile(r"[A-Z]+")
 
 
-async def _revoke_beyond_layout(connection: AsyncConnection, report: InstallReport) -> None:
+async def _revoke_beyond_layout(connection: AsyncConnection, report: InstallReport) -> int:
     """The installer never revokes; the gateway's and the approver's roles must hold no more than
     their layout, so what the report lists for them is taken back (the auditor's own grant is
     made, and others' are not ours to take)."""
+    revoked = 0
+    affected: set[tuple[str, str]] = set()
     for grant in report.outside_layout:
         if grant.role not in (GATEWAY_ROLE, APPROVER_ROLE) or not _PRIVILEGE.fullmatch(
             grant.privilege
@@ -243,6 +251,18 @@ async def _revoke_beyond_layout(connection: AsyncConnection, report: InstallRepo
             )
         )
         logger.warning("revoked %s", grant)
+        revoked += 1
+        affected.add((grant.table, grant.role))
+    # The installer grants a role its layout on a table only if the role holds nothing there, so
+    # what is left of a role's grants on a table it went beyond is taken too, and the installer
+    # (run again by the caller) grants the layout afresh. Revoking on a table takes its columns.
+    for table, role in sorted(affected):
+        await connection.execute(
+            sql.SQL("REVOKE ALL ON {}.{} FROM {}").format(
+                sql.Identifier(SCHEMA), sql.Identifier(table), sql.Identifier(role)
+            )
+        )
+    return revoked
 
 
 _MEMBERSHIPS = (
