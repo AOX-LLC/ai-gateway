@@ -175,8 +175,8 @@ BEGIN
         -- An approver decides a pending, unexpired request, once, and says who and when. The
         -- request itself (what it authorises, who asked, when it expires) stays as it was.
         IF NOT (OLD.status = 'pending' AND OLD.expires_at > {_NOW_TEXT}
-            AND ((NEW.status = 'approved' AND NEW.decision = 'approve')
-                 OR (NEW.status = 'rejected' AND NEW.decision = 'reject'))
+            AND ((NEW.status = 'approved' AND NEW.decision IS NOT DISTINCT FROM 'approve')
+                 OR (NEW.status = 'rejected' AND NEW.decision IS NOT DISTINCT FROM 'reject'))
             AND NEW.resolved_by IS NOT NULL AND NEW.resolved_at IS NOT NULL
             AND NEW.consumed_at IS NULL
             AND (NEW.id, NEW.action, NEW.summary, NEW.payload_sha256, NEW.requested_by,

@@ -428,6 +428,7 @@ async def test_the_gateway_cannot_consume_an_approval_that_has_expired(
         ("expires_at", "(now() + interval '9 days')::text"),
         ("required_role", "'nobody'"),
         ("decision", "'reject'"),  # a decision that contradicts the status
+        ("decision", "NULL"),  # no decision at all: NULL must not slip past the comparison
         ("resolved_by", "NULL"),
         ("resolved_at", "NULL"),
         ("consumed_at", "now()::text"),
