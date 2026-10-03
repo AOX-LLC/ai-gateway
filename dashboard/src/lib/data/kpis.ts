@@ -6,7 +6,7 @@ import type { Kpis } from "./types";
 const KPIS = `
 WITH calls AS (
   SELECT request_id, outcome, upstream_status, duration_ms
-  FROM dash_requests
+  FROM telemetry.dash_requests
   WHERE kind = 'tool_call' AND ts >= now() - make_interval(secs => $1::int)
 )
 SELECT
@@ -15,9 +15,9 @@ SELECT
   (SELECT count(*) FROM calls WHERE outcome = 'forwarded' AND upstream_status = 'ok') AS succeeded,
   (SELECT count(*) FROM calls WHERE outcome = 'blocked') AS blocked,
   (SELECT percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms) FROM calls) AS p95_ms,
-  (SELECT count(DISTINCT request_id) FROM dash_layer_verdicts
+  (SELECT count(DISTINCT request_id) FROM telemetry.dash_layer_verdicts
      WHERE verdict = 'would_block' AND ts >= now() - make_interval(secs => $1::int)) AS would_block,
-  (SELECT count(*) FROM dash_auth_failures
+  (SELECT count(*) FROM telemetry.dash_auth_failures
      WHERE ts >= now() - make_interval(secs => $1::int)) AS auth_failures
 `;
 

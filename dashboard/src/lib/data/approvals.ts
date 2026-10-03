@@ -10,9 +10,9 @@ const COLUMNS = `
   to_char(resolved_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS resolved_at,
   resolved_by_name`;
 
-const PENDING = `SELECT ${COLUMNS} FROM dash_approvals
+const PENDING = `SELECT ${COLUMNS} FROM policy.dash_approvals
   WHERE status = 'pending' AND expires_at > now() ORDER BY created_at LIMIT 20`;
-const RECENT = `SELECT ${COLUMNS} FROM dash_approvals
+const RECENT = `SELECT ${COLUMNS} FROM policy.dash_approvals
   WHERE NOT (status = 'pending' AND expires_at > now()) ORDER BY created_at DESC LIMIT 8`;
 
 const STATUSES: readonly ApprovalStatus[] = ["pending", "approved", "rejected", "expired", "consumed", "cancelled"];

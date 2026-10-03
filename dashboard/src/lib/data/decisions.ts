@@ -14,9 +14,9 @@ SELECT r.request_id,
        to_char(r.ts AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS ts,
        r.client_name, r.tool, r.namespace, r.effect, r.outcome, r.blocked_by, r.deny_code,
        r.upstream_status, r.duration_ms,
-       COALESCE((SELECT array_agg(DISTINCT v.layer ORDER BY v.layer) FROM dash_layer_verdicts v
+       COALESCE((SELECT array_agg(DISTINCT v.layer ORDER BY v.layer) FROM telemetry.dash_layer_verdicts v
                   WHERE v.request_id = r.request_id AND v.verdict = 'would_block'), '{}') AS would_block
-FROM dash_requests r
+FROM telemetry.dash_requests r
 WHERE r.kind = 'tool_call'
   AND r.ts >= now() - make_interval(secs => $1::int)
   AND ($2::timestamptz IS NULL OR (r.ts, r.request_id) < ($2::timestamptz, $3::uuid))

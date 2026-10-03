@@ -40,6 +40,23 @@ describe("every data function", () => {
   });
 });
 
+describe("the views", () => {
+  it("are named with their schema, because the reader's search path does not include it", async () => {
+    const { pool, sent } = poolReplying(() => [{ requests: "0", forwarded: "0", succeeded: "0", blocked: "0", p95_ms: null, would_block: "0", auth_failures: "0" }]);
+    usePool(pool as never);
+
+    await data.getKpis(session, "1h");
+    await data.getDecisions(session, { range: "1h" });
+    await data.getApprovals(session);
+
+    const queries = sent.map((q) => q.text).filter((text) => /FROM\s/i.test(text)).join("\n");
+    const mentioned = [...queries.matchAll(/\b(?:FROM|JOIN)\s+([a-z_.]+)/gi)].map((m) => m[1]!).filter((name) => name.startsWith("dash_") || name.includes("."));
+    expect(mentioned.length).toBeGreaterThan(4);
+    for (const name of mentioned) expect(name, `${name} must be schema-qualified`).toMatch(/^(telemetry|policy)\.dash_[a-z_]+$/);
+    expect(queries).not.toMatch(/\b(FROM|JOIN)\s+dash_/i);
+  });
+});
+
 describe("the KPIs", () => {
   it("turn the counts into rates and leave a percentile empty when nothing went through", async () => {
     const { pool, sent } = poolReplying(() => [

@@ -12,7 +12,9 @@ async function settle<T>(panel: string, read: () => Promise<T>): Promise<Result<
     return { ok: true, data: await read() };
   } catch (error) {
     if (error instanceof AuthError) throw error;
-    console.error(`dashboard: ${panel} could not be read: ${error instanceof Error ? error.name : "error"}`);
+    // The error's name and Postgres's error code, never its message: that can quote a query or a value.
+    const code = (error as { code?: unknown }).code;
+    console.error(`dashboard: ${panel} could not be read: ${error instanceof Error ? error.name : "error"} ${typeof code === "string" ? code : ""}`.trim());
     return { ok: false, error: UNREADABLE };
   }
 }
