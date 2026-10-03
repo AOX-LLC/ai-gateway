@@ -478,7 +478,7 @@ sends a marker argument that the echo tool also returns, and finds it in no reco
 
 | Call | Policy | Why |
 | --- | --- | --- |
-| **A write** | **Refused.** The write-ahead record is appended and waited for (2 s at most). If that fails the call is blocked as `blocked_by: audit`, code `audit_unavailable`, with the generic policy message, and the upstream is never called. | A write with no record of its attempt is worse than a refused write. |
+| **A write** | **Refused.** The write-ahead record is appended and waited for (the request stops waiting after 2 s). If that fails the call is blocked as `blocked_by: audit`, code `audit_unavailable`, with the generic policy message, and the upstream is never called. | A write with no record of its attempt is worse than a refused write. |
 | **A read** (and every call's decision record) | **Proceeds.** The record is queued and never waited for. | A read is never refused because the log is down. |
 
 The queue holds 5 000 records and drops the oldest when full, counting what it dropped. When the log
@@ -503,15 +503,19 @@ writes the queue in batches of up to 100 in one transaction, using `SQLAuditLog.
 events took about 150 ms. Only the write-ahead record waits for its own transaction.
 
 **Bounded waits.** agent-core runs each operation on the event loop's default thread pool, which
-also resolves names for psycopg and httpx, and cancelling the task that awaits it does not stop the
-thread. Any role that can connect can hold an advisory lock, so the gateway keeps the audit log
-off that pool and bounds every wait on the database's side: its policy connections carry a 2 s
-connect timeout and server-side lock and statement timeouts (1.5 s and 1.8 s for the write-ahead
-record, so the database gives up before the request stops waiting and a refused write is never
-committed afterwards; 5 s and 8 s for the batches). Audit work runs on workers of its own, four for
-the write-ahead record and one for the batches, and a write is refused at once when all four are
-taken. A batch whose outcome is unknown (a timeout, or a connection lost after COMMIT) is checked
-against the newest records by `record_id` before it is retried, so it is never stored twice.
+also resolves names for psycopg and httpx, and a worker thread cannot be interrupted. Any role
+that can connect can hold an advisory lock, so the gateway keeps the audit log off that pool, on
+workers of its own (four for the write-ahead record, one for the batches), and counts the threads
+still running, including one whose caller gave up. A caller stops waiting at its limit (2 s for
+the write-ahead record, 15 s for a batch); the thread ends when the database's own limits end its
+transaction: a 2 s connect timeout, then lock, statement and transaction timeouts (1.5, 1.8 and
+1.9 s for the write-ahead record; 5, 8 and 12 s for the batches; the transaction timeout needs
+PostgreSQL 17). A write is refused at once when all four write-ahead workers are taken. This
+narrows the chance that a write refused for time is committed late; it does not remove it, since
+a thread that connects just before the limit can still commit after the request has moved on.
+A batch whose outcome is unknown (a timeout, or a connection lost after COMMIT) is checked against
+the records written since the last one known, by `record_id`, before it is retried, and its gap
+record is built once, so a retry does not store either twice.
 
 ### Roles, and the approval guard
 

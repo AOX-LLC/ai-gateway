@@ -8,6 +8,7 @@ log can fill only its own limiter, and can say so (`busy`) so a write is refused
 queueing.
 """
 
+import threading
 from collections.abc import Callable
 from functools import partial
 from typing import TypeVar
@@ -23,13 +24,31 @@ class BoundedPostgresDatabase(PostgresDatabase):
     def __init__(self, url: SecretStr, *, concurrency: int) -> None:
         super().__init__(url)
         self._limiter = anyio.CapacityLimiter(concurrency)
+        self._concurrency = concurrency
+        self._running = 0
+        self._running_lock = threading.Lock()
 
     @property
     def busy(self) -> bool:
-        """Every worker is taken: a new operation would wait for one."""
-        return self._limiter.available_tokens == 0
+        """Every worker thread is taken, including one whose caller has stopped waiting for it:
+        a new operation would wait for one (or add a thread to a database that is not answering)."""
+        with self._running_lock:
+            return self._running >= self._concurrency
+
+    def _counted(self, work: Callable[[Session], ResultT], write: bool) -> ResultT:
+        with self._running_lock:
+            self._running += 1
+        try:
+            return self.run_sync(work, write=write)
+        finally:
+            with self._running_lock:
+                self._running -= 1
 
     async def run(self, work: Callable[[Session], ResultT], *, write: bool = False) -> ResultT:
         return await anyio.to_thread.run_sync(
-            partial(self.run_sync, work, write=write), limiter=self._limiter
+            partial(self._counted, work, write),
+            limiter=self._limiter,
+            # A cancelled caller stops waiting at once; the thread ends when the server's own
+            # timeouts (see policy_url) end its transaction, and holds its worker until then.
+            abandon_on_cancel=True,
         )

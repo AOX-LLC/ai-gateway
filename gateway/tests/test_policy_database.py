@@ -34,6 +34,37 @@ def test_the_database_gives_up_a_wait_before_the_caller_stops_waiting() -> None:
     assert parse_qs(urlsplit(url).query)["connect_timeout"] == ["2"]
 
 
+def test_the_whole_transaction_is_bounded_too() -> None:
+    url = policy_url(URL, transaction_timeout_ms=1900)
+
+    assert _options(url) == "-c search_path=policy -c transaction_timeout=1900"
+
+
+@pytest.mark.anyio
+async def test_a_caller_stops_waiting_for_a_blocked_worker_thread_when_its_time_is_up() -> None:
+    release = threading.Event()
+    database = BoundedPostgresDatabase(SecretStr(URL), concurrency=1)
+    database.run_sync = lambda work, write=False: release.wait(5)  # type: ignore[method-assign,assignment,misc]
+    started = anyio.current_time()
+    try:
+        with anyio.move_on_after(0.2) as scope:
+            await database.run(lambda session: None)
+        assert scope.cancelled_caught
+        assert anyio.current_time() - started < 1.0, "the wait ended at its limit, not the thread's"
+        assert database.busy, "the abandoned thread still holds its worker until it returns"
+    finally:
+        release.set()
+
+
+def test_other_parts_of_the_url_survive_unchanged() -> None:
+    url = policy_url(URL + "?application_name=a+b&sslmode=&connect_timeout=9")
+
+    query = parse_qs(urlsplit(url).query, keep_blank_values=True)
+    assert query["application_name"] == ["a+b"], "libpq does not decode +"
+    assert query["sslmode"] == [""]
+    assert query["connect_timeout"] == ["9"], "kept unless a timeout is asked for"
+
+
 def test_options_already_in_the_url_are_kept() -> None:
     url = policy_url(URL + "?options=-c%20application_name%3Dgateway&sslmode=prefer")
 
