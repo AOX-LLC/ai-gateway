@@ -25,6 +25,8 @@ describe("the admin credential", () => {
     ["bcrypt:32768:8:1:c2FsdHNhbHRzYWx0:a2V5a2V5a2V5a2V5a2V5"],
     ["scrypt:32769:8:1:c2FsdHNhbHRzYWx0:a2V5a2V5a2V5a2V5a2V5"], // N not a power of two
     ["scrypt:1073741824:8:1:c2FsdHNhbHRzYWx0:a2V5a2V5a2V5a2V5a2V5"], // would take the process's memory
+    ["scrypt:65536:8:1:c2FsdHNhbHRzYWx0:a2V5a2V5a2V5a2V5a2V5"], // dearer than the limit is sized for
+    ["scrypt:32768:16:1:c2FsdHNhbHRzYWx0:a2V5a2V5a2V5a2V5a2V5"], // likewise by r
     ["scrypt:32768:8:1:c2FsdHNhbHRzYWx0:a2V5a2V5a2V5a2V5a2V5:extra"],
   ])("never matches a hash it cannot read: %s", async (encoded) => {
     expect(await verifyPassword("anything", encoded)).toBe(false);

@@ -8,4 +8,10 @@ describe("seeOther", () => {
     expect(response.headers.get("location")).toBe("/signin?error=wait");
     expect(response.headers.get("location")).not.toMatch(/^[a-z]+:/i);
   });
+
+  it("refuses anything that is not a path on this server", () => {
+    for (const target of ["https://example.com", "//example.com", "/\\example.com", "signin", ""]) {
+      expect(() => seeOther(target)).toThrow();
+    }
+  });
 });

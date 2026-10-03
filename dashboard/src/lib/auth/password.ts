@@ -41,8 +41,9 @@ function parse(encoded: string): Parsed | undefined {
   const numbers = [n, r, p].map((part) => Number(part));
   if (numbers.some((value) => !Number.isInteger(value) || value < 1)) return undefined;
   const [nn, rr, pp] = numbers as [number, number, number];
-  // Refuse parameters that would make a verification take the process's memory.
-  if (nn > 2 ** 17 || rr > 16 || pp > 4 || (nn & (nn - 1)) !== 0) return undefined;
+  // Refuse parameters that cost more than the ones this dashboard writes: its memory limit is sized
+  // for one verification at N=32768, r=8 (32 MiB), and a dearer hash would kill it on every sign-in.
+  if (nn > SCRYPT.N || rr > SCRYPT.r || pp > 4 || (nn & (nn - 1)) !== 0) return undefined;
   const saltBytes = Buffer.from(salt, "base64url");
   const keyBytes = Buffer.from(key, "base64url");
   if (saltBytes.length < 8 || keyBytes.length < 16) return undefined;
