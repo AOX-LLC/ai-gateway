@@ -143,11 +143,25 @@ async def reset_role(connection: AsyncConnection, role: str) -> None:
             "ALTER ROLE {} NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS"
         ).format(name)
     )
+    # A grant is revoked as the role that made it (PostgreSQL ignores a revoke by anyone else, and
+    # since 16 a role can hold the same membership from several grantors), then checked again.
+    for parent, grantor in await _memberships_of(connection, role):
+        await connection.execute(
+            sql.SQL("REVOKE {} FROM {} GRANTED BY {} CASCADE").format(
+                sql.Identifier(parent), name, sql.Identifier(grantor)
+            )
+        )
+    remaining = await _memberships_of(connection, role)
+    if remaining:
+        raise RuntimeError(f"{len(remaining)} membership(s) of {role} could not be revoked")
+
+
+async def _memberships_of(connection: AsyncConnection, role: str) -> list[tuple[str, str]]:
     cursor = await connection.execute(
-        "SELECT parent.rolname FROM pg_auth_members AS m"
+        "SELECT parent.rolname, grantor.rolname FROM pg_auth_members AS m"
         " JOIN pg_roles AS parent ON parent.oid = m.roleid"
-        " JOIN pg_roles AS member ON member.oid = m.member WHERE member.rolname = %s",
+        " JOIN pg_roles AS member ON member.oid = m.member"
+        " JOIN pg_roles AS grantor ON grantor.oid = m.grantor WHERE member.rolname = %s",
         (role,),
     )
-    for (parent,) in await cursor.fetchall():
-        await connection.execute(sql.SQL("REVOKE {} FROM {}").format(sql.Identifier(parent), name))
+    return [(str(parent), str(grantor)) for parent, grantor in await cursor.fetchall()]
