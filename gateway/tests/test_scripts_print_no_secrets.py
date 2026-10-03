@@ -25,6 +25,7 @@ HEALTH = {
 DEMO_TOKENS = {
     "harborline-support-bot": "gw_lookupsupport_secretsupportsecretsupport",
     "harborline-ops-bot": "gw_lookupops_secretopssecretopssecretops",
+    "harborline-decoy-bot": "gw_lookupdecoy_secretdecoysecretdecoysecret",
 }
 
 
@@ -65,6 +66,7 @@ def _run(workdir: Path, *command: str, github_actions: bool) -> str:
         "PATH": f"{workdir / 'bin'}:{os.environ['PATH']}",
         "HOME": str(workdir),
         "RUNNER_TEMP": str(workdir),
+        "SETTLE_S": "0",  # the real run waits for the gateway's catalogue; stand-ins do not
     }
     if github_actions:
         env["GITHUB_ACTIONS"] = "true"

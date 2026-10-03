@@ -44,7 +44,10 @@ def test_the_same_seed_gives_the_same_plan_and_another_seed_a_different_one(sim)
 def test_the_mix_is_close_to_the_target_over_many_calls(sim) -> None:  # type: ignore[no-untyped-def]
     kinds = Counter(step.kind for step in sim.build_plan(sim.DEFAULT_SEED, 5000))
 
-    for kind, share in sim.MIX.items():
+    # The urgent-ticket probes are normal calls that the allowlist refuses, so they count as normal.
+    shares = {**sim.MIX, "normal": sim.MIX["normal"] + sim.MIX["urgent_ticket"]}
+    del shares["urgent_ticket"]
+    for kind, share in shares.items():
         assert kinds[kind] / 5000 == pytest.approx(share, abs=0.03), kind
 
 
@@ -104,7 +107,9 @@ def test_the_audit_log_is_expected_to_hold_every_call_every_write_and_its_approv
 
     calls = [step for step in plan if step.kind != "auth_failure"]
     forwarded_writes = [
-        step for step in plan if step.kind == "normal" and step.tool in sim.WRITE_TOOLS
+        step
+        for step in plan
+        if step.kind == "normal" and step.tool in sim.WRITE_TOOLS and not step.blocked_by
     ]
     assert expected["gateway.tool_call"] == len(calls)
     assert expected["gateway.call_started"] == len(forwarded_writes) > 0
@@ -135,4 +140,59 @@ def test_each_kind_of_failed_authentication_is_expected_under_its_own_reason(sim
 
     reasons = {key[1] for key in sim.expected_counts(plan) if key[0] == "auth_failure"}
 
-    assert reasons == {"missing", "malformed", "unknown_token", "wrong_secret"}
+    assert reasons == {"missing", "malformed", "unknown_token", "wrong_secret", "throttled"}
+
+
+def test_the_simulators_idea_of_each_layer_matches_the_shipped_configuration(sim) -> None:  # type: ignore[no-untyped-def]
+    """The plan assumes what the gateway is configured to do; if the files change, so must it."""
+    import tomllib
+    from pathlib import Path
+
+    from ai_gateway.pipeline.layers.allowlist import load_allowlist
+    from ai_gateway.settings import GatewaySettings
+
+    root = Path(__file__).resolve().parents[2]
+    limits = tomllib.loads((root / "config" / "rate_limits.toml").read_text())
+    assert {tool: entry["burst"] for tool, entry in limits["tools"].items()} == sim.TOOL_BURSTS
+    assert min(entry["per"] for entry in limits["tools"].values()) >= 3600, "no refill in a run"
+    assert GatewaySettings.model_fields["login_failures_per_id"].default == sim.THROTTLE_PER_ID
+    urgent = [
+        r
+        for r in load_allowlist(root / "config" / "allowlist.toml")
+        if r.tool == "tickets__create_ticket"
+    ]
+    assert [(r.client, r.argument) for r in urgent] == [("harborline-support-bot", "priority")]
+    assert "urgent" not in urgent[0].one_of  # type: ignore[operator]
+
+
+def test_a_default_run_exercises_every_layer(sim) -> None:  # type: ignore[no-untyped-def]
+    plan = sim.build_plan(sim.DEFAULT_SEED, 200)
+
+    blocked = Counter(step.blocked_by for step in plan if step.blocked_by)
+    throttled = [step for step in plan if step.auth_reason == "throttled"]
+    assert blocked["allowlist"] > 0
+    assert blocked["rate_limit"] > 0
+    assert throttled
+
+
+def test_the_layers_mark_steps_by_what_came_before_them(sim) -> None:  # type: ignore[no-untyped-def]
+    deals = [
+        sim.Step("normal", sim.SUPPORT, "crm__list_deals", {"stage": "won", "limit": 5})
+        for _ in range(sim.TOOL_BURSTS["crm__list_deals"] + 2)
+    ]
+    urgent = sim.Step(
+        "normal", sim.SUPPORT, "tickets__create_ticket", {"priority": "urgent", "subject": "x"}
+    )
+    ops_urgent = sim.Step(
+        "normal", sim.OPS, "tickets__create_ticket", {"priority": "urgent", "subject": "x"}
+    )
+    secrets = [sim.Step("auth_failure", None, auth_case="wrong_secret") for _ in range(7)]
+
+    marked = sim.apply_layers([*deals, urgent, ops_urgent, *secrets])
+
+    burst = sim.TOOL_BURSTS["crm__list_deals"]
+    assert [step.blocked_by for step in marked[:burst]] == [""] * burst
+    assert [step.blocked_by for step in marked[burst : burst + 2]] == ["rate_limit"] * 2
+    assert marked[burst + 2].blocked_by == "allowlist", "the support bot's urgent ticket"
+    assert marked[burst + 3].blocked_by == "", "the ops bot's is for a person to decide"
+    assert [step.auth_reason for step in marked[-7:]] == [""] * 5 + ["throttled"] * 2

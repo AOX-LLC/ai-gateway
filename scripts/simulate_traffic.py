@@ -29,7 +29,7 @@ import sys
 import time
 from collections import Counter
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -44,7 +44,15 @@ from auto_approver import auto_approving
 
 DEFAULT_SEED = 20261002
 SUPPORT, OPS = "harborline-support-bot", "harborline-ops-bot"
-MIX = {"normal": 0.80, "out_of_scope": 0.12, "auth_failure": 0.08}
+DECOY = "harborline-decoy-bot"
+"""A client with no scopes whose token the wrong-secret attempts use: the failed-login throttle
+locks a token id out, and the bots the simulator is driving must not be the ones it locks."""
+TOOL_BURSTS = {"crm__list_deals": 4}
+"""Tools with a limit of their own (config/rate_limits.toml): the calls a client may make before the
+rest are refused. The refill is too slow to matter in a run (a test pins this to the file)."""
+THROTTLE_PER_ID = 5
+"""Failed logins for one token id before a 429 (a test pins it to the gateway's default)."""
+MIX = {"normal": 0.76, "out_of_scope": 0.12, "auth_failure": 0.08, "urgent_ticket": 0.04}
 WRITE_SHARE = 0.10
 """Of the normal calls, this share writes to the fictional ticketing data."""
 
@@ -52,6 +60,8 @@ WRITE_SHARE = 0.10
 OPS_ONLY = ["tickets__change_status", "tickets__assign"]
 UNKNOWN_TOOLS = ["crm__delete_account", "tickets__export_all", "handbook__upload_document"]
 AUTH_CASES = ["missing", "malformed", "unknown_token", "wrong_secret"]
+AUTH_WEIGHTS = [1, 1, 1, 3]
+"""Wrong secrets are the likeliest, so a run goes past the per-id limit on the decoy's token."""
 # Each case is stored under a reason of the same name (AuthFailureReason in the gateway).
 
 _SEARCHES = [
@@ -91,13 +101,19 @@ class Step:
     tool: str | None = None
     arguments: dict[str, Any] = field(default_factory=dict)
     auth_case: str | None = None
+    blocked_by: str = ""
+    """The layer that refuses this call, when one does: `allowlist` or `rate_limit`."""
+    auth_reason: str = ""
+    """The reason the failed login is stored under, when it is not its case (`throttled`)."""
 
     @property
     def expected(self) -> tuple[str, ...]:
         """The telemetry row this step should produce, as a comparable key. A write is held for
         approval and, with the auto approver running, approved during the hold: one row."""
         if self.kind == "auth_failure":
-            return ("auth_failure", self.auth_case or "")
+            return ("auth_failure", self.auth_reason or self.auth_case or "")
+        if self.blocked_by:
+            return ("tool_call", self.client or "", self.tool or "", "blocked", self.blocked_by)
         blocked_by = (
             "catalog"
             if self.tool in UNKNOWN_TOOLS
@@ -119,9 +135,45 @@ def build_plan(seed: int, calls: int, *, writes: bool = True) -> list[Step]:
             plan.append(_normal_step(rng, writes))
         elif kind == "out_of_scope":
             plan.append(_out_of_scope_step(rng))
+        elif kind == "urgent_ticket":
+            plan.append(_urgent_ticket_step(rng) if writes else _normal_step(rng, writes))
         else:
-            plan.append(Step("auth_failure", None, auth_case=rng.choice(AUTH_CASES)))
-    return plan
+            case = rng.choices(AUTH_CASES, weights=AUTH_WEIGHTS)[0]
+            plan.append(Step("auth_failure", None, auth_case=case))
+    return apply_layers(plan)
+
+
+def apply_layers(plan: Sequence[Step]) -> list[Step]:
+    """Mark what the allowlist, the rate limit and the login throttle will do to each step.
+
+    The gateway starts each run with these empty (the check script restarts it), so what happens
+    to a step depends only on the steps before it: a support bot's urgent ticket is refused by the
+    allowlist and takes no token; the first TOOL_BURSTS[tool] calls of a limited tool, per client,
+    go through and the rest are refused; the first THROTTLE_PER_ID wrong secrets for the decoy id
+    are 401s and the rest are 429s."""
+    used: Counter[tuple[str, str]] = Counter()
+    wrong_secrets = 0
+    marked = []
+    for step in plan:
+        if step.kind == "auth_failure":
+            if step.auth_case == "wrong_secret":
+                wrong_secrets += 1
+                if wrong_secrets > THROTTLE_PER_ID:
+                    step = replace(step, auth_reason="throttled")
+        elif step.kind == "normal":
+            if (
+                step.client == SUPPORT
+                and step.tool == "tickets__create_ticket"
+                and step.arguments.get("priority") == "urgent"
+            ):
+                step = replace(step, blocked_by="allowlist")
+            elif step.tool in TOOL_BURSTS:
+                key = (step.client or "", step.tool or "")
+                used[key] += 1
+                if used[key] > TOOL_BURSTS[step.tool or ""]:
+                    step = replace(step, blocked_by="rate_limit")
+        marked.append(step)
+    return marked
 
 
 def _normal_step(rng: random.Random, writes: bool) -> Step:
@@ -162,6 +214,22 @@ def _normal_step(rng: random.Random, writes: bool) -> Step:
     return Step("normal", client, tool, arguments)
 
 
+def _urgent_ticket_step(rng: random.Random) -> Step:
+    """A support bot opening an urgent ticket: the allowlist refuses it (an ops bot's would be
+    left for a person to decide)."""
+    return Step(
+        "normal",
+        SUPPORT,
+        "tickets__create_ticket",
+        {
+            "subject": rng.choice(_TICKET_SUBJECTS),
+            "description": "Fictional demo ticket from the traffic simulator.",
+            "priority": "urgent",
+            "account_id": f"ACC-{rng.randint(1, 40):05d}",
+        },
+    )
+
+
 def _out_of_scope_step(rng: random.Random) -> Step:
     if rng.random() < 0.6:
         tool = rng.choice(OPS_ONLY)
@@ -196,7 +264,7 @@ def expected_audit(plan: Sequence[Step]) -> Counter[str]:
         if step.kind == "auth_failure":
             continue
         counts["gateway.tool_call"] += 1
-        if step.kind == "normal" and step.tool in WRITE_TOOLS:
+        if step.kind == "normal" and step.tool in WRITE_TOOLS and not step.blocked_by:
             counts["gateway.call_started"] += 1
             for action in ("approval.requested", "approval.resolved", "approval.consumed"):
                 counts[action] += 1
@@ -209,13 +277,18 @@ def expected_audit(plan: Sequence[Step]) -> Counter[str]:
 def _tokens(args: argparse.Namespace) -> dict[str, str]:
     if args.tokens_file:
         raw = json.loads(Path(args.tokens_file).read_text(encoding="utf-8"))
-        found = {SUPPORT: raw.get(SUPPORT), OPS: raw.get(OPS)}
+        found = {SUPPORT: raw.get(SUPPORT), OPS: raw.get(OPS), DECOY: raw.get(DECOY)}
     else:
-        found = {SUPPORT: os.environ.get("SIM_SUPPORT_TOKEN"), OPS: os.environ.get("SIM_OPS_TOKEN")}
+        found = {
+            SUPPORT: os.environ.get("SIM_SUPPORT_TOKEN"),
+            OPS: os.environ.get("SIM_OPS_TOKEN"),
+            DECOY: os.environ.get("SIM_DECOY_TOKEN"),
+        }
     missing = [name for name, token in found.items() if not token]
     if missing:
         sys.exit(
-            f"simulate_traffic: no token for {', '.join(missing)} (--tokens-file or SIM_*_TOKEN)"
+            f"simulate_traffic: no token for {', '.join(missing)} (--tokens-file or SIM_*_TOKEN;"
+            " the decoy is made by `gateway-admin seed-demo`)"
         )
     return {name: str(token) for name, token in found.items()}
 
@@ -264,19 +337,21 @@ def _session(url: str, token: str) -> _Session:
 async def _send(url: str, step: Step, clients: dict[str, Client], tokens: dict[str, str]) -> None:
     if step.kind == "auth_failure":
         rng = random.Random(str(step))  # noqa: S311 - fictional, not security
-        await _fail_authentication(url, step.auth_case or "", tokens, rng)
+        await _fail_authentication(
+            url, step.auth_case or "", tokens, rng, 429 if step.auth_reason == "throttled" else 401
+        )
         return
     assert step.client is not None
     assert step.tool is not None
     try:
         await clients[step.client].call_tool(step.tool, step.arguments)
     except MCPError:
-        if step.kind != "out_of_scope":
+        if step.kind != "out_of_scope" and not step.blocked_by:
             raise  # a normal call that fails is a bug in the plan, not traffic
 
 
 async def _fail_authentication(
-    url: str, case: str, tokens: dict[str, str], rng: random.Random
+    url: str, case: str, tokens: dict[str, str], rng: random.Random, expected_status: int = 401
 ) -> None:
     headers = {"Accept": "application/json, text/event-stream"}
     if case == "malformed":
@@ -288,14 +363,16 @@ async def _fail_authentication(
         secret = "".join(rng.choice(urlsafe) for _ in range(43))
         headers["Authorization"] = f"Bearer aig_{lookup}_{secret}"
     elif case == "wrong_secret":
-        token = tokens[SUPPORT]
+        token = tokens[DECOY]  # never a real bot's: its id is locked out after a few of these
         headers["Authorization"] = "Bearer " + token[:-1] + ("A" if token[-1] != "A" else "B")
     async with httpx2.AsyncClient() as http:
         response = await http.post(
             url, headers=headers, json={"jsonrpc": "2.0", "id": 1, "method": "ping"}
         )
-    if response.status_code != 401:
-        raise RuntimeError(f"an unauthenticated request got {response.status_code}, not 401")
+    if response.status_code != expected_status:
+        raise RuntimeError(
+            f"an unauthenticated request got {response.status_code}, not {expected_status}"
+        )
 
 
 # --- verifying against what the gateway stored -------------------------------------------------

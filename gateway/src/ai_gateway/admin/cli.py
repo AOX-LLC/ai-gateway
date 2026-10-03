@@ -82,6 +82,12 @@ DEMO_CLIENTS = {
         "Operations assistant for the fictional Harborline Supply Co. (demo data)",
         DEMO_SCOPES_OPS,
     ),
+    # No scopes: the traffic simulator's wrong-secret attempts use this token, because the
+    # failed-login throttle locks out the token id that is guessed at.
+    "harborline-decoy-bot": (
+        "Decoy for the traffic simulator's failed logins; holds no scopes (demo data)",
+        [],
+    ),
 }
 
 

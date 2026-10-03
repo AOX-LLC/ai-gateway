@@ -10,6 +10,8 @@ SUPPORT=$(python3 -c 'import json; print(json.load(open("demo.json"))["harborlin
 mask "$SUPPORT"
 OPS=$(python3 -c 'import json; print(json.load(open("demo.json"))["harborline-ops-bot"])')
 mask "$OPS"
+DECOY=$(python3 -c 'import json; print(json.load(open("demo.json"))["harborline-decoy-bot"])')
+mask "$DECOY"
 # A write waits for a person's approval. This is the fictional demo stack, so a registered demo
 # approver approves for it (scripts/auto_approver.py, test tooling that needs the two switches:
 # --approve-as below, and LAB_AUTO_APPROVE=yes in the environment, which CI sets on this step and
@@ -45,7 +47,20 @@ POLICY_AUDITOR_DB_PASSWORD=$(sed -n 's/^POLICY_AUDITOR_DB_PASSWORD=//p' .env)
 mask "$POLICY_AUDITOR_DB_PASSWORD"
 mask "$POLICY_AUDITOR_DATABASE_URL"
 export TELEMETRY_READER_DATABASE_URL POLICY_AUDITOR_DATABASE_URL
-export SIM_SUPPORT_TOKEN="$SUPPORT" SIM_OPS_TOKEN="$OPS"
+export SIM_SUPPORT_TOKEN="$SUPPORT" SIM_OPS_TOKEN="$OPS" SIM_DECOY_TOKEN="$DECOY"
+# The rate limits and the login throttle count in the gateway's memory, and the traffic plan expects
+# them empty: a restarted gateway starts each run from nothing, whatever ran before.
+fresh_gateway() {
+  docker compose restart gateway > /dev/null
+  for _ in $(seq 1 45); do
+    curl -sf http://127.0.0.1:4401/healthz > /dev/null && return 0
+    sleep 2
+  done
+  echo "the gateway did not come back" >&2
+  return 1
+}
+fresh_gateway
+sleep "${SETTLE_S:-8}"  # the catalogue loads the servers' tools just after the gateway answers
 uv run scripts/simulate_traffic.py --calls 200 --verify --approve-as harborline-approver
 curl -sSf http://127.0.0.1:4401/healthz | python3 -c '
 import json, sys
@@ -62,6 +77,8 @@ assert health["audit"]["dropped_total"] == 0 and health["audit"]["rejected_total
 ANCHORS="${RUNNER_TEMP:-/tmp}/audit-anchors.jsonl"
 rm -f "$ANCHORS"
 uv run gateway-admin audit-anchor --file "$ANCHORS"
+fresh_gateway
+sleep "${SETTLE_S:-8}"
 uv run scripts/simulate_traffic.py --calls 60 --seed 7 --verify --approve-as harborline-approver
 uv run gateway-admin audit-verify --anchors "$ANCHORS"
 rm -f "$ANCHORS"
