@@ -56,8 +56,11 @@ def read_anchors(path: Path) -> list[Anchor]:
     try:
         descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
         with os.fdopen(descriptor, encoding="utf-8") as handle:
-            if os.fstat(handle.fileno()).st_mode & 0o022:
+            status = os.fstat(handle.fileno())
+            if status.st_mode & 0o022:
                 raise AnchorFileError(f"{path} can be written by others; chmod go-w it")
+            if status.st_uid not in {os.getuid(), 0}:
+                raise AnchorFileError(f"{path} belongs to another account")
             lines = handle.read().splitlines()
     except OSError as error:
         raise AnchorFileError(f"cannot read the anchor file {path}: {error.strerror}") from error
