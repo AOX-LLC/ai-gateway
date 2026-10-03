@@ -124,3 +124,24 @@ async def revoke_role_access(connection: AsyncConnection, schema: str, role: str
         "REVOKE ALL ON SCHEMA {} FROM {}",
     ):
         await connection.execute(sql.SQL(statement).format(schema_name, role_name))
+
+
+async def reset_role(connection: AsyncConnection, role: str) -> None:
+    """Take back what could have been added to a role outside the schema: its attributes (it
+    must not create databases or roles, or bypass anything) and every role it is a member of
+    (`pg_read_all_data` would let the dashboard read everything). The schema-level revoke that
+    follows cannot see either."""
+    name = sql.Identifier(role)
+    await connection.execute(
+        sql.SQL(
+            "ALTER ROLE {} NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS"
+        ).format(name)
+    )
+    cursor = await connection.execute(
+        "SELECT parent.rolname FROM pg_auth_members AS m"
+        " JOIN pg_roles AS parent ON parent.oid = m.roleid"
+        " JOIN pg_roles AS member ON member.oid = m.member WHERE member.rolname = %s",
+        (role,),
+    )
+    for (parent,) in await cursor.fetchall():
+        await connection.execute(sql.SQL("REVOKE {} FROM {}").format(sql.Identifier(parent), name))
