@@ -610,14 +610,20 @@ that is forwarded; a read never asks.
 5. **The queue cannot be used** (no policy database, a dead database, arguments over 64 KiB):
    the write is refused. The layer fails closed.
 
-**One open request per intent.** Identical concurrent calls from a client share one pending request.
-That is the database's doing, not a check followed by an insert: a partial unique index on
-`(requested_by, action, payload_sha256)` over `pending` and `approved` requests
-(`policy_approvals_one_open`) makes the second of two simultaneous submissions fail, and it then
-finds the first's. An approved request that has not been used is still open, so an approver cannot
-get two runs from one approval; a used one is closed and the next identical call asks again. A repeat
+**One pending request per intent.** Identical concurrent calls from a client share one pending
+request. That is the database's doing, not a check followed by an insert: a partial unique index on
+`(requested_by, action, payload_sha256)` over `pending` requests (`policy_approvals_one_pending`)
+makes the second of two simultaneous submissions fail, and it then finds the first's. The index
+cannot cover approved requests: agent-core a3 never closes one that runs out unused, so it would
+block the same write for good. The gate closes that gap itself: after it makes a request it looks
+for an approved one for the same intent and, if there is one, withdraws its own and uses the
+approved one. An approver therefore cannot get two runs from one approval; the one remaining window
+is a person approving the new request in the instant before it is withdrawn, which is logged. A
+used approval is closed and the next identical call asks again. `policy-setup` stops, naming the
+requests, if a volume from before the index holds two pending ones for one intent. A repeat
 that matches the client, tool and payload but differs in role, lifetime or delegates is a conflict
-(refused, and nothing is reused), never a reuse. *Replace the index and the conflict check with
+(refused, and nothing is reused), never a reuse; changing an approval setting therefore takes
+effect once the old requests expire. *Replace the index and the conflict check with
 agent-core a5's, which enforces the same rule in the library.*
 
 `expire_due()` runs once a minute and stores `expired` on requests past their lifetime; reads treat
@@ -685,7 +691,9 @@ holds `blocked_by: allowlist`, `deny_code: allowlist_violation`. A mistake in th
 **`rate_limit`** keeps a token bucket in memory per client for reads, per client for writes (by the
 tool's reviewed effect), and per client and tool for tools with a limit of their own
 (`config/rate_limits.toml`). A bucket holds `burst` tokens and refills `burst` tokens every `per`
-seconds. A call must find a token in every bucket that applies; a refused call takes none. The state
+seconds. A call must find a token in every bucket that applies; a call this layer refuses takes none
+(layers after it, such as approval, can still refuse a call that has taken one, so a client that
+retries a pending write quickly spends write tokens on the retries). The state
 is per gateway process and starts full; it is bounded (the least recently used bucket goes first).
 The shipped limits are generous (600 reads and 60 writes a minute) except one deliberately tight
 tool limit that the traffic simulator uses to show the layer working.
@@ -696,7 +704,10 @@ Both layers switch `enforce`, `monitor` and `off` like any other (they are not f
 
 Any role that can connect can take agent-core's one audit append lock, and a write that cannot be
 audited is refused, so one session sitting idle inside a transaction while holding that lock could
-stop every write. Every role the setups create has `idle_in_transaction_session_timeout` set on it:
+stop every write. The limit protects against stalls and mistakes, not against a hostile role: a role
+can `SET` the limit to 0 for its own session, and a session that holds the lock while *running* a
+statement is not idle. (The lock is a public advisory lock that the server roles can also reach;
+closing that, or moving agent-core to a row lock only writers can touch, is left.) Every role the setups create has `idle_in_transaction_session_timeout` set on it:
 5 s for the policy roles (and the lab approver), 30 s for the rest (the gateway's, the telemetry
 roles and each server's: `ensure_role` carries the default, a migration and `db/init` cover
 `gateway_app`). The server ends such a session; a test takes the lock from each policy role, shows a
@@ -709,9 +720,12 @@ owner, used only by setup and administration, has no such limit.
 
 - after 5 failures for one token lookup id within 60 s, that id is refused with a 429 for 60 s,
   without its secret being examined (and not counted again: refusals do not extend the lockout);
-- when 200 failures of any kind have happened within 60 s, only a lookup id that authenticated in
-  the last 15 minutes is served, until the failures age out: a spray of invented ids, which never
-  trips the per-id limit, cannot lock out clients that were working.
+- when 200 failures have happened within 60 s, only a lookup id that authenticated in the last 15
+  minutes (`login_known_good_ttl_s`) is served, until the failures age out: a spray of invented
+  ids, which never trips the per-id limit, cannot lock out clients that were working. A request
+  with no token at all does not count (MCP clients probe without one, and refusing it costs
+  nothing). The memory of who logged in is lost when the gateway restarts, so during an attack a
+  restart closes the gateway to clients until they have logged in once more.
 
 The price of not answering a guess is that someone who knows a client's lookup id can lock that
 client out for a minute at a time. The lookup id is printed once, when a token is issued, and is not
@@ -725,15 +739,19 @@ what is measured is the other layers. `docker compose --profile lab up` starts `
 which approves every pending write (`scripts/lab_approver.py`, mounted into that one service and in
 no image). It is off unless asked for three times, and each is enforced:
 
-1. the `lab` profile (the default stack does not start it);
+1. the `lab` profile: the default stack does not start it (naming the service on the command line,
+   `docker compose up lab-approver`, starts a profiled service without the profile, so this is a
+   convention and not a fence);
 2. `LAB_AUTO_APPROVE=yes` in the environment: the service exits at once without it (Compose
    resolves every service's variables whatever the profile, so it cannot be a required variable);
 3. a database role that exists only when `policy-setup` is given its password
    (`POLICY_LAB_APPROVER_DB_PASSWORD`): `policy_lab_approver`, a member of the approver role, so it
    has the approver's powers and nothing else; the next setup without the password drops it.
 
-Its decisions are in the audit log under its own role name, which `audit-verify` accepts for
-`approval.resolved` and for nothing else. Register its approver first
+The role is rebuilt, not reset, on every setup that has the password (a grant or membership made by
+hand does not survive it). Its decisions are in the audit log under its own role name, which
+`audit-verify` accepts for `approval.resolved` and for nothing else, and says so when it finds any:
+a stack that was used as a lab is not quietly mistaken for one that was not. Register its approver first
 (`docker compose run --rm admin approver-add lab-approver --name "Lab approver"`). Never use it
 against anything real: it defeats approval. CI sets the switch on the Harborline step only, for the
 test approver (`scripts/auto_approver.py`), and a test pins that.

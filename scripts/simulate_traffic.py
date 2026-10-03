@@ -1,19 +1,30 @@
 """Drive a seeded, repeatable mix of traffic through the gateway as both Harborline bots.
 
-    uv run scripts/simulate_traffic.py --tokens-file demo.json --calls 300 --verify
-    uv run scripts/simulate_traffic.py --tokens-file demo.json --duration 600   # a slow run
+    uv run scripts/simulate_traffic.py --tokens-file demo.json --calls 300 --verify \
+        --approve-as harborline-approver                      # on a freshly started gateway
+    uv run scripts/simulate_traffic.py --tokens-file demo.json --duration 600 \
+        --no-writes                                           # a slow run, not verified
 
 It fills the dashboard for demos and screenshots, and needs no model API key: the clients are
 scripted. Harborline Supply Co. is fictional, and so is everything the calls ask for.
 
-The mix is made of normal calls (reads, and a few writes to the fictional ticketing data), calls
-the scope layer refuses (a tool the bot was not granted, a tool that does not exist) and
-requests that fail authentication (no token, a malformed one, an unknown one, a wrong secret).
+The mix is made of normal calls (reads, and a few writes to the fictional ticketing data, which a
+registered approver approves: --approve-as), calls the scope layer refuses (a tool the bot was not
+granted, a tool that does not exist), support-bot tickets at the urgent priority (the allowlist
+refuses them), reads of a tool whose rate limit runs out (crm__list_deals), and requests that fail
+authentication (no token, a malformed one, an unknown one, a wrong secret: the wrong secrets use
+the decoy client's token, and past the fifth the failed-login throttle answers 429).
 The same --seed gives the same sequence of calls, so the counts are the same every run;
 latencies are real, and a --duration spreads the calls over that many seconds.
 
 Tokens: `--tokens-file` takes the JSON that `gateway-admin seed-demo` prints (keep it out of
-the repository), or set SIM_SUPPORT_TOKEN and SIM_OPS_TOKEN. They are never printed.
+the repository), or set SIM_SUPPORT_TOKEN, SIM_OPS_TOKEN and SIM_DECOY_TOKEN. They are never
+printed.
+
+--verify expects the rate limits and the login throttle to be empty when the run starts, because
+what happens to a call depends on the calls before it: start the gateway afresh before each run
+(scripts/run_harborline_check.sh does). It also expects the run to be quick: the lockout of the
+decoy's token lasts a minute, so --verify and --duration cannot be used together.
 
 --verify reads the dashboard's views as the telemetry_reader role (TELEMETRY_READER_DATABASE_URL)
 and compares what the gateway stored with what was sent, exactly. With POLICY_AUDITOR_DATABASE_URL
