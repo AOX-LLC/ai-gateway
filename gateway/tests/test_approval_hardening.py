@@ -241,3 +241,19 @@ async def test_the_test_approver_refuses_to_run_without_both_switches(
     with pytest.raises(SystemExit, match="LAB_AUTO_APPROVE"):
         async with module.auto_approving("harborline-approver"):
             pass
+
+
+def test_the_test_client_that_the_servers_image_runs_does_not_need_agent_core_to_import() -> None:
+    """direct-check runs scripts/test_client.py in the servers image, which has no agent-core: the
+    test approver is imported only when --approve-as asks for it."""
+    tree = ast.parse((ROOT / "scripts" / "test_client.py").read_text())
+
+    top_level = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.Import | ast.ImportFrom)
+        and any(
+            "auto_approver" in ast.dump(node) or "aox_agent_core" in ast.dump(node) for _ in [0]
+        )
+    ]
+    assert top_level == []

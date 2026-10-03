@@ -39,8 +39,6 @@ from mcp.client.streamable_http import streamable_http_client
 from mcp.shared.exceptions import MCPError
 from mcp.types import INVALID_PARAMS, CallToolResult, TextContent
 
-from auto_approver import auto_approving
-
 _INITIALIZE = {
     "jsonrpc": "2.0",
     "id": 1,
@@ -145,6 +143,12 @@ def _parser() -> argparse.ArgumentParser:
 
 
 async def _run_approved(args: argparse.Namespace, token: str) -> None:
+    if not args.approve_as:
+        await _run_checks(args, token)
+        return
+    # Imported here: the servers image runs this script too, and has no agent-core.
+    from auto_approver import auto_approving
+
     async with auto_approving(args.approve_as):
         await _run_checks(args, token)
 
