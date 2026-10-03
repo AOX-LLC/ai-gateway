@@ -20,11 +20,31 @@ AUDIT_TABLE = "agent_core_audit"
 APPROVALS_TABLE = "agent_core_approvals"
 
 
-def policy_url(url: str) -> str:
+def policy_url(
+    url: str,
+    *,
+    lock_timeout_ms: int | None = None,
+    statement_timeout_ms: int | None = None,
+    connect_timeout_s: int | None = None,
+) -> str:
     """The URL with the policy schema first on the search path: agent-core's table names are
-    unqualified. It stays a URL, which is what agent-core's `open_database` takes."""
+    unqualified. It stays a URL, which is what agent-core's `open_database` takes.
+
+    The timeouts are set on the connection, so the *database* gives up a wait before the caller
+    stops waiting for it: cancelling the awaiting task does not stop agent-core's worker thread, and
+    without a server-side limit a thread blocked on the audit lock holds on for as long as the lock
+    does. Options and other settings already in the URL are kept."""
     parts = urlsplit(url)
-    query = [(key, value) for key, value in parse_qsl(parts.query) if key != "options"]
-    query.append(("options", f"-c search_path={SCHEMA}"))
+    settings = [(key, value) for key, value in parse_qsl(parts.query)]
+    existing = " ".join(value for key, value in settings if key == "options")
+    options = [existing, f"-c search_path={SCHEMA}"] if existing else [f"-c search_path={SCHEMA}"]
+    if lock_timeout_ms is not None:
+        options.append(f"-c lock_timeout={lock_timeout_ms}")
+    if statement_timeout_ms is not None:
+        options.append(f"-c statement_timeout={statement_timeout_ms}")
+    query = [(key, value) for key, value in settings if key not in {"options", "connect_timeout"}]
+    if connect_timeout_s is not None:
+        query.append(("connect_timeout", str(connect_timeout_s)))
+    query.append(("options", " ".join(options)))
     # libpq decodes %20, not +, in the query of a URL.
     return urlunsplit(parts._replace(query=urlencode(query, quote_via=quote)))
