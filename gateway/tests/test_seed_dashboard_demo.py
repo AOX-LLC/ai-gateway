@@ -31,7 +31,7 @@ def _load() -> ModuleType:
 
 
 seed = _load()
-ANCHOR = datetime(2026, 10, 3, 11, 57, tzinfo=UTC)
+ANCHOR = datetime(2026, 10, 3, 21, 57, tzinfo=UTC)
 
 
 @pytest.fixture(scope="module")
@@ -49,22 +49,35 @@ def test_the_same_seed_and_anchor_give_the_same_rows_and_another_seed_does_not(w
     assert seed.summary(week)["tool_calls"] != seed.summary(other)["tool_calls"]
 
 
-def test_the_week_has_a_daily_rhythm_and_a_quiet_weekend(week: Any) -> None:
+def test_the_counts_and_shapes_do_not_depend_on_the_day_the_seed_is_run(week: Any) -> None:
+    # The anchor is the newest 21:57 UTC: another day is the same week moved, so the same numbers.
+    for now in (
+        datetime(2026, 10, 3, 22, 30, tzinfo=UTC),
+        datetime(2026, 10, 9, 3, 5, tzinfo=UTC),  # a different weekday, before that day's 21:57
+        datetime(2026, 11, 17, 21, 57, tzinfo=UTC),
+    ):
+        moved = seed.build_backfill(20261003, seed.default_anchor(now))
+        assert seed.summary(moved) == seed.summary(week)
+        assert seed.default_anchor(now) <= now
+        assert now - seed.default_anchor(now) < timedelta(days=1)
+
+
+def test_the_week_has_a_daily_rhythm_and_two_quiet_days(week: Any) -> None:
     by_hour: Counter[int] = Counter()
     by_day_kind: Counter[str] = Counter()
     for row in week.requests:
         if row["kind"] != "tool_call":
             continue
         by_hour[row["ts"].hour] += 1
-        by_day_kind["weekend" if row["ts"].weekday() >= 5 else "weekday"] += 1
+        back = (ANCHOR.date() - row["ts"].date()).days
+        by_day_kind["quiet" if back in seed.QUIET_DAYS_BACK else "busy"] += 1
 
     night = sum(by_hour[h] for h in (0, 1, 2, 3, 4, 22, 23)) / 7
     afternoon = sum(by_hour[h] for h in (13, 14, 15, 16)) / 4
     assert afternoon > 3 * night
-    days = Counter(
-        (ANCHOR - timedelta(days=7) + timedelta(days=d)).weekday() >= 5 for d in range(7)
-    )
-    assert by_day_kind["weekend"] / max(days[True], 1) < 0.6 * by_day_kind["weekday"] / days[False]
+    quiet_days = len(seed.QUIET_DAYS_BACK)
+    busy_days = 8 - quiet_days  # the week spans the anchor's day and the seven before it
+    assert by_day_kind["quiet"] / quiet_days < 0.6 * by_day_kind["busy"] / busy_days
 
 
 def test_the_four_episodes_are_in_the_data(week: Any) -> None:

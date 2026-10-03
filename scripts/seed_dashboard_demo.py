@@ -7,7 +7,7 @@ Two parts, both safe to read before running:
 
 1. A backfill of about seven days of telemetry (requests, layer verdicts, failed logins, the
    pipeline configuration), written through the telemetry writer role, the way the gateway writes
-   it. It has a daily rhythm (quiet nights, busy afternoons, quiet weekends) and four episodes: a
+   it. It has a daily rhythm (quiet nights, busy afternoons, two quiet days) and four episodes: a
    client probing tools it was not given, a spray of invalid tokens, a burst that a layer in
    monitor mode would have limited, and a slow upstream. Everything is made up (Harborline Supply
    Co. is fictional). The same seed and anchor give the same rows: `build_backfill` is pure and
@@ -142,10 +142,25 @@ def _poisson(rng: random.Random, lam: float) -> int:
         k += 1
 
 
-def profile(hour: float, weekday: int) -> float:
-    """Load over a day: quiet nights, a morning ramp, an afternoon peak; weekends a third."""
+QUIET_DAYS_BACK = (
+    3,
+    4,
+)  # the two quiet days, counted back from the anchor's day: a made-up weekend
+
+
+def default_anchor(now: datetime) -> datetime:
+    """The newest 21:57 UTC at or before `now`.
+
+    Always the same time of day, and the quiet days are counted from it and not from the calendar,
+    so the same seed gives the same counts and shapes whatever day and hour the seed is run."""
+    anchor = now.astimezone(UTC).replace(hour=21, minute=57, second=0, microsecond=0)
+    return anchor if anchor <= now else anchor - timedelta(days=1)
+
+
+def profile(hour: float, quiet: bool) -> float:
+    """Load over a day: quiet nights, a morning ramp, an afternoon peak; quiet days a third."""
     day = max(0.0, math.sin(math.pi * (hour - 6.0) / 14.0)) ** 1.5 if 6.0 <= hour <= 20.0 else 0.0
-    return (0.12 + 0.88 * day) * (0.35 if weekday >= 5 else 1.0)
+    return (0.12 + 0.88 * day) * (0.35 if quiet else 1.0)
 
 
 def _choose(rng: random.Random, weighted: list[tuple[str, float]]) -> str:
@@ -212,7 +227,8 @@ def build_backfill(
     start = anchor - timedelta(days=days)
     for minute in range(days * 1440):
         moment = start + timedelta(minutes=minute)
-        rate = 1.6 * profile(moment.hour + moment.minute / 60, moment.weekday())
+        quiet = (anchor.date() - moment.date()).days in QUIET_DAYS_BACK
+        rate = 1.6 * profile(moment.hour + moment.minute / 60, quiet)
         calls = _poisson(rng, rate)
         extra: list[str] = []
         if _within(moment, eps["probing"]):
@@ -736,7 +752,7 @@ def main(argv: list[str] | None = None) -> None:
     )
     args = parser.parse_args(argv)
 
-    anchor = datetime.now(UTC).replace(minute=0, second=0, microsecond=0) - timedelta(minutes=3)
+    anchor = default_anchor(datetime.now(UTC))
     backfill = build_backfill(args.seed, anchor, args.days, args.hold_ms)
     print(
         f"backfill (seed {args.seed}, {args.days} days to {anchor:%Y-%m-%d %H:%M} UTC):"
