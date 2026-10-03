@@ -48,6 +48,7 @@ x-hardening: &hardening
 services:
   postgres:
     image: pgvector/pgvector:pg17@sha256:ac08538c6f8b9904c33c8224c5e5706dbe760aca29db1d096972b4052c22a75d
+    restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:?set it in .env}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set it in .env}
