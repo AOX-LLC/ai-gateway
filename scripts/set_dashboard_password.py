@@ -30,6 +30,8 @@ KEY = "DASHBOARD_ADMIN_PASSWORD_HASH"
 N, R, P, KEY_LENGTH, SALT_LENGTH = 32768, 8, 1, 32, 16
 MAX_MEMORY = 128 * 1024 * 1024
 MIN_LENGTH = 12
+MAX_LENGTH = 512
+"""Sign-in refuses over 1024 UTF-16 units; 512 characters is under that however counted."""
 
 
 def hash_password(password: str, salt: bytes | None = None) -> str:
@@ -95,6 +97,10 @@ def main(argv: list[str] | None = None) -> None:
     password = read_password(args)
     if len(password) < MIN_LENGTH:
         sys.exit(f"set_dashboard_password: use at least {MIN_LENGTH} characters")
+    if len(password) > MAX_LENGTH:
+        sys.exit(
+            f"set_dashboard_password: use at most {MAX_LENGTH} characters (sign-in refuses longer)"
+        )
     text = args.env.read_text() if args.env.exists() else ""
     write_private(args.env, with_hash(text, hash_password(password)))
     print(f"{KEY} is set in {args.env}. Restart the dashboard to use it.")

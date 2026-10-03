@@ -1055,9 +1055,13 @@ done one at a time.
 - **Session.** A signed cookie, `__Host-aig_session`: `HttpOnly; Secure; SameSite=Strict; Path=/`, no
   `Domain`. Its payload (a random id, when it was issued, when it was last seen) is signed with
   HMAC-SHA256 under `DASHBOARD_SESSION_SECRET`. It ends 30 minutes after it was last used and 8 hours
-  after it was issued, however busy; nothing is stored on the server, so a restart signs nobody out and
-  changing the secret signs everybody out. The proxy signs it again when its last-seen time is a minute
-  old.
+  after it was issued, however busy. The last-seen time moves when the person does something (opens or
+  changes a page, pages the decisions), at most once a minute; the page's own 15-second refresh does not
+  move it, so a tab left open ends 30 minutes after the last real use and its next refresh is turned
+  away with a 401. The session itself is stored nowhere, so a restart signs nobody out and changing the
+  secret signs everybody out. **Signing out is remembered in memory:** the session id goes on a list that
+  the proxy and the pages check, so a copied cookie stops working at once; the list is lost on a restart,
+  after which a cookie signed out before it is good again until it expires (at most 8 hours).
 - **`Secure` is always set,** so the cookie is only kept where the browser treats the origin as secure.
   Chromium and Firefox do that for `localhost` and `127.0.0.1` over plain http; Safari does not for
   `http://127.0.0.1`, so there signing in appears to work and the next request is not signed in. Use
@@ -1066,10 +1070,14 @@ done one at a time.
   `Sec-Fetch-Site` of `same-origin` where the browser sends it; with `SameSite=Strict` that is the second
   defence against a cross-site post.
 - **Failed sign-ins** are counted for the whole dashboard (behind Docker's port publishing every client
-  arrives from the bridge's address, so a per-address count would be one count anyway): after five in
-  fifteen minutes it refuses for a minute without looking at the password. Someone who can reach it can
-  lock it for a minute at a time; that is accepted for an admin tool on loopback. Every failure is the
-  same "did not match".
+  arrives from the bridge's address, so a per-address count would be one count anyway). Five attempts are
+  allowed; the fifth starts a one-minute lockout in which the password is not looked at, and each attempt
+  after a lockout starts one twice as long, up to 15 minutes. So a guesser gets five tries and then one
+  per lockout, about 96 a day, however long they wait: the count does not expire, only a success (or a
+  restart) clears it, because a window that forgets lets the guesser have a fresh burst once the
+  lockouts outgrow it. An attempt is counted when it starts, so guesses sent at once are counted too. The
+  real admin, locked out by someone else's guesses, waits at most 15 minutes. Every failure is the same
+  "did not match". The password is also limited to 12 to 512 characters.
 
 ### Headers and the proxy
 
@@ -1083,6 +1091,16 @@ there is no `style=` anywhere in the UI; `connect-src`, `img-src`, `font-src` `'
 `Cache-Control: no-store`. It sends anyone without a valid session to `/signin` (an API call gets 401);
 the sign-in page, its form and `/healthz` (which reads nothing) are open. It is the first gate, not the
 only one: the pages check the session, and so does every data function.
+
+Three details that matter. The proxy does not run on static files, so `next.config.ts` gives `/_next/static`,
+`/brand` and `/fonts` `X-Content-Type-Options` and `Cross-Origin-Resource-Policy` itself. Next's built-in
+404 and last-resort error pages use inline styles and un-nonced scripts, which this CSP would block, so
+the app has its own `not-found.tsx` and `global-error.tsx` made of the system's classes. And Next
+buffers a request body for the proxy before the proxy looks at the request, so the limit is set to
+16 KB (`proxyClientMaxBodySize`): the only body the dashboard takes is a password form. Every request
+is also refused with 421 unless its `Host` is in `DASHBOARD_ALLOWED_HOSTS` (loopback by default), which
+is what stops DNS rebinding: the `Origin` check alone compares `Host` with a value an attacker also
+controls.
 
 ### Every data function takes a session
 

@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { clock, windowLabel } from "@/lib/format";
+import { RANGES, type Range } from "@/lib/data/ranges";
 import type { Approvals, DecisionsPage, Kpis, Overview, Result } from "@/lib/data/types";
 import { ApprovalsPanel } from "./ApprovalsPanel";
 import { type DecisionsView, DecisionsPanel } from "./DecisionsPanel";
@@ -15,7 +16,6 @@ import { NotActive } from "./States";
  * last good data on screen and says how old it is. */
 
 export const POLL_MS = 15_000;
-const RANGE_SECONDS = { "1h": 3600, "24h": 86_400, "7d": 604_800, "30d": 2_592_000 } as const;
 
 type Panel<T> = { data: T | null; error: string | null; stale: boolean; since: string | null };
 
@@ -30,7 +30,7 @@ function next<T>(previous: Panel<T>, result: Result<T>, at: string): Panel<T> {
   return { data: previous.data, error: result.error, stale: previous.data !== null, since: previous.since };
 }
 
-export function LiveOverview({ initial, range }: { initial: Overview; range: keyof typeof RANGE_SECONDS }) {
+export function LiveOverview({ initial, range }: { initial: Overview; range: Range }) {
   const [kpis, setKpis] = useState<Panel<Kpis>>(() => start(initial.kpis, initial.at));
   const [approvals, setApprovals] = useState<Panel<Approvals>>(() => start(initial.approvals, initial.at));
   const [live, setLive] = useState<Panel<DecisionsPage>>(() => start(initial.decisions, initial.at));
@@ -123,29 +123,30 @@ export function LiveOverview({ initial, range }: { initial: Overview; range: key
   );
 
   const goOlder = useCallback(async () => {
+    if (older.loading) return;
     const page = index === 0 ? live.data : older.page;
     if (!page?.nextCursor) return;
     if (await loadPage(page.nextCursor)) setCursors((c) => [...c, page.nextCursor]);
-  }, [index, live.data, older.page, loadPage]);
+  }, [index, live.data, older.page, older.loading, loadPage]);
 
   const goNewer = useCallback(async () => {
-    if (index === 0) return;
+    if (index === 0 || older.loading) return;
     if (index === 1) {
       setCursors([null]);
       setOlder({ page: null, loading: false, error: null });
       return;
     }
     if (await loadPage(cursors[index - 1] ?? null)) setCursors((c) => c.slice(0, -1));
-  }, [index, cursors, loadPage]);
+  }, [index, cursors, older.loading, loadPage]);
 
   const view: DecisionsView =
     index === 0
-      ? { page: live.data, error: live.error, stale: live.stale, since: live.since ? clock(live.since) : null, loading: false, index }
-      : { page: older.page, error: older.error, stale: false, since: null, loading: older.loading, index };
+      ? { page: live.data, error: live.error, stale: live.stale, since: live.since ? clock(live.since) : null, loading: older.loading, index, pagingError: older.error }
+      : { page: older.page, error: null, stale: false, since: null, loading: older.loading, index, pagingError: older.error };
 
   return (
     <>
-      <div className="pui-summary-line" role="status">
+      <div className="pui-summary-line">
         <span className="pui-muted">
           <Icon name="refresh" size="sm" /> Updated {clock(updatedAt)} UTC · refreshes every 15 seconds while this tab is open
         </span>
@@ -158,7 +159,7 @@ export function LiveOverview({ initial, range }: { initial: Overview; range: key
         loading={false}
       />
       <div className="panel-grid">
-        <DecisionsPanel view={view} onOlder={goOlder} onNewer={goNewer} rangeLabel={windowLabel(RANGE_SECONDS[range])} />
+        <DecisionsPanel view={view} onOlder={goOlder} onNewer={goNewer} rangeLabel={windowLabel(RANGES[range])} />
         <ApprovalsPanel
           approvals={approvals.data}
           error={approvals.error}

@@ -78,6 +78,29 @@ describe("the proxy", () => {
     }
   });
 
+  it("does not count the page's own background refresh as use, so a tab left open still times out", async () => {
+    const stale = issue(SECRET, nowS() - 120, { sid: "s", iat: nowS() - 120, seen: nowS() - 120 });
+
+    const background = await call("/api/live", stale);
+    const action = await call("/", stale);
+
+    expect(background.status).toBe(200);
+    expect(background.headers.get("set-cookie")).toBeNull();
+    expect(action.headers.get("set-cookie")).toContain(`${COOKIE_NAME}=`);
+  });
+
+  it("refuses a session that was signed out, even though its signature is still good", async () => {
+    const { revoke } = await import("@/lib/auth/revoked");
+    const token = issue(SECRET, nowS());
+    expect((await call("/", token)).status).toBe(200);
+    const payload = JSON.parse(Buffer.from(token.split(".")[1]!, "base64url").toString()) as { sid: string };
+
+    revoke(payload.sid, nowS());
+
+    expect((await call("/", token)).status).toBe(303);
+    expect((await call("/api/live", token)).status).toBe(401);
+  });
+
   it("signs the cookie again only when it has gone stale", async () => {
     const fresh = await call("/", issue(SECRET, nowS()));
     const stale = await call("/", issue(SECRET, nowS() - 120, { sid: "s", iat: nowS() - 120, seen: nowS() - 120 }));

@@ -52,3 +52,5 @@
 .pui-kpi-unit { line-height: 1; }
 .queue-column:only-child { grid-column: 1 / -1; }
 .pui-panel > .pui-alert { border-radius: 0 0 var(--pui-radius-md) var(--pui-radius-md); }
+
+.paging-notice { margin: 12px 16px 0; }

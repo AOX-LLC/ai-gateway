@@ -16,7 +16,7 @@ export default async function SignIn({ searchParams }: { searchParams: Promise<R
   const params = await searchParams;
   const code = typeof params.error === "string" ? params.error : undefined;
   const disabled = config().adminPasswordHash === "";
-  const message = disabled ? MESSAGES.disabled : code ? MESSAGES[code] : undefined;
+  const message = disabled ? MESSAGES.disabled : code && Object.hasOwn(MESSAGES, code) ? MESSAGES[code] : undefined;
   return (
     <main className="signin-wrap">
       <div className="pui-panel signin-card">

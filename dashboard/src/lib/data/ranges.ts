@@ -5,3 +5,6 @@ export const DEFAULT_RANGE: Range = "24h";
 export function parseRange(value: string | null | undefined): Range {
   return value !== null && value !== undefined && Object.hasOwn(RANGES, value) ? (value as Range) : DEFAULT_RANGE;
 }
+
+/** In display order. */
+export const RANGE_KEYS = Object.keys(RANGES) as Range[];

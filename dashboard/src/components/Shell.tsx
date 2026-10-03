@@ -1,11 +1,10 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
+import { RANGE_KEYS, type Range } from "@/lib/data/ranges";
 import { Icon } from "./Icon";
 import { ThemeToggle } from "./ThemeToggle";
 
-const RANGES = ["1h", "24h", "7d", "30d"] as const;
-
-type Props = { range: (typeof RANGES)[number]; theme: "dark" | "light"; sampleData: boolean; children: ReactNode };
+type Props = { range: Range; theme: "dark" | "light"; sampleData: boolean; children: ReactNode };
 
 /** The frame of the UI system: sidebar with the AOX logo top left, top bar, content column. */
 export function Shell({ range, theme, sampleData, children }: Props) {
@@ -57,7 +56,7 @@ export function Shell({ range, theme, sampleData, children }: Props) {
           </div>
           <div className="pui-topbar-group">
             <nav className="range-seg" aria-label="Time range">
-              {RANGES.map((value) => (
+              {RANGE_KEYS.map((value) => (
                 <Link key={value} href={`/?range=${value}`} prefetch={false} aria-current={value === range ? "true" : undefined}>
                   {value}
                 </Link>

@@ -1,3 +1,5 @@
+import { readFileSync, readdirSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import type { PoolClient } from "pg";
 import { afterEach, describe, expect, it } from "vitest";
 import { AuthError, mint } from "@/lib/auth/authed";
@@ -54,6 +56,19 @@ describe("the views", () => {
     expect(mentioned.length).toBeGreaterThan(4);
     for (const name of mentioned) expect(name, `${name} must be schema-qualified`).toMatch(/^(telemetry|policy)\.dash_[a-z_]+$/);
     expect(queries).not.toMatch(/\b(FROM|JOIN)\s+dash_/i);
+  });
+});
+
+describe("the data module", () => {
+  it("exports every function that reads the database, so the session test above covers it", () => {
+    const directory = fileURLToPath(new URL("../src/lib/data/", import.meta.url));
+    const index = readFileSync(`${directory}index.ts`, "utf8");
+    const readers = readdirSync(directory)
+      .filter((file) => file.endsWith(".ts") && !["index.ts", "types.ts", "cursor.ts", "ranges.ts", "overview.ts"].includes(file))
+      .flatMap((file) => [...readFileSync(`${directory}${file}`, "utf8").matchAll(/export (?:async )?function (\w+)/g)].map((m) => [file, m[1]!]));
+
+    expect(readers.length).toBeGreaterThanOrEqual(3);
+    for (const [file, name] of readers) expect(index, `${name} (${file}) must be exported from lib/data/index.ts`).toContain(name);
   });
 });
 

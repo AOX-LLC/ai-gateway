@@ -1,14 +1,15 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { config as settings } from "./lib/config";
 import { hostAllowed } from "./lib/auth/hosts";
-import { COOKIE_NAME, REFRESH_AFTER_S, cookieAttributes, issue, verify } from "./lib/auth/session";
-import { ABSOLUTE_LIFETIME_S } from "./lib/auth/session";
+import { isRevoked } from "./lib/auth/revoked";
+import { ABSOLUTE_LIFETIME_S, COOKIE_NAME, REFRESH_AFTER_S, cookieAttributes, issue, verify } from "./lib/auth/session";
 
 /** Runs before every request that is not a static file: puts a fresh nonce CSP and the security
  * headers on the answer, and turns away anyone who is not signed in (the sign-in page, its
  * form's endpoint and the health check are open). The pages and the data functions check the
  * session again: this is the first gate, not the only one. */
 
+const BACKGROUND_PATH = "/api/live";
 const OPEN_PATHS = new Set(["/signin", "/api/signin", "/healthz"]);
 const now = () => Math.floor(Date.now() / 1000);
 
@@ -54,7 +55,8 @@ export function proxy(request: NextRequest): NextResponse {
   if (!hostAllowed(request.headers.get("host"), settings().allowedHosts)) {
     return secure(new NextResponse("Misdirected Request", { status: 421 }), csp);
   }
-  const payload = verify(request.cookies.get(COOKIE_NAME)?.value, settings().sessionSecret, now());
+  const verified = verify(request.cookies.get(COOKIE_NAME)?.value, settings().sessionSecret, now());
+  const payload = verified && !isRevoked(verified.sid) ? verified : undefined;
 
   if (!payload && !OPEN_PATHS.has(path)) {
     if (path.startsWith("/api/")) {
@@ -64,11 +66,12 @@ export function proxy(request: NextRequest): NextResponse {
   }
 
   const headers = new Headers(request.headers);
-  headers.set("x-nonce", nonce);
   headers.set("Content-Security-Policy", csp);
   const response = secure(NextResponse.next({ request: { headers } }), csp);
-  // Keep the idle clock moving, and write the cookie only when it has gone stale.
-  if (payload && now() - payload.seen >= REFRESH_AFTER_S) {
+  // Keep the idle clock moving, and write the cookie only when it has gone stale. The page's own
+  // 15-second refresh does not count as use: a tab left open must not hold the session open for ever,
+  // so it ends 30 minutes after the person last did something, and the refresh then gets a 401.
+  if (payload && path !== BACKGROUND_PATH && now() - payload.seen >= REFRESH_AFTER_S) {
     const remaining = Math.max(ABSOLUTE_LIFETIME_S - (now() - payload.iat), 0);
     response.headers.append(
       "Set-Cookie",

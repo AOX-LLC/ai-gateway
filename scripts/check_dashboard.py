@@ -14,6 +14,7 @@ import argparse
 import http.client
 import json
 import os
+import re
 import sys
 import urllib.parse
 
@@ -100,6 +101,16 @@ def main() -> None:
         and headers.get("x-frame-options") == "DENY",
         "the security headers are set",
     )
+    # Each page load has its own nonce, so read the policy and the scripts from one answer.
+    status, headers, page = client.request("GET", "/signin")
+    page_nonce = re.search(r"'nonce-([^']+)'", headers.get("content-security-policy", ""))
+    page_scripts = re.findall(rb"<script\b[^>]*>", page)
+    check(
+        page_nonce is not None
+        and len(page_scripts) > 0
+        and all(f'nonce="{page_nonce.group(1)}"'.encode() in tag for tag in page_scripts),
+        "every script on the page carries the nonce of its own policy",
+    )
 
     status, _, _ = client.request("POST", "/api/signin", body={"password": password}, origin=False)
     check(status == 403 and client.cookie is None, "a sign-in with no Origin is refused")
@@ -143,10 +154,14 @@ def main() -> None:
     )
     check(status == 200, "a cursor the dashboard did not make is ignored")
 
+    copied = client.cookie
     status, headers, _ = client.request("POST", "/api/signout", body={})
     check(status == 303 and client.cookie is None, "signing out clears the session")
     status, _, _ = client.request("GET", "/api/live")
     check(status == 401, "the data endpoint is shut again")
+    client.cookie = copied
+    status, _, _ = client.request("GET", "/api/live")
+    check(status == 401, "a copy of the cookie taken before sign-out no longer works")
     print("PASS  the dashboard")
 
 

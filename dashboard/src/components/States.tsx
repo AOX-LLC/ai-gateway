@@ -37,13 +37,13 @@ export function EmptyState({ icon, title, children }: { icon: IconName; title: s
   );
 }
 
-export function ErrorState({ message }: { message: string }) {
+export function ErrorState({ message, retries = true }: { message: string; retries?: boolean }) {
   return (
     <div className="pui-alert pui-alert--danger" role="alert">
       <Icon name="alert" />
       <div className="pui-alert-body">
         <div className="pui-alert-title">Could not read this panel</div>
-        <div className="pui-alert-text">{message} It tries again every 15 seconds.</div>
+        <div className="pui-alert-text">{retries ? `${message} It tries again every 15 seconds.` : message}</div>
       </div>
     </div>
   );

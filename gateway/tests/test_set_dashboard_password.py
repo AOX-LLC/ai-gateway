@@ -75,6 +75,9 @@ def test_a_short_or_missing_password_is_refused_and_the_file_is_untouched(
 
     with pytest.raises(SystemExit, match="at least"):
         script.main(["--env", str(env), "--password-env", "DASH_PW"])
+    monkeypatch.setenv("DASH_PW", "x" * 513)
+    with pytest.raises(SystemExit, match="at most"):
+        script.main(["--env", str(env), "--password-env", "DASH_PW"])
     monkeypatch.delenv("DASH_PW")
     with pytest.raises(SystemExit, match="is not set"):
         script.main(["--env", str(env), "--password-env", "DASH_PW"])

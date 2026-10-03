@@ -11,6 +11,8 @@ export type DecisionsView = {
   loading: boolean;
   /** 0 is the live first page; each older page is one more. */
   index: number;
+  /** An Older or Newer request failed: the page on screen is still the last good one. */
+  pagingError: string | null;
 };
 
 type Props = { view: DecisionsView; onOlder: () => void; onNewer: () => void; rangeLabel: string };
@@ -88,7 +90,7 @@ export function DecisionsPanel({ view, onOlder, onNewer, rangeLabel }: Props) {
         {view.stale && view.error ? <StaleNote since={view.since} error={view.error} /> : null}
       </div>
       {!page && view.loading ? <SkeletonLines rows={6} /> : null}
-      {!page && !view.loading ? <ErrorState message={view.error ?? "No data."} /> : null}
+      {!page && !view.loading ? <ErrorState message={view.error ?? "No data."} retries={view.index === 0} /> : null}
       {page && view.loading ? <SkeletonLines rows={6} /> : null}
       {page && !view.loading && page.decisions.length === 0 ? (
         <EmptyState icon="list" title="No tool calls in this window">
@@ -97,6 +99,14 @@ export function DecisionsPanel({ view, onOlder, onNewer, rangeLabel }: Props) {
       ) : null}
       {page && !view.loading && page.decisions.length > 0 ? (
         <>
+          {view.pagingError ? (
+            <div className="pui-alert pui-alert--warning paging-notice" role="alert">
+              <Icon name="alert" />
+              <div className="pui-alert-body">
+                <div className="pui-alert-text">{view.pagingError} Try again.</div>
+              </div>
+            </div>
+          ) : null}
           <div className="pui-table-wrap" role="region" aria-label="Recent decisions" tabIndex={0}>
             <table className="pui-table">
               <thead>
@@ -126,11 +136,11 @@ export function DecisionsPanel({ view, onOlder, onNewer, rangeLabel }: Props) {
               {view.index > 0 ? ` · page ${view.index + 1}` : ""}
             </span>
             <span className="pager">
-              <button type="button" className="pui-btn pui-btn--sm" onClick={onNewer} disabled={view.index === 0}>
+              <button type="button" className="pui-btn pui-btn--sm" onClick={onNewer} disabled={view.index === 0 || view.loading}>
                 <Icon name="left" size="sm" />
                 Newer
               </button>
-              <button type="button" className="pui-btn pui-btn--sm" onClick={onOlder} disabled={page.nextCursor === null}>
+              <button type="button" className="pui-btn pui-btn--sm" onClick={onOlder} disabled={page.nextCursor === null || view.loading}>
                 Older
                 <Icon name="right" size="sm" />
               </button>

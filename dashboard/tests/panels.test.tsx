@@ -24,7 +24,7 @@ const decision = (changes: Partial<Decision> = {}): Decision => ({
   ...changes,
 });
 
-const view = (changes: Partial<DecisionsView> = {}): DecisionsView => ({ page: { decisions: [decision()], nextCursor: null }, error: null, stale: false, since: null, loading: false, index: 0, ...changes });
+const view = (changes: Partial<DecisionsView> = {}): DecisionsView => ({ page: { decisions: [decision()], nextCursor: null }, error: null, stale: false, since: null, loading: false, index: 0, pagingError: null, ...changes });
 const noop = () => undefined;
 const html = (element: React.ReactElement) => renderToStaticMarkup(element);
 
@@ -81,6 +81,16 @@ describe("the recent decisions panel", () => {
     expect(html(<DecisionsPanel view={view({ page: { decisions: [], nextCursor: null } })} onOlder={noop} onNewer={noop} rangeLabel="1 hours" />)).toContain("No tool calls in this window");
     expect(html(<DecisionsPanel view={view({ page: null, error: "The database did not answer." })} onOlder={noop} onNewer={noop} rangeLabel="24 hours" />)).toContain("Could not read this panel");
     expect(html(<DecisionsPanel view={view({ loading: true })} onOlder={noop} onNewer={noop} rangeLabel="24 hours" />)).toContain('aria-busy="true"');
+  });
+
+  it("says when a page could not be read, keeps the last good page, and disables both buttons while one loads", () => {
+    const failed = html(<DecisionsPanel view={view({ pagingError: "The page could not be read." })} onOlder={noop} onNewer={noop} rangeLabel="24 hours" />);
+    expect(failed).toContain("The page could not be read. Try again.");
+    expect(failed).toContain("tickets__assign");
+
+    const loading = html(<DecisionsPanel view={view({ index: 1, loading: true, page: { decisions: [decision()], nextCursor: "c" } })} onOlder={noop} onNewer={noop} rangeLabel="24 hours" />);
+    expect(loading).toContain('aria-busy="true"');
+    expect(html(<DecisionsPanel view={view({ index: 1, page: null, error: "x" })} onOlder={noop} onNewer={noop} rangeLabel="24 hours" />)).not.toContain("tries again every 15 seconds");
   });
 
   it("disables Newer on the first page and Older on the last", () => {
