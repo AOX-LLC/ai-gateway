@@ -183,7 +183,15 @@ async def test_a_wrong_anchor_still_fails_against_the_upgraded_chain(
         await verify_with_anchors(auditor, read_anchors(anchors))
 
 
-async def test_roles_that_held_table_level_grants_get_exactly_the_layout_and_can_still_work(
+@pytest.mark.parametrize(
+    "held",
+    [
+        "SELECT, INSERT, UPDATE",  # what 3a gave: the table-level UPDATE the guard used to limit
+        "SELECT",  # what an incomplete first repair left: something, but not the layout
+    ],
+)
+async def test_roles_that_held_other_grants_get_exactly_the_layout_and_can_still_work(
+    held: str,
     policy: None,
     test_database_url: str,
     policy_gateway_url: str,
@@ -200,7 +208,7 @@ async def test_roles_that_held_table_level_grants_get_exactly_the_layout_and_can
         for role in ("policy_gateway", "policy_approver"):
             await connection.execute(f"GRANT USAGE ON SCHEMA policy TO {role}".encode())
             await connection.execute(
-                f"GRANT SELECT, INSERT, UPDATE ON policy.agent_core_approvals TO {role}".encode()
+                f"GRANT {held} ON policy.agent_core_approvals TO {role}".encode()
             )
             await connection.execute(
                 f"GRANT SELECT, INSERT ON policy.agent_core_audit TO {role}".encode()

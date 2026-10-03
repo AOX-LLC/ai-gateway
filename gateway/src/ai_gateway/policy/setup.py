@@ -11,11 +11,10 @@ holds beyond its layout.
 """
 
 import logging
-import re
 from dataclasses import dataclass
 
 import anyio
-from aox_agent_core.storage import InstallReport, install_postgres_schema
+from aox_agent_core.storage import install_postgres_schema
 from psycopg import AsyncConnection, sql
 
 from ai_gateway.policy import (
@@ -75,17 +74,14 @@ async def setup_policy(owner_url: str, passwords: PolicyPasswords) -> None:
         await ensure_schema(connection, SCHEMA)
         # The installer refuses roles that are members of each other.
         await _revoke_memberships(connection)
-        report = await _install(owner_url)
+        await _clear_layout_grants(connection)
+        await _install(owner_url)
         await _ensure_approval_tables(connection)
-        if await grant_policy_access(connection, report):
-            # The installer grants a role its layout only on a table where it holds nothing yet, so
-            # a role that held a wider grant (3a's table-level UPDATE) got nothing until it was
-            # taken back. Install again, so it gets exactly its layout.
-            await _install(owner_url)
+        await grant_policy_access(connection)
         await restrict_database_access(connection, list(ROLES))
 
 
-async def _install(owner_url: str) -> InstallReport:
+async def _install(owner_url: str) -> None:
     """Install or upgrade agent-core's tables and guard. The installer is synchronous (agent-core's
     drivers are), so it runs on a thread. An approved, unused request that no approver's decision
     approves (plain SQL could make one under a2) is cancelled, and said so."""
@@ -104,8 +100,10 @@ async def _install(owner_url: str) -> InstallReport:
             len(report.closed_approvals),
             ", ".join(report.closed_approvals),
         )
+    for grant in report.outside_layout:
+        if grant.role not in (AUDITOR_ROLE, READER_ROLE):
+            logger.warning("held outside agent-core's layout, to revoke if unused: %s", grant)
     logger.info("agent-core's audit and approval tables are installed in schema %s", SCHEMA)
-    return report
 
 
 # What this gateway grants, on its own tables and the audit log for the auditor. The gateway's and
@@ -176,15 +174,13 @@ async def _ensure_approval_tables(connection: AsyncConnection) -> None:
         await connection.execute(_DASHBOARD_GRANT.encode())
 
 
-async def grant_policy_access(
-    connection: AsyncConnection, report: InstallReport | None = None
-) -> int:
+async def grant_policy_access(connection: AsyncConnection) -> None:
     """Make the roles' grants what they should be.
 
     The tables and roles must exist. Nobody may be a member of a policy role (a member inherits its
     privileges). The auditor gets the audit log to read and nothing else. The gateway and approver
-    keep the installer's layout on agent-core's tables, and get this gateway's own tables; with the
-    installer's report, anything they hold beyond that is revoked."""
+    keep the installer's layout on agent-core's tables (`_clear_layout_grants` made them start from
+    nothing before the installer ran), and get this gateway's own tables."""
     schema = sql.Identifier(SCHEMA)
     async with connection.transaction():
         await connection.execute(sql.SQL("SET LOCAL search_path TO {}").format(schema))
@@ -208,9 +204,6 @@ async def grant_policy_access(
                         sql.SQL(privileges), schema, sql.Identifier(table), name
                     )
                 )
-        revoked = 0
-        if report is not None:
-            revoked = await _revoke_beyond_layout(connection, report)
         # The purge runs with its owner's rights, so who may call it is the whole control.
         purge = sql.SQL("{}.{}()").format(schema, sql.Identifier(ARGUMENTS_PURGE_FUNCTION))
         await connection.execute(sql.SQL("REVOKE ALL ON FUNCTION {} FROM PUBLIC").format(purge))
@@ -221,48 +214,28 @@ async def grant_policy_access(
                 else ("REVOKE ALL ON FUNCTION {} FROM {}")
             )
             await connection.execute(sql.SQL(verb).format(purge, sql.Identifier(role)))
-    return revoked
 
 
-_PRIVILEGE = re.compile(r"[A-Z]+")
+async def _clear_layout_grants(connection: AsyncConnection) -> None:
+    """Take every grant the gateway's and approver's roles hold on agent-core's tables, so the
+    installer grants each exactly its layout.
 
-
-async def _revoke_beyond_layout(connection: AsyncConnection, report: InstallReport) -> int:
-    """The installer never revokes; the gateway's and the approver's roles must hold no more than
-    their layout, so what the report lists for them is taken back (the auditor's own grant is
-    made, and others' are not ours to take)."""
-    revoked = 0
-    affected: set[tuple[str, str]] = set()
-    for grant in report.outside_layout:
-        if grant.role not in (GATEWAY_ROLE, APPROVER_ROLE) or not _PRIVILEGE.fullmatch(
-            grant.privilege
-        ):
+    The installer grants a role its layout on a table only where the role holds nothing yet, and
+    never revokes. A role that held anything (a2's, 3a's table-level UPDATE, a grant someone
+    widened or narrowed by hand) would otherwise keep that and miss the rest of its layout. The
+    installer runs straight after, in the same setup, under the same lock; between the two the
+    roles can do nothing, so a write in that moment is refused, not allowed."""
+    for table in (AUDIT_TABLE, APPROVALS_TABLE):
+        cursor = await connection.execute("SELECT to_regclass(%s)", (f"{SCHEMA}.{table}",))
+        row = await cursor.fetchone()
+        if row is None or row[0] is None:
             continue
-        columns = (
-            sql.SQL(" ({})").format(sql.Identifier(grant.column)) if grant.column else sql.SQL("")
-        )
-        await connection.execute(
-            sql.SQL("REVOKE {}{} ON {}.{} FROM {}").format(
-                sql.SQL(grant.privilege),
-                columns,
-                sql.Identifier(SCHEMA),
-                sql.Identifier(grant.table),
-                sql.Identifier(grant.role),
+        for role in (GATEWAY_ROLE, APPROVER_ROLE):
+            await connection.execute(
+                sql.SQL("REVOKE ALL ON {}.{} FROM {}").format(
+                    sql.Identifier(SCHEMA), sql.Identifier(table), sql.Identifier(role)
+                )
             )
-        )
-        logger.warning("revoked %s", grant)
-        revoked += 1
-        affected.add((grant.table, grant.role))
-    # The installer grants a role its layout on a table only if the role holds nothing there, so
-    # what is left of a role's grants on a table it went beyond is taken too, and the installer
-    # (run again by the caller) grants the layout afresh. Revoking on a table takes its columns.
-    for table, role in sorted(affected):
-        await connection.execute(
-            sql.SQL("REVOKE ALL ON {}.{} FROM {}").format(
-                sql.Identifier(SCHEMA), sql.Identifier(table), sql.Identifier(role)
-            )
-        )
-    return revoked
 
 
 _MEMBERSHIPS = (
