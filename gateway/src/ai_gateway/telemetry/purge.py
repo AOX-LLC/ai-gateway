@@ -10,7 +10,7 @@ import argparse
 import logging
 import os
 import sys
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from datetime import UTC, datetime, timedelta
 
 import anyio
@@ -47,19 +47,29 @@ async def purge(url: str, cutoff_by_table: dict[str, datetime]) -> dict[str, int
     return deleted
 
 
+def _window_ends(oldest: datetime, cutoff: datetime) -> Iterator[datetime]:
+    """The end of each window from the oldest row up to the cutoff: an hour apart, the last one
+    ending at the cutoff itself."""
+    end = oldest
+    while end < cutoff:
+        end = min(cutoff, end + _WINDOW)
+        yield end
+
+
 async def _purge_table(connection: AsyncConnection, table: str, cutoff: datetime) -> int:
     name = sql.Identifier(SCHEMA, table)
+    cursor = await connection.execute(sql.SQL("SELECT min(ts) FROM {}").format(name))
+    row = await cursor.fetchone()
+    oldest = row[0] if row else None
+    if oldest is None:
+        return 0
     total = 0
-    while True:
-        cursor = await connection.execute(sql.SQL("SELECT min(ts) FROM {}").format(name))
-        row = await cursor.fetchone()
-        oldest = row[0] if row else None
-        if oldest is None or oldest >= cutoff:
-            return total
+    for end in _window_ends(oldest, cutoff):
         cursor = await connection.execute(
-            sql.SQL("DELETE FROM {} WHERE ts < %s").format(name), (min(cutoff, oldest + _WINDOW),)
+            sql.SQL("DELETE FROM {} WHERE ts < %s").format(name), (end,)
         )
         total += cursor.rowcount
+    return total
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -77,12 +87,19 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="telemetry-purge", description=__doc__)
     parser.add_argument(
         "--every",
-        type=int,
+        type=_non_negative,
         default=0,
         metavar="SECONDS",
         help="run again this often; 0 (the default) runs once",
     )
     return parser
+
+
+def _non_negative(raw: str) -> int:
+    value = int(raw)
+    if value < 0:
+        raise argparse.ArgumentTypeError("must be 0 (run once) or a number of seconds")
+    return value
 
 
 def _days(variable: str, default: int) -> int:

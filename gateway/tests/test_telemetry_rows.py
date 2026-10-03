@@ -6,7 +6,6 @@ from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
-from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -390,4 +389,3 @@ def test_a_span_that_cannot_be_converted_never_raises_into_the_request(
 
     assert len(buffer) == 0
     assert "could not be queued" in caplog.text
-    trace.get_tracer_provider()  # the global provider is untouched by this test

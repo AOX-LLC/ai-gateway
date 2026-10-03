@@ -9,7 +9,9 @@ import pytest
 from ai_gateway.telemetry.purge import (
     DEFAULT_RETENTION_DAYS,
     DEFAULT_SPAN_RETENTION_DAYS,
+    _window_ends,
     cutoffs,
+    main,
     purge,
 )
 
@@ -27,6 +29,28 @@ def test_spans_are_kept_for_seven_days_and_everything_else_for_thirty() -> None:
     assert {t: c for t, c in by_table.items() if t != "spans"} == dict.fromkeys(
         ("requests", "layer_verdicts", "auth_failures"), NOW - timedelta(days=30)
     )
+
+
+def test_a_backlog_is_deleted_in_windows_of_an_hour_ending_at_the_cutoff() -> None:
+    oldest = NOW - timedelta(days=40)
+
+    ends = list(_window_ends(oldest, oldest + timedelta(hours=2, minutes=30)))
+
+    assert ends == [
+        oldest + timedelta(hours=1),
+        oldest + timedelta(hours=2),
+        oldest + timedelta(hours=2, minutes=30),
+    ]
+    assert list(_window_ends(NOW, NOW)) == []
+    assert list(_window_ends(NOW, NOW - timedelta(days=1))) == []
+
+
+@pytest.mark.parametrize("every", ["-1", "-3600"])
+def test_a_negative_interval_is_refused(every: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TELEMETRY_PURGE_DATABASE_URL", "postgresql://x:y@127.0.0.1:1/z")
+
+    with pytest.raises(SystemExit):
+        main(["--every", every])
 
 
 async def _seed(url: str, age_days: float, tag: int) -> None:
