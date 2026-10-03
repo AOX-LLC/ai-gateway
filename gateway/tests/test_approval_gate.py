@@ -356,12 +356,12 @@ async def test_the_dashboard_reader_sees_requests_without_arguments_and_nothing_
                 await connection.execute(f"SELECT * FROM {table}".encode())  # noqa: S608 - fixed names
 
 
-async def test_the_database_refuses_a_second_open_request_for_the_same_intent(
+async def test_the_database_refuses_a_second_pending_request_for_the_same_intent(
     policy: None, policy_gateway_url: str, policy_approver_url: str
 ) -> None:
     """The sharing of one request between identical calls is the database's, not a check followed
     by an insert: a second submission for the same client, tool and payload fails while the first
-    is pending or approved, and works again once it is consumed. (Replace with agent-core a5's.)"""
+    is pending. (Replace with agent-core a5's index.)"""
     gate, ctx, call = _gate(policy_gateway_url, hold_s=0), _context(), _call()
     requester = Principal(id=ctx.client.actor_id, kind=PrincipalKind.SERVICE)
     first = await gate.decide(ctx, call)
@@ -371,12 +371,43 @@ async def test_the_database_refuses_a_second_open_request_for_the_same_intent(
     await _approver(policy_approver_url).resolve(
         UUID(first.approval_id or ""), decision=Decision.APPROVE, principal=HUMAN
     )
-    with pytest.raises(UniqueViolation):  # approved but not yet used is still open
-        await gate._submit(ctx, call, requester, _payload(call))
-    assert (await gate.decide(ctx, call)).outcome is ApprovalOutcome.APPROVED  # now consumed
+    assert (await gate.decide(ctx, call)).outcome is ApprovalOutcome.APPROVED  # consumed
 
     again = await gate._submit(ctx, call, requester, _payload(call))
     assert again is not None, "a used approval is closed: a new intent may ask"
+
+
+async def test_a_new_request_made_while_an_approved_one_exists_is_withdrawn_for_it(
+    policy: None,
+    policy_gateway_url: str,
+    policy_approver_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The index covers pending requests only, so the gate closes the gap itself: a call whose
+    lookup was stale (a person approved the older request meanwhile) makes a request, finds the
+    approved one, withdraws its own, and uses the approved one. One approval, one run: never two
+    requests a person could approve for one intent."""
+    gate, ctx, call = _gate(policy_gateway_url, hold_s=0), _context(), _call()
+    older = await gate.decide(ctx, call)
+    await _approver(policy_approver_url).resolve(
+        UUID(older.approval_id or ""), decision=Decision.APPROVE, principal=HUMAN
+    )
+    real_find = gate._find
+    calls = 0
+
+    async def stale_find(requested_by: str, payload_hash: str) -> Any:
+        nonlocal calls
+        calls += 1
+        return None if calls == 1 else await real_find(requested_by, payload_hash)
+
+    monkeypatch.setattr(gate, "_find", stale_find)
+
+    decision = await gate.decide(ctx, call)
+
+    assert decision.outcome is ApprovalOutcome.APPROVED
+    assert decision.approval_id == older.approval_id, "the approved request ran"
+    open_requests = await _approver(policy_approver_url).list_pending(HUMAN)
+    assert open_requests == [], "and the one it had just made was withdrawn, not left pending"
 
 
 async def test_simultaneous_identical_calls_share_one_pending_request(
@@ -568,9 +599,11 @@ async def test_two_retries_at_once_after_one_approval_run_the_call_exactly_once(
     }
 
 
-async def test_an_approval_that_expired_before_the_retry_is_not_used(
+async def test_an_approval_that_expired_unused_does_not_block_the_same_write_for_good(
     policy: None, policy_gateway_url: str, policy_approver_url: str
 ) -> None:
+    """a3 never closes an approved request that runs out unused. It must not stay in the way: the
+    same write, later, is asked for afresh and gets a request of its own."""
     gate, ctx, call = _gate(policy_gateway_url, ttl_s=1, hold_s=0), _context(), _call()
     pending = await gate.decide(ctx, call)
     await _approver(policy_approver_url).resolve(
@@ -578,13 +611,12 @@ async def test_an_approval_that_expired_before_the_retry_is_not_used(
     )
     await anyio.sleep(1.2)
 
-    retried = await gate.decide(ctx, call)
-
-    assert retried.outcome is not ApprovalOutcome.APPROVED
-    assert retried.approval_id != pending.approval_id or retried.outcome in {
-        ApprovalOutcome.EXPIRED,
-        ApprovalOutcome.UNAVAILABLE,
-    }
+    for _ in range(3):  # not once: every identical call after it
+        retried = await gate.decide(ctx, call)
+        assert retried.outcome is ApprovalOutcome.PENDING
+        assert retried.approval_id != pending.approval_id
+    stored = await _approver(policy_approver_url).get(UUID(pending.approval_id or ""))
+    assert stored.status.value == "approved", "the old one is still there, unused and expired"
 
 
 async def test_an_approval_does_not_carry_over_to_another_upstream(

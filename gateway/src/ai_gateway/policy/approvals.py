@@ -99,7 +99,7 @@ class PostgresApprovalGate:
         except Exception as error:  # the queue must never turn into a 500 or an open door
             reason = (
                 f"{type(error).__name__}: {error}"
-                if isinstance(error, AgentCoreError)
+                if isinstance(error, AgentCoreError | ApprovalConflictError)
                 else (type(error).__name__)
             )
             logger.error("approval for request %s unavailable (%s)", ctx.request_id, reason)
@@ -191,8 +191,8 @@ class PostgresApprovalGate:
         """This call's open request, or a new one; identical concurrent calls share one.
 
         The sharing is the database's, not a check followed by an insert: a partial unique index on
-        (requester, action, payload hash) over pending and approved requests (`setup.py`) makes the
-        second of two simultaneous submissions fail, and it then finds the first's request.
+        (requester, action, payload hash) over pending requests (`setup.py`) makes the second of two
+        simultaneous submissions fail, and it then finds the first's request.
         REPLACE WITH AGENT-CORE A5'S INDEX, which enforces the same rule in the library.
 
         A repeat that matches the requester, tool and payload but differs in role, lifetime or
@@ -203,23 +203,60 @@ class PostgresApprovalGate:
                 self._same_intent(call, request)
                 return request
             try:
-                return await self._submit(ctx, call, requester, payload)
+                created = await self._submit(ctx, call, requester, payload)
             except UniqueViolation:
                 # An open request for this intent exists: the next find returns it. If it is only
                 # past its lifetime (stored as pending until the sweep), store that and try again.
                 await self.expire_due(Principal(id="service:gateway", kind=PrincipalKind.SERVICE))
+                continue
+            if created is None:
+                return None
+            # The index covers pending requests only. If an approved one for this intent appeared
+            # since the lookup (a person approved the older request while this call was making a
+            # new one), the new one is withdrawn and the approved one is used: one approval, one
+            # run, never two requests a person could approve for one intent.
+            approved = await self._find_approved(requester.id, payload_hash, besides=created.id)
+            if approved is None:
+                return created
+            try:
+                await self._queue.cancel(created.id, principal=requester)
+            except AgentCoreError:
+                logger.error("a request for one intent was approved twice at once: %s", created.id)
+            self._same_intent(call, approved)
+            return approved
         raise ApprovalConflictError("an open request for this call could be neither found nor made")
 
     def _same_intent(self, call: ToolCall, request: ApprovalRequest) -> None:
         lifetime = (request.expires_at - request.created_at).total_seconds()
-        if (
-            request.required_role != self._roles_by_action.get(call.exposed_name)
-            or request.delegates
-            or lifetime != self._ttl_s
-        ):
-            raise ApprovalConflictError(
-                f"request {request.id} is for this call but differs in role, lifetime or delegates"
+        differs = [
+            name
+            for name, different in (
+                ("role", request.required_role != self._roles_by_action.get(call.exposed_name)),
+                ("delegates", bool(request.delegates)),
+                ("lifetime", lifetime != self._ttl_s),
             )
+            if different
+        ]
+        if differs:
+            raise ApprovalConflictError(
+                f"request {request.id} is for this call but its {', '.join(differs)} differ"
+                " (a changed approval setting takes effect once the old request expires)"
+            )
+
+    async def _find_approved(
+        self, requested_by: str, payload_hash: str, *, besides: UUID
+    ) -> ApprovalRequest | None:
+        def read(session: Any) -> list[tuple[Any, ...]]:
+            rows: list[tuple[Any, ...]] = session.execute(
+                "SELECT id FROM policy.agent_core_approvals"
+                " WHERE requested_by = ? AND payload_sha256 = ? AND status = 'approved'"
+                " AND expires_at > ? AND id <> ? ORDER BY created_at LIMIT 1",
+                (requested_by, payload_hash, _now_text(), str(besides)),
+            )
+            return rows
+
+        rows = await self._database.run(read)
+        return await self._queue.get(UUID(str(rows[0][0]))) if rows else None
 
     async def _find(self, requested_by: str, payload_hash: str) -> ApprovalRequest | None:
         """This client's newest unexpired request for this tool and these arguments that is still
