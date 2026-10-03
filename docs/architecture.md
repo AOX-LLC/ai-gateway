@@ -44,8 +44,11 @@ AI client ──HTTPS──► bearer auth ──► protocol version guard ─�
                  every layer's verdict → one decision record → event sink + span
 ```
 
-Phase 1 implements `scope`. Phase 3 adds `allowlist`, `rate_limit` and `approval`. Phase 4
-adds `schema`, `pinned_descriptions`, `egress`, `canary` and `classifier`.
+Phase 1 implements `scope`. Phase 3 adds `allowlist`, `rate_limit` and `approval` (3a, 3b and 3c:
+see [Allowlist and rate limits](#allowlist-and-rate-limits-phase-3c) and
+[Approvals](#approvals-phase-3b)); the login throttle in front of the pipeline is
+[Failed logins](#failed-logins-phase-3c). Phase 4 adds `schema`, `pinned_descriptions`, `egress`,
+`canary` and `classifier`.
 
 ## The pipeline
 
@@ -101,6 +104,8 @@ The configuration lives in `config/pipeline.toml`, whose path is set by
 ```toml
 [layers]
 scope = "enforce"        # enforce | monitor | off
+allowlist = "enforce"    # value rules on a client's arguments (config/allowlist.toml)
+rate_limit = "enforce"   # token buckets per client (config/rate_limits.toml)
 approval = "enforce"     # last before forwarding; a write needs a person's approval
 
 [safety]
@@ -120,8 +125,12 @@ gateway between runs. There is no runtime or per-request switch for an attacker 
 
 - **Unknown or out-of-scope tool:** JSON-RPC `-32602`, `Tool 'x' is not available to this
   client.` It is the same text in both cases, so it cannot be used to discover tools.
-- **Blocked by any other layer:** `-32010`, `Request blocked by gateway policy.`, with a
-  request id. The layer name appears only in the decision record.
+- **Blocked by any other layer** (the allowlist, an audit log that cannot take a write): `-32010`,
+  `Request blocked by gateway policy.`, with a request id. The layer name appears only in the
+  decision record.
+- **Rate limited:** `-32010`, `Too many requests. Retry in N seconds.` The client may know how
+  long to wait; it learns nothing else about the limit.
+- **Too many failed logins:** HTTP 429 with `Retry-After`, before any secret is looked at.
 - **A write waiting for approval:** a tool result with `isError: true` and structured content
   `{"status": "approval_pending", "approval_id": ...}`: nothing was forwarded, a person has been
   asked, and the client retries the same tool with the same arguments. It is recorded as a block
@@ -582,13 +591,16 @@ A write waits for a person. The `approval` layer runs last, so a person approves
 that is forwarded; a read never asks.
 
 1. The gateway looks for this client's newest unexpired request for this tool and these arguments
-   (the hash of `{tool, arguments}`). If there is none it submits one (30 minutes to live,
+   *and this upstream* (the hash of `{tool, {arguments, upstream}}`, where the upstream is
+   `UpstreamServer.identity`: its id, namespace, address and credential name). Repoint the
+   namespace at another address or credential and an approval given before it no longer applies. If there is none it submits one (30 minutes to live,
    `settings.approval_ttl_s`), asking for the role that `config/approval_roles.toml` lists for that
    tool, with no delegates, and stores the arguments for the approver. A write with no listed role
    is refused: nobody may approve it.
 2. It **holds** the call for up to 45 s (`approval_hold_s`, polling once a second: agent-core has
-   no wait/notify) for a decision. At most 16 calls are held at once; past that a call is answered
-   "pending" at once.
+   no wait/notify) for a decision. At most 16 calls are held at once and at most 4 by one client
+   (`approval_max_holds`, `approval_max_holds_per_client`), so one client cannot fill every wait
+   slot; past either limit a call is answered "pending" at once and the client retries.
 3. **Approved:** the approval is consumed, once, and the call goes on to the audit write-ahead and
    the upstream. The gateway first checks that the request was made by *this* client, and agent-core
    a3's consume checks the tool, the arguments and the requester again. One approval authorises one run.
@@ -597,6 +609,16 @@ that is forwarded; a read never asks.
    expires, so a retry does not ask again. **Expired:** the next call asks afresh.
 5. **The queue cannot be used** (no policy database, a dead database, arguments over 64 KiB):
    the write is refused. The layer fails closed.
+
+**One open request per intent.** Identical concurrent calls from a client share one pending request.
+That is the database's doing, not a check followed by an insert: a partial unique index on
+`(requested_by, action, payload_sha256)` over `pending` and `approved` requests
+(`policy_approvals_one_open`) makes the second of two simultaneous submissions fail, and it then
+finds the first's. An approved request that has not been used is still open, so an approver cannot
+get two runs from one approval; a used one is closed and the next identical call asks again. A repeat
+that matches the client, tool and payload but differs in role, lifetime or delegates is a conflict
+(refused, and nothing is reused), never a reuse. *Replace the index and the conflict check with
+agent-core a5's, which enforces the same rule in the library.*
 
 `expire_due()` runs once a minute and stores `expired` on requests past their lifetime; reads treat
 such a request as expired whether or not it has run.
@@ -645,6 +667,65 @@ is consumed before the audit write-ahead, so a write refused because the audit l
 up its approval (the client asks again). `scripts/auto_approver.py` approves for the scenario and
 the simulator; it is test tooling, outside the gateway, and needs `--approve-as` and
 `LAB_AUTO_APPROVE=yes`.
+
+### Allowlist and rate limits (Phase 3c)
+
+Two layers sit between scope and approval, so a call that scope refuses costs nothing, and a call
+the allowlist refuses takes no rate-limit token.
+
+**`allowlist`** constrains the *values* of a client's arguments, for what a person's yes should not
+be needed or enough for (`config/allowlist.toml`; the format is in
+`pipeline/layers/allowlist.py`). A rule names a client (or `*`), an exposed tool and a top-level
+argument, and gives `one_of`, `pattern` (the whole value must match; values over 4096 characters
+never do), `max_length`, `minimum`/`maximum` or `required`. It never rewrites an argument. The
+shipped rule: the support bot may open a ticket at any priority but `urgent`. A refusal is the
+generic policy message, so a client cannot read the rules out of the errors; the decision record
+holds `blocked_by: allowlist`, `deny_code: allowlist_violation`. A mistake in the file stops startup.
+
+**`rate_limit`** keeps a token bucket in memory per client for reads, per client for writes (by the
+tool's reviewed effect), and per client and tool for tools with a limit of their own
+(`config/rate_limits.toml`). A bucket holds `burst` tokens and refills `burst` tokens every `per`
+seconds. A call must find a token in every bucket that applies; a refused call takes none. The state
+is per gateway process and starts full; it is bounded (the least recently used bucket goes first).
+The shipped limits are generous (600 reads and 60 writes a minute) except one deliberately tight
+tool limit that the traffic simulator uses to show the layer working.
+
+Both layers switch `enforce`, `monitor` and `off` like any other (they are not floor layers).
+
+### Failed logins (Phase 3c)
+
+`auth/throttle.py` sits in the bearer-auth middleware, before the token is looked at:
+
+- after 5 failures for one token lookup id within 60 s, that id is refused with a 429 for 60 s,
+  without its secret being examined (and not counted again: refusals do not extend the lockout);
+- when 200 failures of any kind have happened within 60 s, only a lookup id that authenticated in
+  the last 15 minutes is served, until the failures age out: a spray of invented ids, which never
+  trips the per-id limit, cannot lock out clients that were working.
+
+The price of not answering a guess is that someone who knows a client's lookup id can lock that
+client out for a minute at a time. The lookup id is printed once, when a token is issued, and is not
+in any record a client can read. State is in memory, per process and bounded. Throttled attempts are
+recorded as auth failures with reason `throttled`.
+
+### The lab profile (Phase 3c)
+
+Phase 6's red-team runs need a scripted attacker's writes to get through the approval layer so that
+what is measured is the other layers. `docker compose --profile lab up` starts `lab-approver`,
+which approves every pending write (`scripts/lab_approver.py`, mounted into that one service and in
+no image). It is off unless asked for three times, and each is enforced:
+
+1. the `lab` profile (the default stack does not start it);
+2. `LAB_AUTO_APPROVE=yes` in the environment: the service exits at once without it (Compose
+   resolves every service's variables whatever the profile, so it cannot be a required variable);
+3. a database role that exists only when `policy-setup` is given its password
+   (`POLICY_LAB_APPROVER_DB_PASSWORD`): `policy_lab_approver`, a member of the approver role, so it
+   has the approver's powers and nothing else; the next setup without the password drops it.
+
+Its decisions are in the audit log under its own role name, which `audit-verify` accepts for
+`approval.resolved` and for nothing else. Register its approver first
+(`docker compose run --rm admin approver-add lab-approver --name "Lab approver"`). Never use it
+against anything real: it defeats approval. CI sets the switch on the Harborline step only, for the
+test approver (`scripts/auto_approver.py`), and a test pins that.
 
 ### Tamper evidence
 
