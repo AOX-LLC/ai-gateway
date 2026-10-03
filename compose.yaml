@@ -195,8 +195,6 @@ services:
       start_period: 10s
     <<: *hardening
 
-  # Runs as the database owner: creates each server's role and schema, migrates and seeds
-  # them. The servers themselves connect only as their own least-privilege role.
   # The dashboard (Phase 5c): read-only, on 127.0.0.1:4400, through the telemetry reader role. It is on
   # a network of its own with Postgres, not on `edge` with the gateway. The memory limit is provisional
   # (Phase 5c-3 measures it). Sign in with the admin password: scripts/set_dashboard_password.py.
@@ -236,6 +234,8 @@ services:
       policy-setup:
         condition: service_completed_successfully
 
+  # Runs as the database owner: creates each server's role and schema, migrates and seeds
+  # them. The servers themselves connect only as their own least-privilege role.
   servers-setup:
     build: *servers-build
     image: harborline-servers
