@@ -36,7 +36,7 @@ export function ChartsSection({ charts, error, stale, since }: Props) {
           title="Request volume"
           sub={`Forwarded and blocked tool calls · last ${window} · times in UTC`}
           empty={noCalls ? emptyCalls : null}
-          legend={<Legend items={[{ label: "Forwarded", icon: "check", series: 1 }, { label: "Blocked", icon: "ban", series: 2 }]} />}
+          legend={<Legend items={[{ label: "Forwarded", icon: "check", series: 1 }, { label: "Blocked", icon: "ban", series: 5 }]} />}
           tables={[{ caption: "Request volume as a table", head: ["Time (UTC)", "Forwarded", "Blocked"], rows: charts.volume.map((p) => [at(p.ts), p.forwarded, p.blocked]) }]}
         >
           <TimeLineChart
@@ -48,7 +48,7 @@ export function ChartsSection({ charts, error, stale, since }: Props) {
             description={volumeSummary(charts)}
             series={[
               { id: "forwarded", label: "Forwarded", cls: "pui-s1", values: charts.volume.map((p) => p.forwarded) },
-              { id: "blocked", label: "Blocked", cls: "pui-s2", values: charts.volume.map((p) => p.blocked) },
+              { id: "blocked", label: "Blocked", cls: "pui-s5", values: charts.volume.map((p) => p.blocked) },
             ]}
           />
         </ChartPanel>
@@ -58,7 +58,7 @@ export function ChartsSection({ charts, error, stale, since }: Props) {
           title="Latency"
           sub={`Gateway time per call: median, 95th and 99th percentile · last ${window}`}
           empty={noCalls ? emptyCalls : null}
-          legend={<Legend items={[{ label: "Median", icon: "clock", series: 1 }, { label: "95th percentile", icon: "clock", series: 2 }, { label: "99th percentile", icon: "clock", series: 3 }]} />}
+          legend={<Legend items={[{ label: "Median", icon: "clock", series: 1 }, { label: "95th percentile", icon: "activity", series: 5 }, { label: "99th percentile", icon: "alert", series: 6 }]} />}
           note="Calls held for a person's approval are left out: that time is waiting, not slowness. Milliseconds."
           tables={[{ caption: "Latency as a table", head: ["Time (UTC)", "Median ms", "95th ms", "99th ms"], rows: charts.latency.map((p) => [at(p.ts), p.p50 === null ? "—" : formatMs(p.p50), p.p95 === null ? "—" : formatMs(p.p95), p.p99 === null ? "—" : formatMs(p.p99)]) }]}
         >
@@ -70,8 +70,8 @@ export function ChartsSection({ charts, error, stale, since }: Props) {
             description={latencySummary(charts)}
             series={[
               { id: "p50", label: "Median", cls: "pui-s1", values: charts.latency.map((p) => p.p50) },
-              { id: "p95", label: "95th percentile", cls: "pui-s2", values: charts.latency.map((p) => p.p95) },
-              { id: "p99", label: "99th percentile", cls: "pui-s3", values: charts.latency.map((p) => p.p99) },
+              { id: "p95", label: "95th percentile", cls: "pui-s5", values: charts.latency.map((p) => p.p95) },
+              { id: "p99", label: "99th percentile", cls: "pui-s6", values: charts.latency.map((p) => p.p99) },
             ]}
           />
         </ChartPanel>

@@ -124,6 +124,18 @@ describe("the chart panels", () => {
     expect(markup.match(/<svg class="pui-icon pui-icon--sm"/g)?.length).toBeGreaterThanOrEqual(10);
   });
 
+  it("tells the lines of a chart apart by more than colour: each has its own dash pattern", () => {
+    const markup = html(charts);
+    const lineClasses = [...markup.matchAll(/<path class="pui-line chart-line (pui-s\d)"/g)].map((m) => m[1]);
+
+    // volume: forwarded solid, blocked dashed; latency: median solid, p95 dashed, p99 dotted; failures: one line.
+    expect(lineClasses.filter((c) => c === "pui-s1").length).toBeGreaterThanOrEqual(2);
+    expect(lineClasses.filter((c) => c === "pui-s5").length).toBe(2);
+    expect(lineClasses.filter((c) => c === "pui-s6").length).toBe(1);
+    expect(markup).not.toMatch(/chart-line pui-s[234]"/);
+    for (const key of [5, 6]) expect(markup).toContain(`data-series="${key}"`);
+  });
+
   it("use only classes and attributes: no inline style, which the CSP forbids, and no colours of their own", () => {
     const markup = html(charts);
 

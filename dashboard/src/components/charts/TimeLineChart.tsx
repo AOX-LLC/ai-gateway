@@ -1,4 +1,3 @@
-import { type LegendItem } from "./Legend";
 import { linePath, niceAxis, robustCeiling, timeTicks } from "./scale";
 
 export type LineSeries = { id: string; label: string; cls: string; values: (number | null)[] };
@@ -88,4 +87,3 @@ function peakOf(series: LineSeries[], times: string[]): { value: number; at: num
   return best;
 }
 
-export const lineLegend = (items: { label: string; series: number; icon: LegendItem["icon"] }[]): LegendItem[] => items;
