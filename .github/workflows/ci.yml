@@ -209,7 +209,7 @@ jobs:
           LOOKUP_ID=$(echo "$SUPPORT" | cut -d_ -f2)
           docker compose run --rm -T admin token-revoke "$LOOKUP_ID"
           GATEWAY_TOKEN="$SUPPORT" uv run scripts/test_client.py --expect-rejected
-      - name: Harborline scenario through the gateway and directly
+      - name: Harborline scenario through the gateway and directly, then simulated traffic
         shell: bash
         run: |
           set -euo pipefail
@@ -228,6 +228,20 @@ jobs:
             --scenario scripts/scenarios/harborline.toml --as harborline-ops-bot
           # The servers publish no port: the scenario runs inside their network.
           scripts/direct_check.sh
+          # Simulated traffic as both bots: what the gateway stored, read back through the
+          # dashboard's role, must match what was sent. The reader's URL is the one secret the
+          # simulator needs; the tokens are passed the way the script reads them.
+          TELEMETRY_READER_DATABASE_URL=$(sed -n 's/^TELEMETRY_READER_DATABASE_URL=//p' .env)
+          echo "::add-mask::$TELEMETRY_READER_DATABASE_URL"
+          export TELEMETRY_READER_DATABASE_URL SIM_SUPPORT_TOKEN="$SUPPORT" SIM_OPS_TOKEN="$OPS"
+          uv run scripts/simulate_traffic.py --calls 200 --verify
+          curl -sSf http://127.0.0.1:4401/healthz | python3 -c '
+          import json, sys
+          telemetry = json.load(sys.stdin)["telemetry"]
+          print(telemetry)
+          assert telemetry["status"] == "ok"
+          assert telemetry["dropped_total"] == 0 and telemetry["rejected_total"] == 0
+          '
       - name: Show stack logs
         if: failure()
         run: docker compose --profile test logs --no-color
