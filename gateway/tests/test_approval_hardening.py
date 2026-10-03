@@ -216,16 +216,26 @@ def test_nothing_in_the_gateway_imports_the_test_approver() -> None:
 def test_the_default_environment_and_the_workflow_do_not_switch_it_on_globally() -> None:
     assert "LAB_AUTO_APPROVE" not in (ROOT / ".env.example").read_text()
     workflow = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())
-    # Not at workflow, job or step level: only inside the script of a step that runs the fictional
-    # test stack, next to --approve-as.
+    # Not at workflow or job level, and in the `env` of exactly the two named steps that run the
+    # fictional test stack with the test approver: nowhere in a script body either.
     assert "LAB_AUTO_APPROVE" not in str(workflow.get("env", {}))
-    for job in workflow["jobs"].values():
-        assert "LAB_AUTO_APPROVE" not in str(job.get("env", {}))
+    holders = []
+    for name, job in workflow["jobs"].items():
+        assert "LAB_AUTO_APPROVE" not in str(job.get("env", {})), name
         for step in job["steps"]:
-            assert "LAB_AUTO_APPROVE" not in str(step.get("env", {}))
-            if "LAB_AUTO_APPROVE" in str(step.get("run", "")):
-                assert "--approve-as" in step["run"]
-                assert job is workflow["jobs"]["e2e"]
+            assert "LAB_AUTO_APPROVE" not in str(step.get("run", "")).replace(
+                "needs --approve-as and LAB_AUTO_APPROVE=yes", ""
+            ), step.get("name")
+            if "LAB_AUTO_APPROVE" in str(step.get("env", {})):
+                holders.append((name, step["name"], step["env"]["LAB_AUTO_APPROVE"]))
+    assert holders == [
+        ("e2e", "Acceptance check through the gateway", "yes"),
+        (
+            "e2e",
+            "Harborline scenario through the gateway and directly, then simulated traffic",
+            "yes",
+        ),
+    ]
 
 
 def _load_auto_approver() -> Any:

@@ -198,6 +198,10 @@ jobs:
         run: scripts/check_servers_have_no_internet.sh
       - name: Acceptance check through the gateway
         shell: bash
+        env:
+          # Test tooling only (scripts/auto_approver.py): set here and in the Harborline step, the
+          # two steps that run the fictional test stack, and nowhere else. A test pins that.
+          LAB_AUTO_APPROVE: "yes"
         run: |
           set -euo pipefail
           . scripts/mask.sh
@@ -211,7 +215,7 @@ jobs:
           POLICY_APPROVER_DB_PASSWORD=$(sed -n 's/^POLICY_APPROVER_DB_PASSWORD=//p' .env)
           mask "$POLICY_APPROVER_DB_PASSWORD"
           mask "$POLICY_APPROVER_DATABASE_URL"
-          export POLICY_APPROVER_DATABASE_URL LAB_AUTO_APPROVE=yes
+          export POLICY_APPROVER_DATABASE_URL
           SUPPORT=$(python3 -c 'import json; print(json.load(open("seed.json"))["echo-test-narrow"])')
           mask "$SUPPORT"
           OPS=$(python3 -c 'import json; print(json.load(open("seed.json"))["echo-test-wide"])')
@@ -226,6 +230,8 @@ jobs:
           GATEWAY_TOKEN="$SUPPORT" uv run scripts/test_client.py --expect-rejected
       - name: Harborline scenario through the gateway and directly, then simulated traffic
         shell: bash
+        env:
+          LAB_AUTO_APPROVE: "yes"  # see the acceptance step
         run: |
           scripts/run_harborline_check.sh
       - name: Show stack logs

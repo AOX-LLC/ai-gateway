@@ -11,14 +11,16 @@ mask "$SUPPORT"
 OPS=$(python3 -c 'import json; print(json.load(open("demo.json"))["harborline-ops-bot"])')
 mask "$OPS"
 # A write waits for a person's approval. This is the fictional demo stack, so a registered demo
-# approver approves for it (scripts/auto_approver.py, test tooling that needs the two switches).
+# approver approves for it (scripts/auto_approver.py, test tooling that needs the two switches:
+# --approve-as below, and LAB_AUTO_APPROVE=yes in the environment, which CI sets on this step and
+# nothing else does; run it by hand with LAB_AUTO_APPROVE=yes in front).
 docker compose run --rm -T admin approver-add harborline-approver \
   --name "Harborline demo approver (fictional, demo data)" > /dev/null
 POLICY_APPROVER_DATABASE_URL=$(sed -n 's/^POLICY_APPROVER_DATABASE_URL=//p' .env)
 POLICY_APPROVER_DB_PASSWORD=$(sed -n 's/^POLICY_APPROVER_DB_PASSWORD=//p' .env)
 mask "$POLICY_APPROVER_DB_PASSWORD"
 mask "$POLICY_APPROVER_DATABASE_URL"
-export POLICY_APPROVER_DATABASE_URL LAB_AUTO_APPROVE=yes
+export POLICY_APPROVER_DATABASE_URL
 # The gateway polls the registry every 5 seconds, so the tickets tools can take a
 # moment to show up: retry the first check for at most about 60 seconds.
 retry() { for _ in $(seq 1 30); do "$@" && return 0; sleep 2; done; "$@"; }
