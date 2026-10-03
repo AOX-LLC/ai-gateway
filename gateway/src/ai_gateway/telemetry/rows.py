@@ -186,7 +186,12 @@ def _is_tool_name(name: str | None) -> bool:
 
 
 def _namespace(payload: Mapping[str, Any], tool: str | None) -> str | None:
-    """The namespace the record names, else the one in the tool's name; only a well-formed one."""
+    """The namespace the record names, else the one in the tool's name; only a well-formed one.
+
+    A tool no upstream offers (`blocked_by` is `catalog`) has a name the client chose, so it gets
+    no namespace: any client could otherwise invent namespaces in the store."""
+    if payload.get("blocked_by") == "catalog":
+        return None
     candidates = [_text(payload, "namespace", 63)]
     if tool is not None and "__" in tool:
         candidates.append(tool.split("__", 1)[0])

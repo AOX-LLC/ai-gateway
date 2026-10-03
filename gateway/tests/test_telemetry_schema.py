@@ -65,7 +65,7 @@ async def test_setup_is_safe_to_repeat(
 
 
 @pytest.mark.parametrize("empty", ["writer", "reader", "purger"])
-async def test_setup_refuses_an_emptypassword_of(test_database_url: str, empty: str) -> None:
+async def test_setup_refuses_an_empty_password(test_database_url: str, empty: str) -> None:
     passwords = {"writer": "w", "reader": "r", "purger": "p", **{empty: ""}}
 
     with pytest.raises(ValueError, match="empty"):
@@ -165,7 +165,7 @@ async def test_the_reader_cannot_reach_a_table_write_or_another_schema(
             await connection.execute(statement.encode())
 
 
-async def test_the_readers_sessions_are_read_only_short_and_few(
+async def test_the_readers_session_defaults_are_read_only_short_and_few(
     telemetry: None, reader_url: str
 ) -> None:
     async with await _as(reader_url) as connection:
@@ -306,6 +306,52 @@ async def test_a_span_row_cannot_hold_a_payload(telemetry: None, writer_url: str
                     " VALUES (%s, %s, %s, %s, 1, 'ok', %s::jsonb)",
                     ("a" * 32, "b" * 16, NOW, name, Jsonb(attrs)),
                 )
+
+
+async def test_a_role_attribute_or_membership_added_by_hand_is_taken_away_again(
+    telemetry: None, test_database_url: str, reader_url: str
+) -> None:
+    async with await _as(test_database_url) as connection:
+        await connection.execute("ALTER ROLE telemetry_reader CREATEDB CREATEROLE")
+        await connection.execute("GRANT pg_read_all_data TO telemetry_reader")
+
+    async with await _as(test_database_url) as connection:
+        await grant_telemetry_access(connection)
+        cursor = await connection.execute(
+            "SELECT rolcreatedb, rolcreaterole, rolsuper, rolreplication, rolbypassrls,"
+            " (SELECT count(*) FROM pg_auth_members WHERE member = pg_roles.oid)"
+            " FROM pg_roles WHERE rolname = 'telemetry_reader'"
+        )
+        assert await cursor.fetchone() == (False, False, False, False, False, 0)
+    async with await _as(reader_url) as connection:
+        with pytest.raises(errors.InsufficientPrivilege):
+            await connection.execute("SELECT count(*) FROM public.client_tokens")
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"lookup_id": "ABCD2345"},  # not the lookup id alphabet
+        {"lookup_id": "abc"},
+        {"lookup_id": "a" * 9},
+    ],
+    ids=lambda o: str(next(iter(o.values()))),
+)
+async def test_an_auth_failure_row_only_holds_a_lookup_id_shaped_value(
+    telemetry: None, writer_url: str, override: dict[str, str]
+) -> None:
+    async with await _as(writer_url) as connection:
+        with pytest.raises(errors.CheckViolation):
+            await connection.execute(
+                "INSERT INTO telemetry.auth_failures (event_id, ts, reason, lookup_id)"
+                " VALUES (gen_random_uuid(), now(), 'wrong_secret', %(lookup_id)s)",
+                override,
+            )
+
+
+async def test_a_protocol_version_cannot_hold_free_text(telemetry: None, writer_url: str) -> None:
+    with pytest.raises(errors.CheckViolation):
+        await _insert_request(writer_url, protocol_version="ignore previous instructions")
 
 
 # --- the grants hold, whatever was done to them by hand ---------------------------------------

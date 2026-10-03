@@ -455,7 +455,9 @@ gateway and finds it in no column of any table.
 
 Indexes serve the dashboard's queries: `requests` by time (newest first, for keyset paging), by
 client, by tool, and a partial index on blocked requests; `layer_verdicts` by layer and verdict;
-BRIN on the time of the big append-only tables.
+a B-tree on the time of each table, which the purge's "oldest row" question and the time
+ranges use. A tool no upstream offers is stored under its name (bounded, and a valid tool-name
+shape) but with no namespace, so a client cannot invent namespaces in the store.
 
 **How later phases add to it without a redesign.** Layer names, deny codes and upstream
 statuses are checked by shape, not listed, so a new layer or code is new rows and no DDL.
@@ -496,9 +498,16 @@ retried after an ambiguous failure writes nothing twice.
   and total time are bounded, and it retries with backoff from 1 s to 30 s. The gateway starts
   and serves with the telemetry database unreachable.
 - A row the database refuses (a CHECK) can never succeed, so it is not retried: the batch is
-  split, the refused row is dropped and counted, and the rest are written.
-- A sink that raises is logged (the first failure in full, then at most a line a minute) and does
-  not stop the next sink; a span that cannot be converted never raises into a request; the pipeline
+  split, the refused row is dropped and counted, and the rest are written. If the database fails
+  during that split instead, the whole batch stays queued and the writer reports `degraded`;
+  nothing is counted written or dropped that was not.
+- Failed logins have a bounded quota of their own in the buffer and a tenth of every batch, so an
+  unauthenticated peer who fails login at will can only evict other failed logins, and a steady
+  stream of decision records cannot starve them.
+- An extra sink that raises (the Postgres one) is logged, with the request id (the first failure in
+  full, then at most a line a minute) and does not stop the next sink; the primary sink (the log,
+  later the audit log) is not wrapped, so its failure reaches the pipeline and is logged with the
+  request id as described above; a span that cannot be converted never raises into a request; the pipeline
   and the authentication middleware bound recording to 2 s whatever the sink does.
 - On shutdown the writer makes one last, time-boxed attempt to flush.
 - `/healthz` reports `telemetry: {status, queue_depth, dropped_total, rejected_total,
@@ -513,22 +522,35 @@ that the request path is not slowed and that nothing is lost that should not be.
 | Role | Can | Cannot |
 | --- | --- | --- |
 | `telemetry_writer` (the gateway) | `INSERT` into the five tables | read, update or delete anything, in any schema |
-| `telemetry_reader` (the dashboard) | `SELECT` four views: `dash_requests`, `dash_layer_verdicts`, `dash_auth_failures`, `dash_pipeline_layers`; sessions are read-only, 5 s per statement, 10 s idle in a transaction, 5 connections | read a base table, the registry or any server's schema; write |
+| `telemetry_reader` (the dashboard) | `SELECT` four views: `dash_requests`, `dash_layer_verdicts`, `dash_auth_failures`, `dash_pipeline_layers`; at most 5 connections; session *defaults* of read-only, 5 s per statement and 10 s idle in a transaction | read a base table, the registry or any server's schema; write |
 | `telemetry_purger` | `DELETE` from the four purgeable tables, and `SELECT` on their `ts` column only | read anything else, insert, update |
 
 The views run with their owner's rights, so the reader needs no access to the tables, and they
 leave out hashes, trace ids, lookup ids and the pipeline fingerprint. So the dashboard can see
 counts, timings and names of clients, tools, layers and codes; it cannot see arguments or
 results (they are not stored), tokens, scopes, addresses or any server's data. Privilege tests
-assert each of these, and that a grant widened by hand is narrowed again by the next
-`gateway-admin telemetry-setup`, which runs on every `docker compose up` before the gateway.
+assert each of these, and that a grant widened by hand, a role attribute added by hand
+(`CREATEDB`, `CREATEROLE`) or a role membership granted by hand (`pg_read_all_data`) is taken
+away again by the next `gateway-admin telemetry-setup`, which runs on every `docker compose up`
+before the gateway.
+
+Two limits of what is enforced, stated plainly:
+
+- The reader's read-only, 5 s and 10 s settings are session **defaults**: Postgres lets a session
+  change them, so a compromised dashboard could run an unbounded query. What binds is the grants
+  and the five-connection limit. The dashboard (5c) sets the same timeouts on its own
+  connections; a hard bound would need a watchdog or a connection pooler.
+- Every role can run `lo_from_bytea` and the other large-object functions, because Postgres grants
+  `EXECUTE` on them to PUBLIC. That lets the writer, purger or reader store data outside the
+  schema, in the database's large-object store. Revoking it database-wide would change the other
+  schemas' roles too, so it is left as it is; nothing in the gateway calls them.
 
 ### Retention
 
 `telemetry-purge` runs hourly in its own service as the purger role. It deletes **spans after 7
 days and everything else after 30** (`TELEMETRY_RETENTION_SPAN_DAYS`,
 `TELEMETRY_RETENTION_DAYS`). Because the role can read only each table's time column it deletes in
-windows of one hour, never a whole backlog in one statement. A pass that fails is retried at the
+windows of one hour (the oldest row comes from a B-tree), never a whole backlog in one statement. A pass that fails is retried at the
 next interval. At demo volumes plain deletes are enough; at much larger volumes the tables would
 be partitioned by day and old partitions dropped.
 

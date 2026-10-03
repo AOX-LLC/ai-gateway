@@ -103,7 +103,7 @@ async def test_requests_layers_spans_and_auth_failures_are_stored_without_a_trac
         ("tools_list", None, None, "listed", None, "harborline-support-bot"),
         ("tool_call", "echo__say", "echo", "forwarded", None, "harborline-support-bot"),
         ("tool_call", "echo__shout", "echo", "blocked", "scope", "harborline-support-bot"),
-        ("tool_call", "echo__nothing", "echo", "blocked", "catalog", "harborline-support-bot"),
+        ("tool_call", "echo__nothing", None, "blocked", "catalog", "harborline-support-bot"),
     ]
     assert await _rows(test_database_url, "SELECT reason FROM telemetry.auth_failures") == [
         ("malformed",)

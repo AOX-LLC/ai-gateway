@@ -68,17 +68,42 @@ async def setup_telemetry(owner_url: str, passwords: TelemetryPasswords) -> None
         await restrict_database_access(connection, [WRITER_ROLE, READER_ROLE, PURGER_ROLE])
 
 
+async def _reset_role(connection: AsyncConnection, role: str) -> None:
+    """Take back what could have been added to a role outside the schema: its attributes (it
+    must not create databases or roles, or bypass anything) and every role it is a member of
+    (`pg_read_all_data` would let the dashboard read everything). The schema-level revoke that
+    follows cannot see either."""
+    name = sql.Identifier(role)
+    await connection.execute(
+        sql.SQL(
+            "ALTER ROLE {} NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS"
+        ).format(name)
+    )
+    cursor = await connection.execute(
+        "SELECT parent.rolname FROM pg_auth_members AS m"
+        " JOIN pg_roles AS parent ON parent.oid = m.roleid"
+        " JOIN pg_roles AS member ON member.oid = m.member WHERE member.rolname = %s",
+        (role,),
+    )
+    for (parent,) in await cursor.fetchall():
+        await connection.execute(sql.SQL("REVOKE {} FROM {}").format(sql.Identifier(parent), name))
+
+
 async def grant_telemetry_access(connection: AsyncConnection) -> None:
     """Make the three roles' grants exactly these. The roles, schema and tables must exist.
 
     - writer: INSERT on the tables, and nothing else (it cannot read what it wrote).
-    - reader: SELECT on the dashboard's views, and nothing else; its sessions are read-only,
-      short and few.
+    - reader: SELECT on the dashboard's views, and nothing else. It has at most five connections,
+      and its session *defaults* are read-only, 5 s per statement and 10 s idle in a
+      transaction. They are defaults, not limits: Postgres lets a session change them, so the
+      dashboard must set its own timeouts on its connections, and only the connection limit and
+      the grants bind.
     - purger: DELETE on the purgeable tables, and SELECT on their `ts` column only, which a
       DELETE ... WHERE ts < ... needs.
     """
     schema = sql.Identifier(SCHEMA)
     for role in (WRITER_ROLE, READER_ROLE, PURGER_ROLE):
+        await _reset_role(connection, role)
         await revoke_role_access(connection, SCHEMA, role)
         await connection.execute(
             sql.SQL("GRANT USAGE ON SCHEMA {} TO {}").format(schema, sql.Identifier(role))

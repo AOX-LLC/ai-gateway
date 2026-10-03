@@ -167,6 +167,30 @@ def test_text_is_cut_to_the_column_and_a_hostile_tool_name_is_not_stored() -> No
     assert hostile_request["tool"] is None
 
 
+def test_a_tool_nobody_offers_gets_no_namespace_from_the_name_the_client_chose() -> None:
+    """Any client can call `anything__x`; that must not create a namespace in the store."""
+    event = GatewayEvent(
+        action="gateway.tool_call",
+        actor_id=f"client:{CLIENT_ID}",
+        subject_id="invented__tool",
+        payload={
+            "request_id": str(REQUEST_ID),
+            "client_name": "harborline-support-bot",
+            "layers": [],
+            "duration_ms": 1.0,
+            "outcome": "blocked",
+            "blocked_by": "catalog",
+            "deny_code": "tool_unavailable",
+        },
+        occurred_at=NOW,
+    )
+
+    (request,) = _by_table(rows_for_event(event))["requests"]
+
+    assert request["namespace"] is None
+    assert request["tool"] == "invented__tool"
+
+
 def test_no_row_has_a_place_for_arguments_or_results() -> None:
     event = _call_event(arguments=ARGUMENTS, result=ARGUMENTS, text=ARGUMENTS)
 

@@ -27,7 +27,7 @@ CREATE TABLE requests (
     duration_ms            real        NOT NULL CHECK (duration_ms >= 0),
     upstream_duration_ms   real        CHECK (upstream_duration_ms >= 0),
     args_sha256            text        CHECK (args_sha256 ~ '^[0-9a-f]{64}$'),
-    protocol_version       text        CHECK (char_length(protocol_version) <= 20),
+    protocol_version       text        CHECK (protocol_version ~ '^[0-9A-Za-z._-]{1,20}$'),
     pipeline_config_sha256 text        CHECK (pipeline_config_sha256 ~ '^[0-9a-f]{64}$'),
     trace_id               text        CHECK (trace_id ~ '^[0-9a-f]{32}$'),
     tools_available        integer     CHECK (tools_available >= 0),
@@ -58,7 +58,8 @@ CREATE TABLE layer_verdicts (
 );
 
 CREATE INDEX layer_verdicts_by_layer ON layer_verdicts (layer, verdict, ts DESC);
-CREATE INDEX layer_verdicts_by_time ON layer_verdicts USING brin (ts);
+-- A B-tree, not BRIN: the purge asks for the oldest row, and a B-tree answers that without a scan.
+CREATE INDEX layer_verdicts_by_time ON layer_verdicts (ts);
 
 -- Failed authentication. The lookup id is the non-secret part of a token; the address of the
 -- peer is not stored (behind Docker's port publishing it is only the bridge).
@@ -66,7 +67,7 @@ CREATE TABLE auth_failures (
     event_id  uuid        PRIMARY KEY,
     ts        timestamptz NOT NULL,
     reason    text        NOT NULL CHECK (reason ~ '^[a-z][a-z0-9_]{0,31}$'),
-    lookup_id text        CHECK (char_length(lookup_id) <= 16)
+    lookup_id text        CHECK (lookup_id ~ '^[a-z2-7]{8}$')
 );
 
 CREATE INDEX auth_failures_by_time ON auth_failures (ts DESC);
@@ -87,7 +88,7 @@ CREATE TABLE spans (
     PRIMARY KEY (trace_id, span_id)
 );
 
-CREATE INDEX spans_by_time ON spans USING brin (ts);
+CREATE INDEX spans_by_time ON spans (ts);
 CREATE INDEX spans_by_request ON spans (request_id) WHERE request_id IS NOT NULL;
 
 -- The pipeline's layers and their modes, once per configuration fingerprint. It tells the
