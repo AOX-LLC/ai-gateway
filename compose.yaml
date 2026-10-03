@@ -28,6 +28,12 @@ x-servers-build: &servers-build
 # prompt-injected or compromised server has nowhere to send what it read. The gateway and
 # Postgres are on both, so the host can reach them and they can reach the servers. Postgres
 # can itself open outbound connections for a superuser (see docs/architecture.md, Networks).
+# Memory limits (mem_limit on every service) are sized for a shared 4-core, 7 GB machine, from
+# measured use (docker stats after 300 simulated requests): gateway 75 MiB, handbook 150 MiB,
+# ticketing and CRM 63 MiB each, Postgres 53 MiB, echo 52 MiB, telemetry-purge 27 MiB. Each limit
+# is two to three times that. servers-setup loads the embedding model to seed a fresh volume and
+# was seen to finish within 256 MiB, so it has 384. All limits together are 2.6 GiB, and
+# gateway/tests/test_compose.py keeps the total under a budget.
 x-hardening: &hardening
   read_only: true
   tmpfs:
@@ -63,7 +69,7 @@ services:
     command: ["gateway-admin", "migrate"]
     <<: *hardening
     networks: [backend]
-    mem_limit: 192m
+    mem_limit: 128m
     environment:
       GATEWAY_MIGRATE_DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
     depends_on:
@@ -78,7 +84,7 @@ services:
     command: ["gateway-admin", "telemetry-setup"]
     <<: *hardening
     networks: [backend]
-    mem_limit: 192m
+    mem_limit: 128m
     environment:
       GATEWAY_MIGRATE_DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       TELEMETRY_WRITER_DB_PASSWORD: ${TELEMETRY_WRITER_DB_PASSWORD:?set it in .env}
@@ -98,7 +104,7 @@ services:
     restart: unless-stopped
     <<: *hardening
     networks: [backend]
-    mem_limit: 128m
+    mem_limit: 96m
     environment:
       TELEMETRY_PURGE_DATABASE_URL: postgresql://telemetry_purger:${TELEMETRY_PURGER_DB_PASSWORD:?set it in .env}@postgres:5432/${POSTGRES_DB}
       TELEMETRY_RETENTION_SPAN_DAYS: ${TELEMETRY_RETENTION_SPAN_DAYS:-7}
@@ -159,7 +165,7 @@ services:
     command: ["harborline-setup"]
     <<: *hardening
     networks: [backend]
-    mem_limit: 512m
+    mem_limit: 384m
     environment:
       HARBORLINE_SETUP_DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       TICKETING_DB_PASSWORD: ${TICKETING_DB_PASSWORD:?set it in .env}
@@ -267,7 +273,7 @@ services:
     entrypoint: ["gateway-admin"]
     <<: *hardening
     networks: [backend]
-    mem_limit: 192m
+    mem_limit: 128m
     environment:
       GATEWAY_MIGRATE_DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
     depends_on:
@@ -283,7 +289,7 @@ services:
     entrypoint: ["python", "/scripts/test_client.py"]
     <<: *hardening
     networks: [backend]
-    mem_limit: 192m
+    mem_limit: 128m
     environment:
       TICKETING_SERVICE_TOKEN: ${TICKETING_SERVICE_TOKEN:?set it in .env}
       CRM_SERVICE_TOKEN: ${CRM_SERVICE_TOKEN:?set it in .env}
