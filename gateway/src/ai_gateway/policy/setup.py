@@ -26,6 +26,7 @@ from ai_gateway.policy import (
     policy_url,
 )
 from mcp_common.roles import (
+    advisory_lock,
     ensure_role,
     ensure_schema,
     reset_role,
@@ -37,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 _SETUP_LOCK = 7_165_201_002
 """The advisory lock that serialises policy setups."""
-_INSTALL_ROLE = "policy_install_scratch"
+_INSTALL_ROLE_PREFIX = "policy_install_"
 
 
 @dataclass(frozen=True)
@@ -57,38 +58,54 @@ async def setup_policy(owner_url: str, passwords: PolicyPasswords) -> None:
     for role, password in role_passwords:
         if not password:
             raise ValueError(f"the password of {role} is empty")
-    async with await AsyncConnection.connect(owner_url, autocommit=True) as connection:
-        await connection.execute("SELECT pg_advisory_lock(%s)", (_SETUP_LOCK,))
-        try:
-            for role, password in role_passwords:
-                await ensure_role(connection, password, role)
-            await ensure_schema(connection, SCHEMA)
-            if await _tables_exist(connection):
-                logger.info("agent-core's audit and approval tables are already installed")
-            else:
-                await _install_tables(connection, owner_url)
-            await grant_policy_access(connection)
-            await restrict_database_access(connection, list(ROLES))
-        finally:
-            await connection.execute("SELECT pg_advisory_unlock(%s)", (_SETUP_LOCK,))
+    async with (
+        await AsyncConnection.connect(owner_url, autocommit=True) as connection,
+        advisory_lock(connection, _SETUP_LOCK),
+    ):
+        for role, password in role_passwords:
+            await ensure_role(connection, password, role)
+        await ensure_schema(connection, SCHEMA)
+        # A scratch role left by a setup that was killed after the install holds UPDATE on
+        # approvals: it goes whether or not the tables are missing.
+        await _drop_scratch_role(connection)
+        if await _tables_exist(connection):
+            logger.info("agent-core's audit and approval tables are already installed")
+        else:
+            await _install_tables(connection, owner_url)
+        await grant_policy_access(connection)
+        await restrict_database_access(connection, list(ROLES))
+
+
+async def _scratch_role(connection: AsyncConnection) -> str:
+    """The scratch role's name. Roles belong to the cluster, not the database, and a lock is per
+    database, so setups of two databases must not share one."""
+    cursor = await connection.execute("SELECT md5(current_database())")
+    row = await cursor.fetchone()
+    if row is None:
+        raise RuntimeError("md5 returned no row")
+    return f"{_INSTALL_ROLE_PREFIX}{str(row[0])[:12]}"
+
+
+async def _drop_scratch_role(connection: AsyncConnection) -> None:
+    name = await _scratch_role(connection)
+    if await _role_exists(connection, name):
+        await connection.execute(sql.SQL("DROP OWNED BY {}").format(sql.Identifier(name)))
+        await connection.execute(sql.SQL("DROP ROLE {}").format(sql.Identifier(name)))
 
 
 async def _install_tables(connection: AsyncConnection, owner_url: str) -> None:
     """Install agent-core's tables for a scratch role that cannot log in, then drop the role (and
     with it every grant the installer made), so no real role holds a grant before its guard."""
-    name = sql.Identifier(_INSTALL_ROLE)
-    if await _role_exists(connection, _INSTALL_ROLE):  # left by a setup that was killed
-        await connection.execute(sql.SQL("DROP OWNED BY {}").format(name))
-        await connection.execute(sql.SQL("DROP ROLE {}").format(name))
-    await connection.execute(sql.SQL("CREATE ROLE {} NOLOGIN").format(name))
+    name = await _scratch_role(connection)
+    await _drop_scratch_role(connection)
+    await connection.execute(sql.SQL("CREATE ROLE {} NOLOGIN").format(sql.Identifier(name)))
     try:
         # The installer is synchronous (agent-core's drivers are), so it runs on a thread.
         await anyio.to_thread.run_sync(
-            lambda: install_postgres_schema(policy_url(owner_url), app_role=_INSTALL_ROLE)
+            lambda: install_postgres_schema(policy_url(owner_url), app_role=name)
         )
     finally:
-        await connection.execute(sql.SQL("DROP OWNED BY {}").format(name))
-        await connection.execute(sql.SQL("DROP ROLE {}").format(name))
+        await _drop_scratch_role(connection)
     logger.info("installed agent-core's audit and approval tables in schema %s", SCHEMA)
 
 
@@ -124,6 +141,9 @@ _GRANTS = {
     AUDITOR_ROLE: ((AUDIT_TABLE, "SELECT"),),
 }
 
+_NOW_TEXT = "to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')"
+"""agent-core stores times as UTC text of this shape, so they compare as text."""
+
 _GUARD_FUNCTION = f"""
 CREATE OR REPLACE FUNCTION {APPROVALS_TABLE}_guard() RETURNS trigger LANGUAGE plpgsql
 SET search_path = pg_catalog, pg_temp AS $$
@@ -138,9 +158,10 @@ BEGIN
     END IF;
 
     IF current_user = '{GATEWAY_ROLE}' THEN
-        -- The gateway uses an approval: it may only consume one that was approved, and change
-        -- nothing else about it. It can never decide a request, whatever its code does.
+        -- The gateway uses an approval: it may only consume one that was approved and has not
+        -- expired, and change nothing else about it. It can never decide a request.
         IF NOT (OLD.status = 'approved' AND NEW.status = 'consumed' AND NEW.consumed_at IS NOT NULL
+            AND OLD.expires_at > {_NOW_TEXT}
             AND (NEW.id, NEW.action, NEW.summary, NEW.payload_sha256, NEW.requested_by,
                  NEW.required_role, NEW.created_at, NEW.expires_at, NEW.decision, NEW.resolved_by,
                  NEW.resolved_at, NEW.reason, NEW.run_context)
@@ -151,15 +172,31 @@ BEGIN
             RAISE EXCEPTION 'the gateway role may only consume an approved request';
         END IF;
     ELSIF current_user = '{APPROVER_ROLE}' THEN
-        -- An approver decides a pending request, once, and cannot use it.
-        IF NOT (OLD.status = 'pending' AND NEW.status IN ('approved', 'rejected')
-                AND NEW.consumed_at IS NULL) THEN
+        -- An approver decides a pending, unexpired request, once, and says who and when. The
+        -- request itself (what it authorises, who asked, when it expires) stays as it was.
+        IF NOT (OLD.status = 'pending' AND OLD.expires_at > {_NOW_TEXT}
+            AND ((NEW.status = 'approved' AND NEW.decision = 'approve')
+                 OR (NEW.status = 'rejected' AND NEW.decision = 'reject'))
+            AND NEW.resolved_by IS NOT NULL AND NEW.resolved_at IS NOT NULL
+            AND NEW.consumed_at IS NULL
+            AND (NEW.id, NEW.action, NEW.summary, NEW.payload_sha256, NEW.requested_by,
+                 NEW.required_role, NEW.created_at, NEW.expires_at, NEW.run_context)
+                IS NOT DISTINCT FROM
+                (OLD.id, OLD.action, OLD.summary, OLD.payload_sha256, OLD.requested_by,
+                 OLD.required_role, OLD.created_at, OLD.expires_at, OLD.run_context)) THEN
             RAISE EXCEPTION 'the approver role may only decide a pending request';
         END IF;
+    ELSIF NOT (
+        current_user = (SELECT pg_get_userbyid(c.relowner) FROM pg_class c WHERE c.oid = TG_RELID)
+        OR (SELECT r.rolsuper FROM pg_roles r WHERE r.rolname = current_user)
+    ) THEN
+        -- Any other role, including one that merely inherits a policy role's privileges (the guard
+        -- keys on current_user, which is the member, not the role it inherits from): refused.
+        RAISE EXCEPTION 'only the gateway and approver roles may change an approval request';
     END IF;
     RETURN NEW;
 END $$
-"""
+"""  # noqa: S608 - fixed names and no input: a trigger body, not a query
 
 
 async def grant_policy_access(connection: AsyncConnection) -> None:
@@ -181,6 +218,18 @@ async def grant_policy_access(connection: AsyncConnection) -> None:
             f"CREATE TRIGGER {APPROVALS_TABLE}_guard BEFORE INSERT OR UPDATE ON {APPROVALS_TABLE}"
             f" FOR EACH ROW EXECUTE FUNCTION {APPROVALS_TABLE}_guard()".encode()
         )
+        # A role that is a member of a policy role inherits its privileges, but the guard keys on
+        # the member's own name; nobody is a member of these roles.
+        cursor = await connection.execute(
+            "SELECT member.rolname, parent.rolname FROM pg_auth_members m"
+            " JOIN pg_roles parent ON parent.oid = m.roleid"
+            " JOIN pg_roles member ON member.oid = m.member WHERE parent.rolname = ANY(%s)",
+            (list(ROLES),),
+        )
+        for member, parent in await cursor.fetchall():
+            await connection.execute(
+                sql.SQL("REVOKE {} FROM {}").format(sql.Identifier(parent), sql.Identifier(member))
+            )
         for role in ROLES:
             await reset_role(connection, role)
             await revoke_role_access(connection, SCHEMA, role)

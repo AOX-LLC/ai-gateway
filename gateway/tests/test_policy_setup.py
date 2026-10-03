@@ -19,7 +19,7 @@ from ai_gateway.policy.setup import (
     grant_policy_access,
     setup_policy,
 )
-from mcp_common.roles import ensure_schema
+from mcp_common.roles import advisory_lock, ensure_schema
 from tests.conftest import password_of
 
 pytestmark = [pytest.mark.integration, pytest.mark.anyio]
@@ -112,7 +112,7 @@ async def test_no_real_role_holds_a_grant_while_agent_cores_tables_are_installed
         )
         assert await cursor.fetchall() == []
         cursor = await connection.execute(
-            "SELECT count(*) FROM pg_roles WHERE rolname = 'policy_install_scratch'"
+            "SELECT count(*) FROM pg_roles WHERE rolname LIKE 'policy_install_%'"
         )
         assert await cursor.fetchone() == (0,)
         cursor = await connection.execute(
@@ -353,3 +353,226 @@ async def test_every_role_exists_without_login_extras(policy: None, test_databas
 
     assert [row[0] for row in rows] == sorted(ROLES)
     assert all(not any(row[1:]) for row in rows)
+
+
+# --- the guard's finer rules ----------------------------------------------------------------------
+
+
+async def _approved(gateway_url: str, approver_url: str) -> object:
+    request = await _pending(gateway_url)
+    await _queue(approver_url).resolve(
+        request.id,  # type: ignore[attr-defined]
+        decision=Decision.APPROVE,
+        principal=HUMAN,
+    )
+    return request
+
+
+async def _run(url: str, statement: str, *params: object) -> None:
+    async with await _as(url) as connection:
+        await connection.execute(statement.encode(), params or None)
+
+
+@pytest.mark.parametrize(
+    "assignment",
+    [
+        "summary = 'something else'",
+        "payload_sha256 = repeat('b', 64)",
+        "action = 'tickets__assign'",
+        "requested_by = 'client:someone-else'",
+        "required_role = 'nobody'",
+        "expires_at = (now() + interval '9 days')::text",
+        "reason = 'because'",
+    ],
+)
+async def test_the_gateway_can_consume_an_approval_and_change_nothing_else_in_the_same_update(
+    policy: None, policy_gateway_url: str, policy_approver_url: str, assignment: str
+) -> None:
+    request = await _approved(policy_gateway_url, policy_approver_url)
+
+    with pytest.raises(errors.RaiseException, match="may only consume"):
+        await _run(
+            policy_gateway_url,
+            "UPDATE agent_core_approvals SET status = 'consumed', consumed_at = now()::text,"  # noqa: S608
+            f" {assignment} WHERE id = %s",
+            str(request.id),  # type: ignore[attr-defined]
+        )
+
+
+async def test_the_gateway_cannot_consume_an_approval_that_has_expired(
+    policy: None, policy_gateway_url: str, policy_approver_url: str, test_database_url: str
+) -> None:
+    request = await _approved(policy_gateway_url, policy_approver_url)
+    await _run(
+        test_database_url,
+        "UPDATE agent_core_approvals SET expires_at = (now() - interval '1 minute')::text"
+        " WHERE id = %s",
+        str(request.id),  # type: ignore[attr-defined]
+    )
+
+    with pytest.raises(errors.RaiseException, match="may only consume"):
+        await _run(
+            policy_gateway_url,
+            "UPDATE agent_core_approvals SET status = 'consumed', consumed_at = now()::text"
+            " WHERE id = %s",
+            str(request.id),  # type: ignore[attr-defined]
+        )
+
+
+@pytest.mark.parametrize(
+    ("column", "value"),
+    [
+        ("payload_sha256", "repeat('b', 64)"),  # approve something other than what was asked
+        ("action", "'tickets__assign'"),
+        ("requested_by", "'human:aiden'"),  # so a request can look self-made
+        ("expires_at", "(now() + interval '9 days')::text"),
+        ("required_role", "'nobody'"),
+        ("decision", "'reject'"),  # a decision that contradicts the status
+        ("resolved_by", "NULL"),
+        ("resolved_at", "NULL"),
+        ("consumed_at", "now()::text"),
+    ],
+)
+async def test_the_approver_decides_a_request_and_changes_nothing_else_in_the_same_update(
+    policy: None, policy_gateway_url: str, policy_approver_url: str, column: str, value: str
+) -> None:
+    request = await _pending(policy_gateway_url)
+    assignments = {
+        "status": "'approved'",
+        "decision": "'approve'",
+        "resolved_by": "'human:x'",
+        "resolved_at": "now()::text",
+        column: value,  # the one thing that should not be allowed
+    }
+    changes = ", ".join(f"{name} = {expression}" for name, expression in assignments.items())
+
+    with pytest.raises(errors.RaiseException, match="may only decide"):
+        await _run(
+            policy_approver_url,
+            f"UPDATE agent_core_approvals SET {changes} WHERE id = %s",  # noqa: S608
+            str(request.id),  # type: ignore[attr-defined]
+        )
+
+
+async def test_the_approver_cannot_decide_a_request_twice_or_after_it_expired(
+    policy: None, policy_gateway_url: str, policy_approver_url: str, test_database_url: str
+) -> None:
+    decided = await _approved(policy_gateway_url, policy_approver_url)
+    with pytest.raises(errors.RaiseException, match="may only decide"):
+        await _run(
+            policy_approver_url,
+            "UPDATE agent_core_approvals SET status = 'rejected', decision = 'reject'"
+            " WHERE id = %s",
+            str(decided.id),  # type: ignore[attr-defined]
+        )
+
+    expired = await _pending(policy_gateway_url)
+    await _run(
+        test_database_url,
+        "UPDATE agent_core_approvals SET expires_at = (now() - interval '1 minute')::text"
+        " WHERE id = %s",
+        str(expired.id),  # type: ignore[attr-defined]
+    )
+    with pytest.raises(errors.RaiseException, match="may only decide"):
+        await _run(
+            policy_approver_url,
+            "UPDATE agent_core_approvals SET status = 'approved', decision = 'approve',"
+            " resolved_by = 'human:x', resolved_at = now()::text WHERE id = %s",
+            str(expired.id),  # type: ignore[attr-defined]
+        )
+
+
+async def test_an_upsert_cannot_decide_a_request_either(
+    policy: None, policy_gateway_url: str
+) -> None:
+    request = await _pending(policy_gateway_url)
+
+    with pytest.raises(errors.RaiseException):
+        await _run(
+            policy_gateway_url,
+            "INSERT INTO agent_core_approvals (id, action, summary, payload_sha256, requested_by,"
+            " required_role, created_at, expires_at, status) VALUES (%s, 'a', 's', repeat('a', 64),"
+            " 'c', 'approver', now()::text, (now() + interval '1 hour')::text, 'pending')"
+            " ON CONFLICT (id) DO UPDATE SET status = 'approved', decision = 'approve',"
+            " resolved_by = 'human:x', resolved_at = now()::text",
+            str(request.id),  # type: ignore[attr-defined]
+        )
+
+
+async def test_a_role_that_only_inherits_a_policy_role_cannot_change_an_approval_and_loses_it(
+    policy: None, policy_gateway_url: str, test_database_url: str
+) -> None:
+    """The guard keys on the current user, which for a member is the member and not the role it
+    inherits from; it refuses roles it does not know, and setup removes such memberships."""
+    request = await _pending(policy_gateway_url)
+    async with await _as(test_database_url) as connection:
+        await connection.execute("DROP ROLE IF EXISTS policy_intruder")
+        await connection.execute("CREATE ROLE policy_intruder NOLOGIN")
+        await connection.execute("GRANT policy_gateway TO policy_intruder")
+        await connection.execute("SET ROLE policy_intruder")
+        with pytest.raises(errors.RaiseException, match="only the gateway and approver"):
+            await connection.execute(
+                b"UPDATE agent_core_approvals SET status = 'approved', decision = 'approve',"
+                b" resolved_by = 'human:x', resolved_at = now()::text WHERE id = %s",
+                (str(request.id),),  # type: ignore[attr-defined]
+            )
+        await connection.execute("RESET ROLE")
+
+        await grant_policy_access(connection)
+
+        cursor = await connection.execute(
+            "SELECT count(*) FROM pg_auth_members m JOIN pg_roles r ON r.oid = m.member"
+            " WHERE r.rolname = 'policy_intruder'"
+        )
+        assert await cursor.fetchone() == (0,)
+        await connection.execute("DROP ROLE policy_intruder")
+
+
+async def test_a_scratch_role_left_by_a_killed_setup_is_dropped_by_the_next_one(
+    policy: None,
+    test_database_url: str,
+    policy_gateway_url: str,
+    policy_approver_url: str,
+    policy_auditor_url: str,
+) -> None:
+    async with await _as(test_database_url) as connection:
+        cursor = await connection.execute(
+            "SELECT 'policy_install_' || left(md5(current_database()), 12)"
+        )
+        row = await cursor.fetchone()
+        assert row is not None
+        scratch = str(row[0])
+        await connection.execute(f"CREATE ROLE {scratch} NOLOGIN".encode())
+        await connection.execute(
+            f"GRANT UPDATE ON agent_core_approvals TO {scratch}".encode().replace(
+                b"ON agent", b"ON policy.agent"
+            )
+        )
+
+    await setup_policy(
+        test_database_url,
+        PolicyPasswords(
+            password_of(policy_gateway_url),
+            password_of(policy_approver_url),
+            password_of(policy_auditor_url),
+        ),
+    )
+
+    async with await _as(test_database_url) as connection:
+        cursor = await connection.execute(
+            "SELECT count(*) FROM pg_roles WHERE rolname = %s", (scratch,)
+        )
+        assert await cursor.fetchone() == (0,)
+
+
+async def test_a_setup_waits_for_the_lock_only_so_long(test_database_url: str) -> None:
+    async with (
+        await _as(test_database_url) as holder,
+        await _as(test_database_url) as waiter,
+        advisory_lock(holder, 7_165_209_999),
+    ):
+        started = anyio.current_time()
+        with pytest.raises(errors.LockNotAvailable):
+            async with advisory_lock(waiter, 7_165_209_999, wait="300ms"):
+                pass
+        assert anyio.current_time() - started < 3

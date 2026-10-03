@@ -16,30 +16,36 @@ _LOCK_WAIT = "120s"
 
 
 @asynccontextmanager
-async def _database_access_lock(connection: AsyncConnection) -> AsyncGenerator[None]:
-    """Hold a session advisory lock while changing who may connect to the database or use the
-    public schema.
-
-    Compose runs several setups side by side (the servers' and the telemetry's), and each
-    grants CONNECT on the same database and revokes defaults from PUBLIC. Postgres keeps those
-    privileges in one catalog row per object, and two sessions updating it at once fail with
-    "tuple concurrently updated". The connection must be in autocommit mode, so the lock and the
-    statements it protects are not wrapped in one transaction. Waiting for the lock is bounded:
-    a setup that hangs while holding it fails the other with an error instead of blocking it for
-    ever."""
+async def advisory_lock(
+    connection: AsyncConnection, key: int, *, wait: str = "120s"
+) -> AsyncGenerator[None]:
+    """Hold a session advisory lock. Waiting for it is bounded (`wait`, a Postgres interval), so a
+    holder that hangs fails the others with an error instead of blocking them for ever, and the
+    unlock runs even when the task is cancelled. The connection must be in autocommit mode."""
     if not connection.autocommit:
-        raise ValueError("the database access lock needs an autocommit connection")
-    await connection.execute(sql.SQL("SET lock_timeout = {}").format(sql.Literal(_LOCK_WAIT)))
+        raise ValueError("an advisory lock needs an autocommit connection")
+    await connection.execute(sql.SQL("SET lock_timeout = {}").format(sql.Literal(wait)))
     try:
-        await connection.execute("SELECT pg_advisory_lock(%s)", (_DATABASE_ACCESS_LOCK,))
+        await connection.execute("SELECT pg_advisory_lock(%s)", (key,))
     finally:
         await connection.execute("RESET lock_timeout")
     try:
         yield
     finally:
-        # Even when cancelled: the unlock must run, or the lock is held until the session ends.
         with anyio.CancelScope(shield=True):
-            await connection.execute("SELECT pg_advisory_unlock(%s)", (_DATABASE_ACCESS_LOCK,))
+            await connection.execute("SELECT pg_advisory_unlock(%s)", (key,))
+
+
+@asynccontextmanager
+async def _database_access_lock(connection: AsyncConnection) -> AsyncGenerator[None]:
+    """Hold the advisory lock that serialises changes to the database-level access list.
+
+    Compose runs several setups side by side (the servers', the telemetry's, the policy's), and each
+    grants CONNECT on the same database and revokes defaults from PUBLIC. Postgres keeps those
+    privileges in one catalog row per object, and two sessions updating it at once fail with
+    "tuple concurrently updated"."""
+    async with advisory_lock(connection, _DATABASE_ACCESS_LOCK, wait=_LOCK_WAIT):
+        yield
 
 
 async def ensure_role(connection: AsyncConnection, password: str, role: str) -> None:
