@@ -48,7 +48,18 @@ async def _database_access_lock(connection: AsyncConnection) -> AsyncGenerator[N
         yield
 
 
-async def ensure_role(connection: AsyncConnection, password: str, role: str) -> None:
+IDLE_IN_TRANSACTION_MS = 30_000
+"""How long a session of any role may sit inside a transaction doing nothing before the server ends
+it. An idle transaction holds its locks: one that holds a lock others queue for (agent-core's
+single audit append lock is one any role can take) would stop every write that needs it."""
+
+
+async def ensure_role(
+    connection: AsyncConnection,
+    password: str,
+    role: str,
+    idle_in_transaction_ms: int = IDLE_IN_TRANSACTION_MS,
+) -> None:
     cursor = await connection.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (role,))
     if await cursor.fetchone() is None:
         await connection.execute(sql.SQL("CREATE ROLE {} LOGIN").format(sql.Identifier(role)))
@@ -61,6 +72,11 @@ async def ensure_role(connection: AsyncConnection, password: str, role: str) -> 
     await connection.execute(
         sql.SQL("ALTER ROLE {} WITH LOGIN PASSWORD {}").format(
             sql.Identifier(role), sql.Literal(verifier)
+        )
+    )
+    await connection.execute(
+        sql.SQL("ALTER ROLE {} SET idle_in_transaction_session_timeout = {}").format(
+            sql.Identifier(role), sql.Literal(f"{idle_in_transaction_ms}ms")
         )
     )
     database = sql.Identifier(await database_name(connection))

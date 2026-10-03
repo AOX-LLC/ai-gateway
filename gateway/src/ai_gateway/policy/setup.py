@@ -29,6 +29,7 @@ from ai_gateway.policy import (
     DASHBOARD_VIEW,
     GATEWAY_ROLE,
     LAB_APPROVER_ROLE,
+    POLICY_IDLE_IN_TRANSACTION_MS,
     ROLES,
     SCHEMA,
 )
@@ -72,7 +73,7 @@ async def setup_policy(owner_url: str, passwords: PolicyPasswords) -> None:
         advisory_lock(connection, _SETUP_LOCK),
     ):
         for role, password in role_passwords:
-            await ensure_role(connection, password, role)
+            await ensure_role(connection, password, role, POLICY_IDLE_IN_TRANSACTION_MS)
             await reset_role(connection, role)
         await ensure_schema(connection, SCHEMA)
         # A role may not create objects in the schema (they could shadow what the owner's setup
@@ -294,7 +295,7 @@ async def _set_up_lab_role(connection: AsyncConnection, password: str | None) ->
             await connection.execute(sql.SQL("DROP OWNED BY {}").format(name))
             await connection.execute(sql.SQL("DROP ROLE {}").format(name))
         return
-    await ensure_role(connection, password, LAB_APPROVER_ROLE)
+    await ensure_role(connection, password, LAB_APPROVER_ROLE, POLICY_IDLE_IN_TRANSACTION_MS)
     await reset_role(connection, LAB_APPROVER_ROLE)
     await connection.execute(sql.SQL("GRANT {} TO {}").format(sql.Identifier(APPROVER_ROLE), name))
     logger.warning("the lab approver role exists: it decides requests as the approver role")

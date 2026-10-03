@@ -24,6 +24,11 @@ AUDITOR_ROLE = "policy_auditor"
 """Reads the audit log, to verify it and to take anchors."""
 ROLES = (GATEWAY_ROLE, APPROVER_ROLE, AUDITOR_ROLE)
 
+POLICY_IDLE_IN_TRANSACTION_MS = 5_000
+"""The policy roles' limit on a session idle inside a transaction. Short, because any of them can
+take agent-core's one audit append lock, writes need that lock and fail closed without it, and the
+gateway's own waits are 1.5 s: a stuck session must not hold it for long."""
+
 AUDIT_TABLE = "agent_core_audit"
 APPROVALS_TABLE = "agent_core_approvals"
 ARGUMENTS_TABLE = "approval_arguments"
