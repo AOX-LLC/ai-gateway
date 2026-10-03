@@ -6,6 +6,9 @@ const config: NextConfig = {
   poweredByHeader: false,
   reactStrictMode: true,
   images: { unoptimized: true },
+  // Next's image optimiser (sharp, with LGPL-licensed libvips) is traced into the standalone output
+  // even with images unoptimised. Nothing here uses it, so it stays out of the image.
+  outputFileTracingExcludes: { "*": ["./node_modules/sharp/**/*", "./node_modules/@img/**/*"] },
   // The only body this dashboard accepts is a short password form, and Next buffers a request body for
   // the proxy before the proxy looks at the request, so the default 10 MiB would let a few dozen
   // unauthenticated posts use up the container's memory.

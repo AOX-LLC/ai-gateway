@@ -22,6 +22,10 @@ WORKDIR /app
 COPY --from=build --chown=node:node /app/.next/standalone ./
 COPY --from=build --chown=node:node /app/.next/static ./.next/static
 COPY --from=build --chown=node:node /app/public ./public
+# The fonts' licence texts travel with the font files (SIL OFL 1.1; see THIRD_PARTY_NOTICES.md).
+COPY --from=build --chown=node:node /app/src/fonts/ibm-plex-sans/OFL.txt ./licenses/ibm-plex-sans-OFL.txt
+COPY --from=build --chown=node:node /app/src/fonts/ibm-plex-mono/OFL.txt ./licenses/ibm-plex-mono-OFL.txt
+COPY --from=build --chown=node:node /app/src/fonts/space-grotesk/OFL.txt ./licenses/space-grotesk-OFL.txt
 USER node
 EXPOSE 4400
 CMD ["node", "server.js"]

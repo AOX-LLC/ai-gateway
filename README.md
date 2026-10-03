@@ -52,4 +52,4 @@ the running dashboard end to end. See Dashboard in `docs/architecture.md`.
 
 ## Licence
 
-MIT, copyright AOX LLC. See `LICENSE`. Harborline Supply Co. and all its data are fictional.
+MIT, copyright AOX LLC. See `LICENSE`. Third-party licences (the self-hosted fonts under the SIL Open Font License, the icon set, the pgvector database image and the dashboard's npm packages) are in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md). Harborline Supply Co. and all its data are fictional.
