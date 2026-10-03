@@ -58,6 +58,24 @@ def gateway(
 
 
 @pytest.fixture
+def fast_gateway(
+    test_database_url: str,
+    ops_token: IssuedToken,
+    policy: None,
+    policy_gateway_url: str,
+    tmp_path: Path,
+) -> Iterator[RunningGateway]:
+    with run_gateway(
+        test_database_url,
+        tmp_path,
+        policy_database_url=policy_gateway_url,
+        approvals={"hold_s": 0.3, "poll_s": 0.05},
+        fast_catalog=True,
+    ) as running:
+        yield running
+
+
+@pytest.fixture
 async def person(test_database_url: str, policy_approver_url: str) -> Approvals:
     await _approver_add(test_database_url, argparse.Namespace(id="aiden", name="Aiden", role=None))
     return Approvals(policy_approver_url, SHOUT_ROLES)
@@ -252,7 +270,7 @@ async def test_nothing_waits_in_a_gateway_that_was_never_asked(
 
 
 async def test_a_registry_change_after_approval_invalidates_it(
-    gateway: RunningGateway,
+    fast_gateway: RunningGateway,
     ops_token: IssuedToken,
     person: Approvals,
     admin_registry: AdminRegistry,
@@ -260,7 +278,7 @@ async def test_a_registry_change_after_approval_invalidates_it(
 ) -> None:
     """Approve, repoint the namespace at another address, retry the same call: the approval
     was for the old upstream, so the call is asked for afresh and nothing is forwarded."""
-    async with connect(gateway.url, ops_token.plaintext) as ops:
+    async with connect(fast_gateway.url, ops_token.plaintext) as ops:
         waiting = await ops.call_tool("echo__shout", {"text": "move the namespace"})
         assert waiting.structured_content is not None
         first_id = waiting.structured_content["approval_id"]

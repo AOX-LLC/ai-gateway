@@ -29,14 +29,14 @@ x-servers-build: &servers-build
 # Postgres are on both, so the host can reach them and they can reach the servers. Postgres
 # can itself open outbound connections for a superuser (see docs/architecture.md, Networks).
 # Memory limits (mem_limit on every service) are sized for a shared 4-core, 7 GB machine, at about
-# 1.5 times each service's peak, sampled once a second while the acceptance check, the Harborline
-# scenarios and a 200-call traffic simulation ran (Phase 3c): gateway 107 MiB, handbook 159,
-# ticketing and CRM 63 each, echo 53, Postgres 93, telemetry-purge 27, the setup and admin
-# containers 40 to 91. Floors: 64 MiB for a small service, 256 for Postgres, 96 for one-shots.
-# servers-setup embeds the handbook with a local model, but only on a fresh volume, so its peak
-# was not seen: it keeps 384. The lab approver, the approver and direct-check were not run in
-# that sample and keep generous limits. All limits together are 2.1 GiB (they were 2.9 GiB), which
-# leaves room for the dashboard; gateway/tests/test_compose.py keeps the total under 3072 MiB.
+# 1.5 times each service's peak, the higher of two runs, sampled once a second while the acceptance
+# check, the Harborline scenarios and a 200-call traffic simulation ran (Phase 3c): gateway 115 MiB,
+# handbook 159, ticketing and CRM 77 each, echo 64, Postgres 93, telemetry-purge 28, and the setup
+# and admin containers 90 to 103. Floors: 64 MiB for a small service, 256 for Postgres, 96 for
+# one-shots. servers-setup embeds the handbook with a local model, but only on a fresh volume, so
+# its peak was not seen: it keeps 384. The lab approver and the approver were not run in that sample
+# and keep generous limits. All limits together are 2.3 GiB (they were 2.9 GiB), which leaves room
+# for the dashboard; gateway/tests/test_compose.py keeps the total under 3072 MiB.
 x-hardening: &hardening
   read_only: true
   tmpfs:
@@ -72,7 +72,7 @@ services:
     command: ["gateway-admin", "migrate"]
     <<: *hardening
     networks: [backend]
-    mem_limit: 96m
+    mem_limit: 144m
     environment:
       GATEWAY_MIGRATE_DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
     depends_on:
@@ -87,7 +87,7 @@ services:
     command: ["gateway-admin", "telemetry-setup"]
     <<: *hardening
     networks: [backend]
-    mem_limit: 128m
+    mem_limit: 160m
     environment:
       GATEWAY_MIGRATE_DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       TELEMETRY_WRITER_DB_PASSWORD: ${TELEMETRY_WRITER_DB_PASSWORD:?set it in .env}
@@ -106,7 +106,7 @@ services:
     command: ["gateway-admin", "policy-setup"]
     <<: *hardening
     networks: [backend]
-    mem_limit: 128m
+    mem_limit: 144m
     environment:
       GATEWAY_MIGRATE_DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       POLICY_GATEWAY_DB_PASSWORD: ${POLICY_GATEWAY_DB_PASSWORD:?set it in .env}
@@ -169,7 +169,7 @@ services:
     ports:
       - "127.0.0.1:4401:4401"
     networks: [edge, backend]
-    mem_limit: 160m
+    mem_limit: 176m
     volumes:
       - ./config:/app/config:ro
     depends_on:
@@ -229,7 +229,7 @@ services:
       TICKETING_SERVICE_TOKEN: ${TICKETING_SERVICE_TOKEN:?set it in .env}
       TICKETING_ALLOWED_HOSTS: ticketing:*,127.0.0.1:*,localhost:*
     networks: [backend]
-    mem_limit: 96m
+    mem_limit: 128m
     depends_on:
       servers-setup:
         condition: service_completed_successfully
@@ -257,7 +257,7 @@ services:
       CRM_SERVICE_TOKEN: ${CRM_SERVICE_TOKEN:?set it in .env}
       CRM_ALLOWED_HOSTS: crm:*,127.0.0.1:*,localhost:*
     networks: [backend]
-    mem_limit: 96m
+    mem_limit: 128m
     depends_on:
       servers-setup:
         condition: service_completed_successfully
@@ -403,7 +403,7 @@ services:
       ECHO_ALLOWED_HOSTS: echo:*,127.0.0.1:*
     <<: *hardening
     networks: [backend]
-    mem_limit: 80m
+    mem_limit: 96m
 
 networks:
   edge: {}
