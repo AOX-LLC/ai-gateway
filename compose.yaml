@@ -128,7 +128,7 @@ services:
     build: *gateway-build
     image: ai-gateway-gateway
     command: ["telemetry-purge", "--every", "3600"]
-    restart: "no"
+    restart: unless-stopped
     <<: *hardening
     networks: [backend]
     mem_limit: 64m
