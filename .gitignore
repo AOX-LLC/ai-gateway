@@ -70,8 +70,3 @@ Desktop.ini
 # Tokens printed by `gateway-admin seed-demo`, for scripts/simulate_traffic.py
 /demo.json
 /seed.json
-
-# Dashboard
-dashboard/.next/
-dashboard/next-env.d.ts
-*.tsbuildinfo

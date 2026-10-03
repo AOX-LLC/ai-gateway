@@ -299,13 +299,16 @@ SELECT a.id, a.action, a.requested_by AS client_actor, a.status, a.decision, a.r
        a.created_at::timestamptz AS created_at, a.expires_at::timestamptz AS expires_at,
        a.resolved_at::timestamptz AS resolved_at, a.consumed_at::timestamptz AS consumed_at,
        split_part(a.action, '__', 1) AS namespace,
-       p.display_name AS resolved_by_name
+       p.display_name AS resolved_by_name,
+       c.name AS client_name
 FROM {APPROVALS_TABLE} a
 LEFT JOIN {APPROVERS_TABLE} p ON a.resolved_by = 'human:' || p.id
+LEFT JOIN public.clients c ON a.requested_by = 'client:' || c.id::text
 """  # noqa: S608 - fixed names and no input
 # Columns are only ever added at the end: a replaced view keeps the ones before. `namespace` is the
 # upstream the tool belongs to (the gateway names tools <namespace>__<tool>); the approver's
-# display name is the one place the dashboard sees a person's name.
+# display name is the one place the dashboard sees a person's name, and `client_name` is the
+# registry's name for the client that asked (null for one that has since been deleted).
 
 _ACTIVE_APPROVERS_VIEW = f"""
 CREATE OR REPLACE VIEW {ACTIVE_APPROVERS_VIEW} AS
