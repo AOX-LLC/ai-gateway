@@ -147,6 +147,13 @@ async def _ensure_approver_group(connection: AsyncConnection) -> None:
     if not await _role_exists(connection, APPROVER_ROLE):
         await connection.execute(sql.SQL("CREATE ROLE {} NOLOGIN").format(name))
     await connection.execute(sql.SQL("ALTER ROLE {} NOLOGIN").format(name))
+    # Inert for the members, whose sessions use their own login's setting (`ensure_role` sets it),
+    # but every role carries the limit, so a check that lists roles finds none without one.
+    await connection.execute(
+        sql.SQL("ALTER ROLE {} SET idle_in_transaction_session_timeout = {}").format(
+            name, sql.Literal(f"{POLICY_IDLE_IN_TRANSACTION_MS}ms")
+        )
+    )
     await reset_role(connection, APPROVER_ROLE)
 
 
