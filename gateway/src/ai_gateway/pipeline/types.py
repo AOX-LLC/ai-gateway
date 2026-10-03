@@ -31,6 +31,7 @@ class LayerMode(StrEnum):
 class DenyCode(StrEnum):
     TOOL_UNAVAILABLE = "tool_unavailable"
     LAYER_ERROR = "layer_error"
+    AUDIT_UNAVAILABLE = "audit_unavailable"
 
 
 @dataclass(frozen=True)

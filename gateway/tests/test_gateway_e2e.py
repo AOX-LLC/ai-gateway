@@ -243,17 +243,65 @@ async def test_healthz_reports_the_running_build(gateway: RunningGateway) -> Non
 async def test_a_client_that_cancels_mid_call_cancels_the_upstream_call(
     gateway: RunningGateway, make_client: MakeClient
 ) -> None:
-    """Cancellation travels client -> gateway -> upstream over real HTTP at both hops."""
+    """Cancellation travels client -> gateway -> upstream over real HTTP at both hops.
+
+    The client is raw HTTP, not the SDK's: the SDK's streamable-HTTP client does not guard
+    writing a late JSON response to its session when the session has closed, so a test that
+    leaves its cancelled call unanswered and exits races the SDK's own teardown (see the SDK
+    note in the pull request that rewrote this test). Here the test holds the cancelled POST
+    itself and waits for it to finish, so nothing is left in flight.
+    """
     _, token = await make_client("cancel-bot", ["echo__wait"])
     cancelled_before = cancellations.count
     started_before = cancellations.started
+    headers = {**_MCP_HEADERS, "Authorization": f"Bearer {token.plaintext}"}
+    answers: list[httpx2.Response] = []
 
-    async with connect(gateway.url, token.plaintext) as client:
-        with anyio.move_on_after(1.0) as client_scope:
-            await client.call_tool("echo__wait", {"seconds": 30})
-        assert client_scope.cancelled_caught
-        # The upstream call timeout is 5 s, so a prompt cancel can only be propagation.
-        await eventually(lambda: cancellations.count > cancelled_before, timeout_s=2.0)
+    async with httpx2.AsyncClient(timeout=10) as http:
+        opened = await http.post(gateway.url, json=_INITIALIZE, headers=headers)
+        session = {
+            **headers,
+            "Mcp-Session-Id": opened.headers["mcp-session-id"],
+            "MCP-Protocol-Version": "2025-11-25",
+        }
+        await http.post(
+            gateway.url,
+            json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+            headers=session,
+        )
 
+        async def call_and_wait() -> None:
+            answers.append(
+                await http.post(
+                    gateway.url,
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "tools/call",
+                        "params": {"name": "echo__wait", "arguments": {"seconds": 30}},
+                    },
+                    headers=session,
+                )
+            )
+
+        with anyio.fail_after(10):
+            async with anyio.create_task_group() as tasks:
+                tasks.start_soon(call_and_wait)
+                await eventually(lambda: cancellations.started > started_before, timeout_s=5.0)
+                cancel = await http.post(
+                    gateway.url,
+                    json={
+                        "jsonrpc": "2.0",
+                        "method": "notifications/cancelled",
+                        "params": {"requestId": 2, "reason": "the client gave up"},
+                    },
+                    headers=session,
+                )
+                assert cancel.status_code == 202
+                # The upstream call timeout is 5 s, so a prompt cancel can only be propagation.
+                await eventually(lambda: cancellations.count > cancelled_before, timeout_s=2.0)
+            # Leaving the task group means the cancelled POST was answered: nothing is in flight.
+
+    assert len(answers) == 1
     assert cancellations.started == started_before + 1
     assert cancellations.count == cancelled_before + 1

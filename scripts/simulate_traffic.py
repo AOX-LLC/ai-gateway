@@ -16,8 +16,9 @@ Tokens: `--tokens-file` takes the JSON that `gateway-admin seed-demo` prints (ke
 the repository), or set SIM_SUPPORT_TOKEN and SIM_OPS_TOKEN. They are never printed.
 
 --verify reads the dashboard's views as the telemetry_reader role (TELEMETRY_READER_DATABASE_URL)
-and compares what the gateway stored with what was sent, exactly. It assumes nothing else sent
-traffic while the simulator ran.
+and compares what the gateway stored with what was sent, exactly. With POLICY_AUDITOR_DATABASE_URL
+set it does the same for the audit log: a record for every call, and a record before every write
+that ran. It assumes nothing else sent traffic while the simulator ran.
 """
 
 import argparse
@@ -66,6 +67,14 @@ _SEARCHES = [
 _ACCOUNT_QUERIES = ["marina", "supply", "harbor", "dock", "freight", "boat"]
 _PUBLIC_DOCUMENTS = [n for n in range(1, 23) if n != 7] + [25, 26, 27, 28, 29]
 _STAGES = ["prospecting", "proposal", "negotiation", "won", "lost"]
+WRITE_TOOLS = frozenset(
+    {
+        "tickets__create_ticket",
+        "tickets__add_comment",
+        "tickets__change_status",
+        "tickets__assign",
+    }
+)
 _STATUSES = ["open", "pending", "resolved", "closed"]
 _PRIORITIES = ["low", "normal", "high", "urgent"]
 _TICKET_SUBJECTS = ["Dock gate will not latch", "Pallet label unreadable", "Carrier pickup missed"]
@@ -172,6 +181,19 @@ def expected_counts(plan: Sequence[Step]) -> Counter[tuple[str, ...]]:
     """What the store should hold after the plan runs: a listing per bot, plus one row per step."""
     counts: Counter[tuple[str, ...]] = Counter({("tools_list", SUPPORT): 1, ("tools_list", OPS): 1})
     counts.update(step.expected for step in plan)
+    return counts
+
+
+def expected_audit(plan: Sequence[Step]) -> Counter[str]:
+    """What the audit log should hold for the plan, by action: a record for every call (failed
+    logins are not audited), and a record before every write that was forwarded."""
+    counts: Counter[str] = Counter()
+    for step in plan:
+        if step.kind == "auth_failure":
+            continue
+        counts["gateway.tool_call"] += 1
+        if step.kind == "normal" and step.tool in WRITE_TOOLS:
+            counts["gateway.call_started"] += 1
     return counts
 
 
@@ -292,6 +314,41 @@ async def _stored_counts(url: str, since: datetime) -> Counter[tuple[str, ...]]:
     return counts
 
 
+async def _stored_audit(url: str, since: datetime) -> Counter[str]:
+    import psycopg  # only --verify needs a database driver
+
+    counts: Counter[str] = Counter()
+    async with await psycopg.AsyncConnection.connect(url) as connection:
+        cursor = await connection.execute(
+            "SELECT action, count(*) FROM policy.agent_core_audit WHERE occurred_at >= %s"
+            " GROUP BY action",
+            (since.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),),
+        )
+        for action, count in await cursor.fetchall():
+            counts[action] = count
+    return counts
+
+
+async def _verify_audit(plan: list[Step], since: datetime) -> bool:
+    url = os.environ.get("POLICY_AUDITOR_DATABASE_URL")
+    if not url:
+        return True  # not asked for: the audit log is checked only when its reader is configured
+    expected = expected_audit(plan)
+    deadline = time.monotonic() + 20  # the batches are written within a second or so
+    stored: Counter[str] = Counter()
+    while time.monotonic() < deadline:
+        stored = await _stored_audit(url, since)
+        if stored == expected:
+            print(f"verify: ok, the audit log holds {sum(expected.values())} records for the run")
+            return True
+        await anyio.sleep(0.5)
+    print("verify: FAILED, the audit log differs from what was sent")
+    for action in sorted(set(expected) | set(stored)):
+        if expected[action] != stored[action]:
+            print(f"  {action}: sent {expected[action]}, stored {stored[action]}")
+    return False
+
+
 async def _verify(plan: list[Step], since: datetime) -> bool:
     url = os.environ.get("TELEMETRY_READER_DATABASE_URL")
     if not url:
@@ -303,7 +360,7 @@ async def _verify(plan: list[Step], since: datetime) -> bool:
         stored = await _stored_counts(url, since)
         if stored == expected:
             print(f"verify: ok, {sum(expected.values())} rows match what was sent")
-            return True
+            return await _verify_audit(plan, since)
         await anyio.sleep(0.5)
     print("verify: FAILED, what the gateway stored differs from what was sent")
     for key in sorted(set(expected) | set(stored)):

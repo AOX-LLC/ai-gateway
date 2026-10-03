@@ -18,6 +18,8 @@ from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from psycopg_pool import AsyncConnectionPool
 
 from ai_gateway.auth.tokens import IssuedToken, generate_token
+from ai_gateway.policy import SCHEMA as POLICY_SCHEMA
+from ai_gateway.policy.setup import PolicyPasswords, setup_policy
 from ai_gateway.registry import MIGRATIONS_PACKAGE
 from ai_gateway.registry.repo import AdminRegistry
 from ai_gateway.telemetry import SCHEMA as TELEMETRY_SCHEMA
@@ -313,12 +315,17 @@ async def scratch_database(test_database_url: str) -> AsyncIterator[tuple[str, s
 
 @pytest.fixture(scope="session")
 def _recording_tracer() -> InMemorySpanExporter:
-    """Install a real tracer provider once for the test run (OpenTelemetry allows it once),
-    exporting every finished span to memory."""
+    """Record every finished span in memory.
+
+    OpenTelemetry lets the process's tracer provider be set once, and a test that starts a gateway
+    with telemetry installs one first. So this uses the SDK provider if there is one, and sets its
+    own if there is not: a recorder added to the provider that is current, either way."""
     exporter = InMemorySpanExporter()
-    provider = TracerProvider()
+    provider = trace.get_tracer_provider()
+    if not isinstance(provider, TracerProvider):
+        provider = TracerProvider()
+        trace.set_tracer_provider(provider)
     provider.add_span_processor(SimpleSpanProcessor(exporter))
-    trace.set_tracer_provider(provider)
     return exporter
 
 
@@ -371,5 +378,44 @@ async def telemetry(
         test_database_url,
         TelemetryPasswords(
             password_of(writer_url), password_of(reader_url), password_of(purger_url)
+        ),
+    )
+
+
+# --- policy (the audit log and the approval queue) ------------------------------------------
+
+
+@pytest.fixture
+def policy_gateway_url() -> str:
+    return _url("POLICY_GATEWAY_TEST_DATABASE_URL")
+
+
+@pytest.fixture
+def policy_approver_url() -> str:
+    return _url("POLICY_APPROVER_TEST_DATABASE_URL")
+
+
+@pytest.fixture
+def policy_auditor_url() -> str:
+    return _url("POLICY_AUDITOR_TEST_DATABASE_URL")
+
+
+@pytest.fixture
+async def policy(
+    test_database_url: str,
+    policy_gateway_url: str,
+    policy_approver_url: str,
+    policy_auditor_url: str,
+) -> None:
+    """A fresh policy schema, set up the way `gateway-admin policy-setup` sets it up. The roles use
+    the passwords the rest of the suite logs in with."""
+    async with await psycopg.AsyncConnection.connect(test_database_url, autocommit=True) as conn:
+        await conn.execute(f"DROP SCHEMA IF EXISTS {POLICY_SCHEMA} CASCADE".encode())
+    await setup_policy(
+        test_database_url,
+        PolicyPasswords(
+            password_of(policy_gateway_url),
+            password_of(policy_approver_url),
+            password_of(policy_auditor_url),
         ),
     )

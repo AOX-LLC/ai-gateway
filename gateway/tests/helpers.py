@@ -109,12 +109,24 @@ class RunningGateway:
 
 @contextmanager
 def run_gateway(
-    database_url: str, workdir: Path, telemetry_database_url: str | None = None
+    database_url: str,
+    workdir: Path,
+    telemetry_database_url: str | None = None,
+    policy_database_url: str | None = None,
+    unaudited_writes: bool | None = None,
 ) -> Iterator[RunningGateway]:
     """The whole gateway on a free port, with only the scope layer, recording its events (and,
-    given a telemetry database, storing them there too)."""
+    given a telemetry database, storing them there too).
+
+    Writes are allowed without an audit record unless a policy database is given: a test that is
+    not about the audit log should not need one, and a test that is gets the shipped behaviour."""
     pipeline_file = workdir / "pipeline.toml"
-    pipeline_file.write_text('[layers]\nscope = "enforce"\n')
+    if unaudited_writes is None:
+        unaudited_writes = policy_database_url is None
+    unaudited = "true" if unaudited_writes else "false"
+    pipeline_file.write_text(
+        f'[layers]\nscope = "enforce"\n\n[safety]\nallow_unaudited_writes = {unaudited}\n'
+    )
     events = MemoryEventSink()
     settings = GatewaySettings(
         database_url=SecretStr(database_url),
@@ -122,6 +134,7 @@ def run_gateway(
         telemetry_database_url=(
             SecretStr(telemetry_database_url) if telemetry_database_url else None
         ),
+        policy_database_url=SecretStr(policy_database_url) if policy_database_url else None,
         telemetry_flush_interval_s=0.05,
     )
     with serve_in_thread(create_app(settings, events)) as base_url:

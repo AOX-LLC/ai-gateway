@@ -96,6 +96,31 @@ def test_the_expected_counts_add_up_to_the_plan_plus_one_listing_per_bot(sim) ->
     )
 
 
+def test_the_audit_log_is_expected_to_hold_every_call_and_every_forwarded_write(sim) -> None:  # type: ignore[no-untyped-def]
+    plan = sim.build_plan(sim.DEFAULT_SEED, 600)
+
+    expected = sim.expected_audit(plan)
+
+    calls = [step for step in plan if step.kind != "auth_failure"]
+    forwarded_writes = [
+        step for step in plan if step.kind == "normal" and step.tool in sim.WRITE_TOOLS
+    ]
+    assert expected["gateway.tool_call"] == len(calls)
+    assert expected["gateway.call_started"] == len(forwarded_writes) > 0
+    assert set(expected) == {"gateway.tool_call", "gateway.call_started"}
+
+
+def test_a_write_the_scope_layer_refuses_has_no_record_of_an_attempt_to_run(sim) -> None:  # type: ignore[no-untyped-def]
+    refused_writes = [
+        step
+        for step in sim.build_plan(sim.DEFAULT_SEED, 2000)
+        if step.kind == "out_of_scope" and step.tool in sim.WRITE_TOOLS
+    ]
+
+    assert refused_writes
+    assert sim.expected_audit(refused_writes) == {"gateway.tool_call": len(refused_writes)}
+
+
 def test_each_kind_of_failed_authentication_is_expected_under_its_own_reason(sim) -> None:  # type: ignore[no-untyped-def]
     plan = sim.build_plan(sim.DEFAULT_SEED, 2000)
 

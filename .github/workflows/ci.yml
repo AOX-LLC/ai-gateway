@@ -44,10 +44,11 @@ jobs:
         # the PyPI advisory database. The advisories are live, so a new one can fail a build
         # that changed nothing: upgrade the package, or, if no fix exists and the code is not
         # affected, pass --ignore-vuln <id> here with a comment that says why and when to
-        # revisit. The workspace's own packages are not on PyPI, so they are left out.
+        # revisit. The workspace's own packages and agent-core (a git tag, not on PyPI; its
+        # dependencies are audited like any other) are left out.
         run: |
           uv export --frozen --all-packages --all-groups --no-hashes --no-emit-workspace \
-            -o "$RUNNER_TEMP/requirements-audit.txt"
+            --no-emit-package aox-agent-core -o "$RUNNER_TEMP/requirements-audit.txt"
           uv run --frozen pip-audit -r "$RUNNER_TEMP/requirements-audit.txt" \
             --no-deps --disable-pip --progress-spinner off
 
@@ -77,6 +78,10 @@ jobs:
       TELEMETRY_WRITER_TEST_DATABASE_URL: postgresql://telemetry_writer:ci-only-telemetry-writer-password@localhost:5432/ai_gateway_test
       TELEMETRY_READER_TEST_DATABASE_URL: postgresql://telemetry_reader:ci-only-telemetry-reader-password@localhost:5432/ai_gateway_test
       TELEMETRY_PURGER_TEST_DATABASE_URL: postgresql://telemetry_purger:ci-only-telemetry-purger-password@localhost:5432/ai_gateway_test
+      # The policy roles are created by the policy tests' own setup, with these passwords.
+      POLICY_GATEWAY_TEST_DATABASE_URL: postgresql://policy_gateway:ci-only-policy-gateway-password@localhost:5432/ai_gateway_test
+      POLICY_APPROVER_TEST_DATABASE_URL: postgresql://policy_approver:ci-only-policy-approver-password@localhost:5432/ai_gateway_test
+      POLICY_AUDITOR_TEST_DATABASE_URL: postgresql://policy_auditor:ci-only-policy-auditor-password@localhost:5432/ai_gateway_test
       # Where the tests find the embedding model (they fetch it there if it is missing).
       HANDBOOK_MODEL_PATH: ${{ github.workspace }}/.model-cache/potion-base-8M
     steps:
@@ -235,15 +240,32 @@ jobs:
           TELEMETRY_READER_DB_PASSWORD=$(sed -n 's/^TELEMETRY_READER_DB_PASSWORD=//p' .env)
           echo "::add-mask::$TELEMETRY_READER_DB_PASSWORD"
           echo "::add-mask::$TELEMETRY_READER_DATABASE_URL"
-          export TELEMETRY_READER_DATABASE_URL SIM_SUPPORT_TOKEN="$SUPPORT" SIM_OPS_TOKEN="$OPS"
+          # The audit log's reader, so --verify also checks the audit trail, and the CLI can verify it.
+          POLICY_AUDITOR_DATABASE_URL=$(sed -n 's/^POLICY_AUDITOR_DATABASE_URL=//p' .env)
+          POLICY_AUDITOR_DB_PASSWORD=$(sed -n 's/^POLICY_AUDITOR_DB_PASSWORD=//p' .env)
+          echo "::add-mask::$POLICY_AUDITOR_DB_PASSWORD"
+          echo "::add-mask::$POLICY_AUDITOR_DATABASE_URL"
+          export TELEMETRY_READER_DATABASE_URL POLICY_AUDITOR_DATABASE_URL
+          export SIM_SUPPORT_TOKEN="$SUPPORT" SIM_OPS_TOKEN="$OPS"
           uv run scripts/simulate_traffic.py --calls 200 --verify
           curl -sSf http://127.0.0.1:4401/healthz | python3 -c '
           import json, sys
-          telemetry = json.load(sys.stdin)["telemetry"]
-          print(telemetry)
-          assert telemetry["status"] == "ok"
-          assert telemetry["dropped_total"] == 0 and telemetry["rejected_total"] == 0
+          health = json.load(sys.stdin)
+          print(health["telemetry"], health["audit"])
+          assert health["telemetry"]["status"] == "ok"
+          assert health["telemetry"]["dropped_total"] == 0
+          assert health["telemetry"]["rejected_total"] == 0
+          assert health["audit"]["status"] == "ok"
+          assert health["audit"]["dropped_total"] == 0 and health["audit"]["rejected_total"] == 0
           '
+          # An anchor taken now, then more traffic, then the chain and the anchor checked: the
+          # log must still extend what was anchored.
+          ANCHORS="${RUNNER_TEMP:-/tmp}/audit-anchors.jsonl"
+          rm -f "$ANCHORS"
+          uv run gateway-admin audit-anchor --file "$ANCHORS"
+          uv run scripts/simulate_traffic.py --calls 60 --seed 7 --verify
+          uv run gateway-admin audit-verify --anchors "$ANCHORS"
+          rm -f "$ANCHORS"
       - name: Show stack logs
         if: failure()
         run: docker compose --profile test logs --no-color

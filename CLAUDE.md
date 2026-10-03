@@ -49,7 +49,8 @@ The Docker Compose project name is `ai-gateway`.
 
 ## Stack
 
-- Gateway and MCP servers: Python, FastAPI, Pydantic, and the official MCP Python SDK.
+- Gateway and MCP servers: Python 3.12 (pinned in `.python-version`, and the version of every image), FastAPI, Pydantic, and the official MCP Python SDK.
+- Audit log and approvals: agent-core, pinned by git tag in `gateway/pyproject.toml`.
 - Database: PostgreSQL with pgvector.
 - Dashboard: Next.js and TypeScript.
 - Orchestration: Docker Compose.

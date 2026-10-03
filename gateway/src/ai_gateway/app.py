@@ -21,6 +21,8 @@ from ai_gateway.auth.verifier import TokenVerifier
 from ai_gateway.pipeline.config import load_pipeline_config
 from ai_gateway.pipeline.registry import LAYER_ORDER
 from ai_gateway.pipeline.runner import Pipeline
+from ai_gateway.policy.audit import PostgresAuditRecorder
+from ai_gateway.policy.runtime import build_audit
 from ai_gateway.proxy.catalog import Catalog
 from ai_gateway.proxy.http import ProtocolVersionGuard, SessionAdmission, SessionCleanup
 from ai_gateway.proxy.server import GatewayServer
@@ -55,13 +57,14 @@ class _McpEndpoint:
 def create_app(settings: GatewaySettings, events: EventSink | None = None) -> FastAPI:
     """Build the app. Configuration errors, such as a bad pipeline file, raise here,
     before the gateway accepts a single request."""
+    audit = build_audit(settings)
     telemetry = build_telemetry(settings)
     event_sink: EventSink = events or LogEventSink()
     if telemetry is not None:
         # The queueing sink never waits, so it goes first: a sink that stalls cannot hold it up.
         event_sink = FanOutEventSink([("postgres", telemetry.sink)], event_sink)
     pipeline_config = load_pipeline_config(settings.pipeline_file, LAYER_ORDER)
-    pipeline = Pipeline.build(pipeline_config, event_sink)
+    pipeline = Pipeline.build(pipeline_config, event_sink, audit=audit)
     if telemetry is not None:
         telemetry.buffer.put(
             pipeline_config_row(pipeline_config.sha256, pipeline.describe(), datetime.now(UTC))
@@ -109,6 +112,8 @@ def create_app(settings: GatewaySettings, events: EventSink | None = None) -> Fa
                 await task_group.start(catalog.run)
                 if telemetry is not None:
                     await task_group.start(telemetry.writer.run)
+                if isinstance(audit, PostgresAuditRecorder):
+                    await task_group.start(audit.run)
                 async with session_manager.run():
                     try:
                         yield
@@ -129,8 +134,9 @@ def create_app(settings: GatewaySettings, events: EventSink | None = None) -> Fa
         schema_version = (
             await endpoint.schema_versions.current() if endpoint.schema_versions else None
         )
-        # Telemetry that cannot be stored is reported here, but never makes the gateway unhealthy:
-        # a restart would not help, and tool calls do not depend on it.
+        # Telemetry and audit that cannot be stored are reported here, but never make the gateway
+        # unhealthy: a restart would not help, and a failing audit log already refuses writes.
+        audit_status = asdict(audit.status())
         telemetry_status: dict[str, object] = (
             {"status": "disabled"} if telemetry is None else asdict(telemetry.status())
         )
@@ -138,10 +144,15 @@ def create_app(settings: GatewaySettings, events: EventSink | None = None) -> Fa
             body = {
                 **identity.payload("unavailable", schema_version),
                 "telemetry": telemetry_status,
+                "audit": audit_status,
             }
             return JSONResponse(body, status_code=503)
         return JSONResponse(
-            {**identity.payload("ok", schema_version), "telemetry": telemetry_status}
+            {
+                **identity.payload("ok", schema_version),
+                "telemetry": telemetry_status,
+                "audit": audit_status,
+            }
         )
 
     app.router.routes.append(Route(MCP_PATH, endpoint=endpoint, methods=["GET", "POST", "DELETE"]))

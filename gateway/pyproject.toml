@@ -20,6 +20,7 @@ dependencies = [
     "psycopg-pool>=3.2,<4",
     "opentelemetry-api>=1.45,<2",
     "opentelemetry-sdk>=1.45,<2",
+    "aox-agent-core[postgres]",
 ]
 
 [project.scripts]
@@ -32,3 +33,5 @@ packages = ["src/ai_gateway"]
 
 [tool.uv.sources]
 mcp-common = { workspace = true }
+# Pinned by tag, not a1: a2 has the recording format and audit schema this gateway uses.
+aox-agent-core = { git = "https://github.com/AOX-LLC/agent-core", tag = "v0.1.0a2" }

@@ -22,6 +22,7 @@ INTERNAL_ONLY = [
     "echo",
     "telemetry-setup",
     "telemetry-purge",
+    "policy-setup",
 ]
 
 
