@@ -240,15 +240,32 @@ jobs:
           TELEMETRY_READER_DB_PASSWORD=$(sed -n 's/^TELEMETRY_READER_DB_PASSWORD=//p' .env)
           echo "::add-mask::$TELEMETRY_READER_DB_PASSWORD"
           echo "::add-mask::$TELEMETRY_READER_DATABASE_URL"
-          export TELEMETRY_READER_DATABASE_URL SIM_SUPPORT_TOKEN="$SUPPORT" SIM_OPS_TOKEN="$OPS"
+          # The audit log's reader, so --verify also checks the audit trail, and the CLI can verify it.
+          POLICY_AUDITOR_DATABASE_URL=$(sed -n 's/^POLICY_AUDITOR_DATABASE_URL=//p' .env)
+          POLICY_AUDITOR_DB_PASSWORD=$(sed -n 's/^POLICY_AUDITOR_DB_PASSWORD=//p' .env)
+          echo "::add-mask::$POLICY_AUDITOR_DB_PASSWORD"
+          echo "::add-mask::$POLICY_AUDITOR_DATABASE_URL"
+          export TELEMETRY_READER_DATABASE_URL POLICY_AUDITOR_DATABASE_URL
+          export SIM_SUPPORT_TOKEN="$SUPPORT" SIM_OPS_TOKEN="$OPS"
           uv run scripts/simulate_traffic.py --calls 200 --verify
           curl -sSf http://127.0.0.1:4401/healthz | python3 -c '
           import json, sys
-          telemetry = json.load(sys.stdin)["telemetry"]
-          print(telemetry)
-          assert telemetry["status"] == "ok"
-          assert telemetry["dropped_total"] == 0 and telemetry["rejected_total"] == 0
+          health = json.load(sys.stdin)
+          print(health["telemetry"], health["audit"])
+          assert health["telemetry"]["status"] == "ok"
+          assert health["telemetry"]["dropped_total"] == 0
+          assert health["telemetry"]["rejected_total"] == 0
+          assert health["audit"]["status"] == "ok"
+          assert health["audit"]["dropped_total"] == 0 and health["audit"]["rejected_total"] == 0
           '
+          # An anchor taken now, then more traffic, then the chain and the anchor checked: the
+          # log must still extend what was anchored.
+          ANCHORS="${RUNNER_TEMP:-/tmp}/audit-anchors.jsonl"
+          rm -f "$ANCHORS"
+          uv run gateway-admin audit-anchor --file "$ANCHORS"
+          uv run scripts/simulate_traffic.py --calls 60 --seed 7 --verify
+          uv run gateway-admin audit-verify --anchors "$ANCHORS"
+          rm -f "$ANCHORS"
       - name: Show stack logs
         if: failure()
         run: docker compose --profile test logs --no-color
