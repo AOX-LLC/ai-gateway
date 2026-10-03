@@ -53,7 +53,7 @@ services:
     ports:
       - "127.0.0.1:4402:5432"
     networks: [edge, backend]
-    mem_limit: 512m
+    mem_limit: 256m
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./db/init:/docker-entrypoint-initdb.d:ro
@@ -69,7 +69,7 @@ services:
     command: ["gateway-admin", "migrate"]
     <<: *hardening
     networks: [backend]
-    mem_limit: 128m
+    mem_limit: 96m
     environment:
       GATEWAY_MIGRATE_DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
     depends_on:
@@ -103,7 +103,7 @@ services:
     command: ["gateway-admin", "policy-setup"]
     <<: *hardening
     networks: [backend]
-    mem_limit: 192m
+    mem_limit: 128m
     environment:
       GATEWAY_MIGRATE_DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       POLICY_GATEWAY_DB_PASSWORD: ${POLICY_GATEWAY_DB_PASSWORD:?set it in .env}
@@ -128,7 +128,7 @@ services:
     restart: "no"
     <<: *hardening
     networks: [backend]
-    mem_limit: 96m
+    mem_limit: 64m
     environment:
       TELEMETRY_PURGE_DATABASE_URL: postgresql://telemetry_purger:${TELEMETRY_PURGER_DB_PASSWORD:?set it in .env}@postgres:5432/${POSTGRES_DB}
       TELEMETRY_RETENTION_SPAN_DAYS: ${TELEMETRY_RETENTION_SPAN_DAYS:-7}
@@ -166,7 +166,7 @@ services:
     ports:
       - "127.0.0.1:4401:4401"
     networks: [edge, backend]
-    mem_limit: 256m
+    mem_limit: 160m
     volumes:
       - ./config:/app/config:ro
     depends_on:
@@ -226,7 +226,7 @@ services:
       TICKETING_SERVICE_TOKEN: ${TICKETING_SERVICE_TOKEN:?set it in .env}
       TICKETING_ALLOWED_HOSTS: ticketing:*,127.0.0.1:*,localhost:*
     networks: [backend]
-    mem_limit: 192m
+    mem_limit: 96m
     depends_on:
       servers-setup:
         condition: service_completed_successfully
@@ -254,7 +254,7 @@ services:
       CRM_SERVICE_TOKEN: ${CRM_SERVICE_TOKEN:?set it in .env}
       CRM_ALLOWED_HOSTS: crm:*,127.0.0.1:*,localhost:*
     networks: [backend]
-    mem_limit: 192m
+    mem_limit: 96m
     depends_on:
       servers-setup:
         condition: service_completed_successfully
@@ -283,7 +283,7 @@ services:
       HANDBOOK_SERVICE_TOKEN: ${HANDBOOK_SERVICE_TOKEN:?set it in .env}
       HANDBOOK_ALLOWED_HOSTS: handbook:*,127.0.0.1:*,localhost:*
     networks: [backend]
-    mem_limit: 384m
+    mem_limit: 240m
     depends_on:
       servers-setup:
         condition: service_completed_successfully
@@ -306,7 +306,7 @@ services:
     entrypoint: ["gateway-admin"]
     <<: *hardening
     networks: [backend]
-    mem_limit: 128m
+    mem_limit: 144m
     environment:
       GATEWAY_MIGRATE_DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       # For audit-anchor and audit-verify, which run as the auditor role and can only read.
@@ -325,7 +325,7 @@ services:
     entrypoint: ["gateway-approver"]
     <<: *hardening
     networks: [backend]
-    mem_limit: 128m
+    mem_limit: 96m
     environment:
       POLICY_APPROVER_DATABASE_URL: postgresql://policy_approver:${POLICY_APPROVER_DB_PASSWORD:?set it in .env}@postgres:5432/${POSTGRES_DB}
       APPROVAL_ROLES_FILE: /app/config/approval_roles.toml
@@ -400,7 +400,7 @@ services:
       ECHO_ALLOWED_HOSTS: echo:*,127.0.0.1:*
     <<: *hardening
     networks: [backend]
-    mem_limit: 128m
+    mem_limit: 80m
 
 networks:
   edge: {}
