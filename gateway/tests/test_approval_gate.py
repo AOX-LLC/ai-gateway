@@ -243,7 +243,7 @@ async def test_only_the_approver_can_read_the_arguments_and_nobody_else_can_chan
             policy_url(policy_approver_url), autocommit=True
         ) as connection:
             with pytest.raises(errors.InsufficientPrivilege):
-                await connection.execute(statement)  # type: ignore[arg-type]
+                await connection.execute(statement)
     assert pending.approval_id
 
 

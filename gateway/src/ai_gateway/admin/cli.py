@@ -18,6 +18,7 @@ from aox_agent_core.audit import SQLAuditLog
 from aox_agent_core.errors import AuditIntegrityError, ConfigError
 from aox_agent_core.storage import open_database
 from psycopg import AsyncConnection
+from psycopg.errors import CheckViolation
 from pydantic import SecretStr
 
 from ai_gateway.auth.tokens import IssuedToken, generate_token
@@ -138,6 +139,18 @@ def _parser() -> argparse.ArgumentParser:
     )
     verify.add_argument("--anchors", type=Path, help="an anchor file; without one, only the chain")
     verify.set_defaults(handler=_audit_verify, database_env=_AUDITOR_URL_ENV)
+
+    approver_add = commands.add_parser(
+        "approver-add", help="register (or update) a person who may approve writes"
+    )
+    approver_add.add_argument("id", help="lowercase letters, digits, . _ -")
+    approver_add.add_argument("--name", required=True, help="who they are, for the log")
+    approver_add.add_argument("--role", action="append", default=None, help="default: approver")
+    approver_add.set_defaults(handler=_approver_add)
+    commands.add_parser("approver-list", help="list approvers").set_defaults(handler=_approver_list)
+    approver_off = commands.add_parser("approver-deactivate", help="stop an approver deciding")
+    approver_off.add_argument("id")
+    approver_off.set_defaults(handler=_approver_deactivate)
 
     client_add = commands.add_parser("client-add", help="create or update a client")
     client_add.add_argument("name")
@@ -276,6 +289,40 @@ async def _policy_setup(database_url: str, _: argparse.Namespace) -> None:
 
 def _audit_log(database_url: str) -> SQLAuditLog:
     return SQLAuditLog(open_database(SecretStr(policy_url(database_url))))
+
+
+async def _approver_add(database_url: str, args: argparse.Namespace) -> None:
+    roles = args.role or ["approver"]
+    async with await AsyncConnection.connect(policy_url(database_url), autocommit=True) as db:
+        try:
+            await db.execute(
+                "INSERT INTO approvers (id, display_name, roles) VALUES (%s, %s, %s)"
+                " ON CONFLICT (id) DO UPDATE SET display_name = EXCLUDED.display_name,"
+                " roles = EXCLUDED.roles, active = true",
+                (args.id, args.name, roles),
+            )
+        except CheckViolation:
+            raise AdminError(
+                "the id must be lowercase letters, digits, . _ -, starting with a letter"
+            ) from None
+    print(f"approver {args.id} registered with roles {', '.join(roles)}")
+
+
+async def _approver_list(database_url: str, args: argparse.Namespace) -> None:
+    async with await AsyncConnection.connect(policy_url(database_url)) as db:
+        cursor = await db.execute(
+            "SELECT id, display_name, roles, active FROM approvers ORDER BY id"
+        )
+        for approver_id, name, roles, active in await cursor.fetchall():
+            print(f"{approver_id}  {name}  {','.join(roles)}  {'active' if active else 'inactive'}")
+
+
+async def _approver_deactivate(database_url: str, args: argparse.Namespace) -> None:
+    async with await AsyncConnection.connect(policy_url(database_url), autocommit=True) as db:
+        cursor = await db.execute("UPDATE approvers SET active = false WHERE id = %s", (args.id,))
+        if cursor.rowcount == 0:
+            raise AdminError(f"no approver {args.id!r}")
+    print(f"approver {args.id} deactivated")
 
 
 async def _audit_anchor(database_url: str, args: argparse.Namespace) -> None:
