@@ -71,7 +71,7 @@ strict = true
 python_version = "3.12"
 files = ["gateway/src", "gateway/tests", "servers/echo/src", "servers/common/src", "servers/ticketing/src", "servers/crm/src", "servers/handbook/src", "servers/setup/src", "scripts"]
 plugins = ["pydantic.mypy"]
-mypy_path = "gateway:gateway/src:servers/echo/src:servers/common/src:servers/ticketing/src:servers/crm/src:servers/handbook/src:servers/setup/src"
+mypy_path = "scripts:gateway:gateway/src:servers/echo/src:servers/common/src:servers/ticketing/src:servers/crm/src:servers/handbook/src:servers/setup/src"
 explicit_package_bases = true
 
 [tool.pydantic-mypy]

@@ -39,6 +39,8 @@ from mcp.client.streamable_http import streamable_http_client
 from mcp.shared.exceptions import MCPError
 from mcp.types import INVALID_PARAMS, CallToolResult, TextContent
 
+from auto_approver import auto_approving
+
 _INITIALIZE = {
     "jsonrpc": "2.0",
     "id": 1,
@@ -103,7 +105,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         sys.exit(f"test_client: set {token_env}")
     failures: list[BaseException] = []
     try:
-        anyio.run(_run_checks, args, token)
+        anyio.run(_run_approved, args, token)
     except* CheckFailedError as group:
         # A failure inside the MCP client's context arrives wrapped in exception groups.
         failures.extend(_leaves(group))
@@ -133,7 +135,18 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--scenario", type=Path, help="TOML scenario: one call per tool")
     parser.add_argument("--as", dest="as_client", metavar="CLIENT", help="with --scenario")
     parser.add_argument("--direct", choices=sorted(_DIRECT), help="skip the gateway")
+    parser.add_argument(
+        "--approve-as",
+        metavar="APPROVER",
+        help="approve the scenario's writes as this registered approver (test tooling; needs"
+        " LAB_AUTO_APPROVE=yes and POLICY_APPROVER_DATABASE_URL)",
+    )
     return parser
+
+
+async def _run_approved(args: argparse.Namespace, token: str) -> None:
+    async with auto_approving(args.approve_as):
+        await _run_checks(args, token)
 
 
 async def _run_checks(args: argparse.Namespace, token: str) -> None:
