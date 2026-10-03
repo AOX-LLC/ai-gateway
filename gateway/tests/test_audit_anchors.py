@@ -255,6 +255,7 @@ async def test_a_log_that_fails_its_anchors_is_not_anchored_again(
         '{"seq": -1, "record_hash": "' + "a" * 64 + '", "at": "now"}',
         '{"seq": 1, "record_hash": "not a hash", "at": "now"}',
         '{"seq": "1", "record_hash": "' + "a" * 64 + '", "at": "now"}',
+        '{"seq": 1, "record_hash": "' + "a" * 64 + '\\n", "at": "now"}',  # a trailing newline
     ],
 )
 def test_an_anchor_with_an_impossible_value_is_refused(tmp_path: Path, line: str) -> None:

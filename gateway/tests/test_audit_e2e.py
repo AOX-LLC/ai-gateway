@@ -168,6 +168,7 @@ async def test_without_an_audit_database_writes_are_refused_unless_the_configura
         "dropped_total": 0,
         "rejected_total": 0,
         "written_total": 0,
+        "write_ahead_failed_total": 0,
     }
 
 

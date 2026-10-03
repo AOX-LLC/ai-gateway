@@ -367,7 +367,11 @@ async def test_a_batch_that_may_have_committed_is_not_written_twice_on_retry(
     assert recorder.status().queue_depth == 0
 
 
-@pytest.mark.parametrize("name", ["foo bar", "_x", "x/y", "ünicode", "__nope", "a b" * 20])
+@pytest.mark.parametrize(
+    "name",
+    ["foo bar", "_x", "x/y", "ünicode", "__nope", "a b" * 20, "echo__nope\n", "echo__nope\n\n"],
+    # A trailing newline satisfies `$` in a Python pattern, and agent-core's pattern refuses it.
+)
 def test_a_call_to_a_tool_whose_name_cannot_be_a_subject_is_still_recorded(name: str) -> None:
     event = GatewayEvent(
         action="gateway.tool_call",

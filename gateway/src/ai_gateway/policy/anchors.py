@@ -20,7 +20,7 @@ from pathlib import Path
 from aox_agent_core.audit import GENESIS_HASH, AuditHead, SQLAuditLog
 from aox_agent_core.errors import AuditIntegrityError
 
-_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_SHA256 = re.compile(r"[0-9a-f]{64}")
 
 
 class AnchorFileError(ValueError):
@@ -71,7 +71,7 @@ def read_anchors(path: Path) -> list[Anchor]:
                 or isinstance(seq, bool)
                 or seq < 0
                 or not isinstance(record_hash, str)
-                or _SHA256.match(record_hash) is None
+                or _SHA256.fullmatch(record_hash) is None
                 or not isinstance(taken_at, str)
             ):
                 raise ValueError("not an anchor")

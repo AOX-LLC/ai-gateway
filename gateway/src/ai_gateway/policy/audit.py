@@ -90,7 +90,10 @@ class DisabledAuditRecorder:
         return AuditStatus(status="disabled")
 
 
-_SUBJECT_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$")
+_SUBJECT_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,199}")
+"""agent-core's subject pattern. Matched with `fullmatch`: `$` also matches before a trailing
+newline, which agent-core's pattern does not, and a name that passed here and failed there went
+unaudited."""
 
 
 def _subject(tool_name: str | None) -> tuple[str | None, dict[str, Any]]:
@@ -98,7 +101,7 @@ def _subject(tool_name: str | None) -> tuple[str | None, dict[str, Any]]:
 
     A client chooses the name of a tool that does not exist, and agent-core accepts only plain
     identifiers as subjects. Such a call is still recorded: with no subject, and the name's hash."""
-    if tool_name is None or _SUBJECT_ID.match(tool_name):
+    if tool_name is None or _SUBJECT_ID.fullmatch(tool_name):
         return tool_name, {}
     return None, {
         "tool_name_valid": False,
