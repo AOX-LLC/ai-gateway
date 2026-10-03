@@ -109,6 +109,8 @@ services:
       POLICY_GATEWAY_DB_PASSWORD: ${POLICY_GATEWAY_DB_PASSWORD:?set it in .env}
       POLICY_APPROVER_DB_PASSWORD: ${POLICY_APPROVER_DB_PASSWORD:?set it in .env}
       POLICY_AUDITOR_DB_PASSWORD: ${POLICY_AUDITOR_DB_PASSWORD:?set it in .env}
+      # Empty (the default): there is no lab approver role. Set it to create one for the lab profile.
+      POLICY_LAB_APPROVER_DB_PASSWORD: ${POLICY_LAB_APPROVER_DB_PASSWORD:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -146,6 +148,8 @@ services:
       GATEWAY_DATABASE_URL: postgresql://gateway_app:${GATEWAY_APP_DB_PASSWORD}@postgres:5432/${POSTGRES_DB}
       GATEWAY_PIPELINE_FILE: ${GATEWAY_PIPELINE_FILE_IN_CONTAINER:-/app/config/pipeline.toml}
       GATEWAY_APPROVAL_ROLES_FILE: /app/config/approval_roles.toml
+      GATEWAY_ALLOWLIST_FILE: /app/config/allowlist.toml
+      GATEWAY_RATE_LIMITS_FILE: /app/config/rate_limits.toml
       GATEWAY_ALLOWED_HOSTS: ${GATEWAY_ALLOWED_HOSTS:-127.0.0.1:*,localhost:*}
       GATEWAY_LOG_LEVEL: ${GATEWAY_LOG_LEVEL:-INFO}
       # Spans and decision records are stored through this append-only role. If the database
@@ -329,6 +333,33 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+
+  # The lab approver, for Phase 6's red-team runs: approves every pending write automatically.
+  # Off unless asked for twice: the `lab` profile, and LAB_AUTO_APPROVE=yes in the environment (the
+  # service will not start without it); it also needs the lab database role, which exists only when
+  # POLICY_LAB_APPROVER_DB_PASSWORD is set for `policy-setup`. Register its approver first:
+  # `docker compose run --rm admin approver-add lab-approver --name "Lab approver"`.
+  # Never use it against anything real: it defeats approval.
+  lab-approver:
+    profiles: [lab]
+    build: *gateway-build
+    image: ai-gateway-gateway
+    entrypoint: ["/app/.venv/bin/python", "/lab/lab_approver.py"]
+    restart: unless-stopped
+    <<: *hardening
+    networks: [backend]
+    mem_limit: 96m
+    environment:
+      POLICY_APPROVER_DATABASE_URL: postgresql://policy_lab_approver:${POLICY_LAB_APPROVER_DB_PASSWORD:?set it in .env to use the lab profile}@postgres:5432/${POSTGRES_DB}
+      APPROVAL_ROLES_FILE: /app/config/approval_roles.toml
+      LAB_AUTO_APPROVE: ${LAB_AUTO_APPROVE:?set LAB_AUTO_APPROVE=yes to use the lab profile}
+      LAB_APPROVER_ID: ${LAB_APPROVER_ID:-lab-approver}
+    volumes:
+      - ./scripts/auto_approver.py:/lab/auto_approver.py:ro
+      - ./scripts/lab_approver.py:/lab/lab_approver.py:ro
+    depends_on:
+      policy-setup:
+        condition: service_completed_successfully
 
   # Runs scripts/test_client.py in the servers' own network. The servers publish no port, so
   # the host cannot call them directly; scripts/direct_check.sh runs this once per server.

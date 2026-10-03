@@ -28,6 +28,7 @@ from ai_gateway.policy import (
     AUDITOR_ROLE,
     DASHBOARD_VIEW,
     GATEWAY_ROLE,
+    LAB_APPROVER_ROLE,
     ROLES,
     SCHEMA,
 )
@@ -52,6 +53,8 @@ class PolicyPasswords:
     gateway: str
     approver: str
     auditor: str
+    lab_approver: str | None = None
+    """Set only for a lab stack: creates the lab approver role. Unset, the role is dropped."""
 
 
 async def setup_policy(owner_url: str, passwords: PolicyPasswords) -> None:
@@ -91,7 +94,10 @@ async def setup_policy(owner_url: str, passwords: PolicyPasswords) -> None:
         await _install(owner_url)
         await _ensure_approval_tables(connection)
         await grant_policy_access(connection)
-        await restrict_database_access(connection, list(ROLES))
+        await _set_up_lab_role(connection, passwords.lab_approver)
+        await restrict_database_access(
+            connection, [*ROLES, *([LAB_APPROVER_ROLE] if passwords.lab_approver else [])]
+        )
 
 
 async def _install(owner_url: str) -> None:
@@ -275,11 +281,32 @@ _MEMBERSHIPS = (
     " JOIN pg_roles parent ON parent.oid = m.roleid"
     " JOIN pg_roles member ON member.oid = m.member"
     " JOIN pg_roles grantor ON grantor.oid = m.grantor WHERE parent.rolname = ANY(%s)"
+    " AND member.rolname <> %s"  # the lab approver's membership is set up deliberately, below
 )
 
 
+async def _set_up_lab_role(connection: AsyncConnection, password: str | None) -> None:
+    """The lab approver: a login role that is a member of the approver role, so it has exactly the
+    approver's powers, and nothing else. Without a password it does not exist."""
+    name = sql.Identifier(LAB_APPROVER_ROLE)
+    if not password:
+        if await _role_exists(connection, LAB_APPROVER_ROLE):
+            await connection.execute(sql.SQL("DROP OWNED BY {}").format(name))
+            await connection.execute(sql.SQL("DROP ROLE {}").format(name))
+        return
+    await ensure_role(connection, password, LAB_APPROVER_ROLE)
+    await reset_role(connection, LAB_APPROVER_ROLE)
+    await connection.execute(sql.SQL("GRANT {} TO {}").format(sql.Identifier(APPROVER_ROLE), name))
+    logger.warning("the lab approver role exists: it decides requests as the approver role")
+
+
+async def _role_exists(connection: AsyncConnection, role: str) -> bool:
+    cursor = await connection.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (role,))
+    return await cursor.fetchone() is not None
+
+
 async def _memberships(connection: AsyncConnection) -> list[tuple[str, str, str]]:
-    cursor = await connection.execute(_MEMBERSHIPS, (list(ROLES),))
+    cursor = await connection.execute(_MEMBERSHIPS, (list(ROLES), LAB_APPROVER_ROLE))
     return [(str(a), str(b), str(c)) for a, b, c in await cursor.fetchall()]
 
 

@@ -16,6 +16,10 @@ GATEWAY_ROLE = "policy_gateway"
 """The gateway: appends audit records, asks for approvals and consumes approved ones."""
 APPROVER_ROLE = "policy_approver"
 """A person's tool (`gateway-approver`; Phase 6's lab approver): decides pending requests."""
+LAB_APPROVER_ROLE = "policy_lab_approver"
+"""Phase 6's lab approver, which approves automatically. It exists only while `policy-setup` is
+given its password (POLICY_LAB_APPROVER_DB_PASSWORD), as a member of the approver role, and the next
+setup without one drops it. Not one of ROLES: setup removes every membership in those."""
 AUDITOR_ROLE = "policy_auditor"
 """Reads the audit log, to verify it and to take anchors."""
 ROLES = (GATEWAY_ROLE, APPROVER_ROLE, AUDITOR_ROLE)

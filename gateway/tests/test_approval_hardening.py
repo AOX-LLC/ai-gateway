@@ -3,7 +3,10 @@
 import argparse
 import ast
 import importlib.util
+import os
 import re
+import shutil
+import subprocess
 import sys
 import tomllib
 from pathlib import Path
@@ -181,25 +184,88 @@ def _compose() -> dict[str, Any]:
     return loaded
 
 
-def test_no_compose_service_runs_or_enables_the_test_approver() -> None:
-    text = (ROOT / "compose.yaml").read_text()
+def test_the_test_approver_exists_in_compose_only_as_the_lab_service_behind_both_switches() -> None:
+    """Off in the default stack: it is the `lab` profile's one service, which will not start unless
+    LAB_AUTO_APPROVE is set (required, no default), and holds the lab database role's URL, which
+    needs the lab role's password. Nothing else in Compose names the switch or the script."""
+    services = _compose()["services"]
 
-    assert "LAB_AUTO_APPROVE" not in text
-    assert "auto_approver" not in text
-    assert "--approve-as" not in text
+    mentions = [
+        name
+        for name, service in services.items()
+        if "LAB_AUTO_APPROVE" in str(service) or "auto_approver" in str(service)
+    ]
+    assert mentions == ["lab-approver"]
+    lab = services["lab-approver"]
+    assert lab["profiles"] == ["lab"], "not started by `docker compose up`"
+    assert lab["environment"]["LAB_AUTO_APPROVE"].startswith("${LAB_AUTO_APPROVE:?"), "no default"
+    assert ":?" in lab["environment"]["POLICY_APPROVER_DATABASE_URL"], "needs the lab password"
+    assert "policy_lab_approver" in lab["environment"]["POLICY_APPROVER_DATABASE_URL"]
+    assert lab["volumes"] == [
+        "./scripts/auto_approver.py:/lab/auto_approver.py:ro",
+        "./scripts/lab_approver.py:/lab/lab_approver.py:ro",
+    ]
+    assert [n for n, s in services.items() if "lab" in s.get("profiles", [])] == ["lab-approver"]
+    assert "--approve-as" not in (ROOT / "compose.yaml").read_text()
+
+
+def test_without_both_switches_the_lab_service_will_not_start(tmp_path: Path) -> None:
+    """The lab profile alone is not enough: compose refuses to build the service without
+    LAB_AUTO_APPROVE, and without the lab role's password."""
+    if shutil.which("docker") is None:
+        pytest.skip("docker is not installed")
+    env_file = tmp_path / ".env"
+    subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "scripts" / "init_env.py"),
+            "--example",
+            str(ROOT / ".env.example"),
+            "--output",
+            str(env_file),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    base = {"PATH": os.environ["PATH"], "HOME": str(tmp_path)}
+
+    def config(**extra: str) -> subprocess.CompletedProcess[str]:
+        command = ["docker", "compose", "--env-file", str(env_file), "--profile", "lab"]
+        return subprocess.run(
+            [*command, "config", "-q"],
+            cwd=ROOT,
+            env={**base, **extra},
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    password = {"POLICY_LAB_APPROVER_DB_PASSWORD": "a-lab-password"}
+    neither = config()
+    only_the_role = config(**password)
+    only_the_switch = config(LAB_AUTO_APPROVE="yes")
+    both = config(**password, LAB_AUTO_APPROVE="yes")
+
+    assert neither.returncode != 0
+    assert only_the_role.returncode != 0
+    assert "LAB_AUTO_APPROVE" in only_the_role.stderr
+    assert only_the_switch.returncode != 0
+    assert "POLICY_LAB_APPROVER_DB_PASSWORD" in only_the_switch.stderr
+    assert both.returncode == 0, both.stderr
 
 
 def test_the_gateway_service_holds_no_approver_credential() -> None:
     services = _compose()["services"]
 
-    holders = [
+    holders = sorted(
         name
         for name, service in services.items()
         if "POLICY_APPROVER_DATABASE_URL" in str(service.get("environment", {}))
-    ]
-    assert holders == ["approver"], "only the person's tool, which is behind the tools profile"
+    )
+    assert holders == ["approver", "lab-approver"], "a person's tool, and the lab's: both opt-in"
     assert services["approver"]["profiles"] == ["tools"]
     assert "POLICY_APPROVER" not in str(services["gateway"].get("environment", {}))
+    assert "POLICY_LAB" not in str(services["gateway"].get("environment", {}))
 
 
 def test_the_images_do_not_contain_the_scripts() -> None:
