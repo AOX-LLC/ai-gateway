@@ -649,7 +649,8 @@ gateway role may call it) deletes them 7 days after they were stored.
 **`gateway-approver`** (`docker compose run --rm approver list | show | approve | reject | whoami`)
 is a person's tool, and it takes no name: who is deciding is read from the database session (the
 approver whose login it is, [below](#approver-identity-phase-5c-1)), who must be active and hold the
-request's role (`approver`). Before it shows a request as approvable, the tool
+request's role (`approver`). The tool checks the role; so does the gate, from the approver's record,
+so a login that approves in plain SQL without the role does not get its approval used. Before it shows a request as approvable, the tool
 parses the arguments back from the text it is about to display and hashes them with the tool name:
 the hash must be the one stored when the gateway asked, or it refuses (a request whose arguments
 were changed, or purged, can only be rejected). The arguments are shown as JSON with every
@@ -669,8 +670,12 @@ fails a `gateway.*` record, an `audit.gap`, an `approval.requested`, an `approva
 login (or, in a log from before the logins, the approver role) wrote: the approver role may append to
 the audit log, and without this a holder of its credential could add records the gateway never wrote
 under a chain that still verifies. A decision written by a login must also be that approver's: a
-decision by `aiden`'s login that says `human:tyler` decided fails. (agent-core a7's guard can enforce
-that when the decision is made; until 04 moves to it, this check is the control.)
+decision record written by `aiden`'s login that says `human:tyler` decided fails, and so does a
+second decision on one request. The shared approver role's decisions are accepted only before the
+first `approver.*` record (they are from before the logins). What is not checked is the approvals
+row: `resolved_by`, and the display name the dashboard shows from it, are what the deciding tool
+put there until agent-core a7's guard binds them to the login; the gate refuses an approval whose
+`resolved_by` does not agree with the audit record, but nothing else reads the two together.
 
 What is *not* here: the approval is consumed before the audit write-ahead, so a write refused because
 the audit log is down has used up its approval (the client asks again). `scripts/auto_approver.py`
@@ -685,15 +690,20 @@ login that wrote it, whatever the tool claims; `approvers.db_role` maps the logi
 
 | Command (`gateway-admin`, as the owner) | Does |
 | --- | --- |
-| `approver-add <id> --name N [--role R]` | Records the approver and makes `policy_approver_<id>` (`.` and `-` become `_`; ids are at most 40 characters). Prints the login and a generated password **once**; nothing keeps it. Adding an active approver again only updates the name and roles. |
+| `approver-add <id> --name N [--role R]` | Records the approver and makes `policy_approver_<id>` (`.` and `-` become `_`; ids are at most 40 characters). Prints the login and a generated password **once**; nothing the gateway runs keeps it (but it is on the
+admin container's stdout, which a non-default Docker log driver may keep, and `-e APPROVER_PASSWORD`
+is visible through `docker inspect`: prefer the prompt). Adding an active approver again only updates the name and roles. |
 | `approver-rotate <id>` | A new password, shown once; the old one stops working and the open sessions end. Makes the login again if its role is missing. |
 | `approver-remove <id>` | Ends the sessions and drops the login. The row stays, inactive and marked removed. |
 | `approver-list` | Each approver, their roles, state and login. |
 
 A login is `LOGIN` with no other attribute, `CONNECTION LIMIT 2`, a password valid for 90 days
 (`VALID UNTIL`; rotate before then), the 5 s idle-in-transaction limit, and exactly one membership:
-the approver role, `WITH INHERIT TRUE, SET FALSE`. Inheritance is how it connects and reads the
-queue; without `SET` it cannot `SET ROLE` to the group. The shared approver role itself is `NOLOGIN`
+the approver role, `WITH INHERIT TRUE, SET FALSE, ADMIN FALSE`. Inheritance is how it connects and
+reads the queue; without `SET` it cannot `SET ROLE` to the group, and without `ADMIN` it cannot
+grant the group on. Setup takes back any other role, any role that is a member of the login (it
+could `SET ROLE` to it and write as it) and any table privilege granted to it directly; the
+`CONNECT` that `ensure_role` gave it stays. The lab login is made the same way. The shared approver role itself is `NOLOGIN`
 and there is no shared approver password: `POLICY_APPROVER_DB_PASSWORD` is gone. The tool signs in
 with `APPROVER_LOGIN` and `APPROVER_PASSWORD` (or asks), never from `.env`.
 
@@ -701,8 +711,11 @@ with `APPROVER_LOGIN` and `APPROVER_PASSWORD` (or asks), never from `.env`.
 to the deciding login: one row per approver principal (`human:<id>`), one login per row, unique both
 ways; only the owner writes it (no other role can insert, update or delete); a row is never deleted,
 its login never changes once set, and a removed approver stays removed, so an id and a login are
-never given to anyone else. A trigger enforces the last three; the owner can disable triggers, as it
-can for the audit log's, and `audit-verify` does not look at this table.
+never given to anyone else. A trigger enforces the last three (delete, truncate, change of id or
+login, un-removing); the owner can disable triggers, as it can for the audit log's. `audit-verify`
+reads the login map through a view of this table, so the map is as trustworthy as the owner: the
+owner can rewrite the table and the map with it. What the hash chain does hold is the
+`approver.added` records, which name each login.
 
 **Audited.** `approver.added`, `.updated`, `.rotated` and `.removed` are appended to the audit log
 with the approver's id, their login and roles: never the password, never their name. They are
