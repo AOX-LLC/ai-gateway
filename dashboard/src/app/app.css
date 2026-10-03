@@ -1,0 +1,43 @@
+/* The dashboard's own rules, on top of the UI system's. Nothing here sets a colour of its own: every
+ * value is a --pui-* token. No inline styles are used anywhere (the CSP forbids them), so what the
+ * system's components do not cover is a class here. */
+
+:root {
+  --pui-font-sans: var(--font-plex-sans), system-ui, -apple-system, "Segoe UI", sans-serif;
+  --pui-font-mono: var(--font-plex-mono), ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --pui-font-display: var(--font-space-grotesk), var(--font-plex-sans), system-ui, sans-serif;
+}
+
+.kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.panel-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+@media (min-width: 1100px) { .panel-grid { grid-template-columns: minmax(0, 3fr) minmax(320px, 2fr); align-items: start; } }
+
+.range-seg { display: inline-flex; border: 1px solid var(--pui-border-control); border-radius: var(--pui-radius-sm); overflow: hidden; }
+.range-seg a { display: inline-flex; align-items: center; height: calc(var(--pui-control) - 2px); padding: 0 10px; font-size: 12px; font-weight: 500; color: var(--pui-text-secondary); background: var(--pui-surface); text-decoration: none; }
+.range-seg a + a { border-left: 1px solid var(--pui-border-control); }
+.range-seg a:hover { background: var(--pui-surface-muted); }
+.range-seg a[aria-current="true"] { background: var(--pui-text); color: var(--pui-bg); }
+.range-seg a:focus-visible { outline: var(--pui-focus-width) solid var(--pui-focus-ring); outline-offset: -2px; }
+
+.topbar-form { display: inline-flex; margin: 0; }
+.crumb-strong { font-weight: 600; color: var(--pui-text); }
+.stale { display: inline-flex; align-items: center; gap: 4px; }
+.panel-note { margin: 0; padding: 10px 16px; border-bottom: 1px solid var(--pui-border); font-size: 12px; color: var(--pui-text-muted); }
+.queue-item { display: flex; flex-direction: column; gap: 6px; padding: 12px 16px; border-bottom: 1px solid var(--pui-border); }
+.queue-item:last-child { border-bottom: 0; }
+.queue-item[data-pending="true"] { border-top: 1px dashed var(--pui-pending); }
+.queue-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.queue-meta { font-size: 12px; color: var(--pui-text-muted); }
+.queue-section { padding: 8px 16px; background: var(--pui-surface-muted); border-bottom: 1px solid var(--pui-border); }
+.cell-badges { display: inline-flex; align-items: center; gap: 6px; }
+.pager { display: inline-flex; gap: 8px; }
+
+/* Skeleton sizes, as classes. */
+.sk-h-14 { height: 14px; } .sk-h-30 { height: 30px; } .sk-h-36 { height: 36px; }
+.sk-w-30 { width: 30%; } .sk-w-40 { width: 40%; } .sk-w-60 { width: 60%; } .sk-w-90 { width: 90%; } .sk-w-100 { width: 100%; }
+.sk-stack { display: flex; flex-direction: column; gap: 10px; padding: 16px; }
+
+.signin-wrap { min-height: 100vh; display: grid; place-items: center; padding: 24px; background: var(--pui-bg); }
+.signin-card { width: 100%; max-width: 360px; }
+.signin-form { display: flex; flex-direction: column; gap: 16px; padding: 16px; }
+.signin-brand { display: flex; align-items: center; gap: 10px; padding: 16px 16px 0; }
