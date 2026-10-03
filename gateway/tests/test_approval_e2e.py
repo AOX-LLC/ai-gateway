@@ -208,7 +208,7 @@ async def test_the_gateways_own_role_cannot_approve_even_with_a_human_principal(
         with pytest.raises((errors.RaiseException, errors.InsufficientPrivilege)):
             await connection.execute(
                 b"UPDATE agent_core_approvals SET status = 'approved', decision = 'approve',"
-                b" resolved_by = 'human:x', resolved_at = now()::text WHERE id = %s",
+                b" resolved_by = 'human:x', resolved_at = to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') WHERE id = %s",  # noqa: E501 - a3's canonical timestamp text
                 (pending.approval_id,),
             )
     assert (

@@ -74,6 +74,11 @@ async def setup_policy(owner_url: str, passwords: PolicyPasswords) -> None:
         await ensure_schema(connection, SCHEMA)
         # The installer refuses roles that are members of each other.
         await _revoke_memberships(connection)
+        # Install first: it checks what it needs (the roles, the audit evidence of approvals) and
+        # raises before changing anything it cannot undo. Only then are the roles' grants cleared
+        # and the same, idempotent install run again to grant each exactly its layout, so a setup
+        # that cannot install never leaves the roles with nothing.
+        await _install(owner_url)
         await _clear_layout_grants(connection)
         await _install(owner_url)
         await _ensure_approval_tables(connection)

@@ -1,5 +1,6 @@
 """The policy schema: what each role can do to the audit log and the approval queue."""
 
+from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
 
 import anyio
@@ -13,7 +14,7 @@ from aox_agent_core.approvals import (
     SQLApprovalQueue,
 )
 from aox_agent_core.audit import AuditEvent
-from aox_agent_core.errors import ApprovalError, ApprovalPayloadMismatchError
+from aox_agent_core.errors import ApprovalError, ApprovalPayloadMismatchError, ConfigError
 from aox_agent_core.storage import open_database
 from psycopg import errors
 from pydantic import SecretStr
@@ -39,6 +40,9 @@ pytestmark = [pytest.mark.integration, pytest.mark.anyio]
 
 _REFUSED = (errors.RaiseException, errors.InsufficientPrivilege)
 """a3 refuses in two layers: column grants (InsufficientPrivilege) and the guard trigger."""
+# ruff: noqa: E501, S608 - a3 accepts only its canonical timestamp text (long); the SQL is fixed text
+TS = "to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')"
+"""A timestamp the way agent-core writes it: UTC text with six decimals and a Z."""
 PAYLOAD = {"ticket_id": "TKT-000001", "status": "closed"}
 ACTION = "tickets__change_status"
 CLIENT = Principal(id=f"client:{uuid4()}", kind=PrincipalKind.AGENT)
@@ -238,7 +242,7 @@ async def test_the_gateway_cannot_decide_a_request_by_any_route(
         with pytest.raises(_REFUSED):
             await connection.execute(
                 "UPDATE agent_core_approvals SET status = 'approved', decision = 'approve',"
-                " resolved_by = 'human:x', resolved_at = now()::text WHERE id = %s",
+                " resolved_by = 'human:x', resolved_at = to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') WHERE id = %s",
                 (str(request.id),),  # type: ignore[attr-defined]
             )
 
@@ -250,8 +254,8 @@ async def test_nobody_can_create_a_request_that_is_already_decided(
         "INSERT INTO agent_core_approvals (id, action, summary, payload_sha256, requested_by,"
         " required_role, created_at, expires_at, status, decision, resolved_by, resolved_at)"
         " VALUES (gen_random_uuid()::text, 'a', 's', repeat('a', 64), 'client:b', 'approver',"
-        " now()::text, (now() + interval '1 hour')::text, 'approved', 'approve', 'human:x',"
-        " now()::text)"
+        " to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'), to_char((now() + interval '1 hour') AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'), 'approved', 'approve', 'human:x',"
+        " to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'))"
     )
     for url in (policy_gateway_url, test_database_url):
         async with await _as(url) as connection:
@@ -275,12 +279,12 @@ async def test_the_approver_cannot_create_requests_or_use_one(
                 b"INSERT INTO agent_core_approvals (id, action, summary, payload_sha256,"
                 b" requested_by, required_role, created_at, expires_at, status)"
                 b" VALUES (gen_random_uuid()::text,"
-                b" 'a', 's', repeat('a', 64), 'c', 'approver', now()::text,"
-                b" (now() + interval '1 hour')::text, 'pending')"
+                b" 'a', 's', repeat('a', 64), 'c', 'approver', to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'),"
+                b" to_char((now() + interval '1 hour') AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'), 'pending')"
             )
         with pytest.raises(_REFUSED):
             await connection.execute(
-                "UPDATE agent_core_approvals SET status = 'consumed', consumed_at = now()::text"
+                "UPDATE agent_core_approvals SET status = 'consumed', consumed_at = to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')"
                 " WHERE id = %s",
                 (str(request.id),),  # type: ignore[attr-defined]
             )
@@ -368,7 +372,7 @@ async def _run(url: str, statement: str, *params: object) -> None:
         "action = 'tickets__assign'",
         "requested_by = 'client:someone-else'",
         "required_role = 'nobody'",
-        "expires_at = (now() + interval '9 days')::text",
+        "expires_at = to_char((now() + interval '9 days') AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')",
         "reason = 'because'",
     ],
 )
@@ -380,7 +384,7 @@ async def test_the_gateway_can_consume_an_approval_and_change_nothing_else_in_th
     with pytest.raises(_REFUSED):
         await _run(
             policy_gateway_url,
-            "UPDATE agent_core_approvals SET status = 'consumed', consumed_at = now()::text,"  # noqa: S608
+            "UPDATE agent_core_approvals SET status = 'consumed', consumed_at = to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'),"
             f" {assignment} WHERE id = %s",
             str(request.id),  # type: ignore[attr-defined]
         )
@@ -395,7 +399,7 @@ async def test_the_gateway_cannot_consume_an_approval_that_has_expired(
     with pytest.raises(_REFUSED):
         await _run(
             policy_gateway_url,
-            "UPDATE agent_core_approvals SET status = 'consumed', consumed_at = now()::text"
+            "UPDATE agent_core_approvals SET status = 'consumed', consumed_at = to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')"
             " WHERE id = %s",
             str(request.id),  # type: ignore[attr-defined]
         )
@@ -407,13 +411,16 @@ async def test_the_gateway_cannot_consume_an_approval_that_has_expired(
         ("payload_sha256", "repeat('b', 64)"),  # approve something other than what was asked
         ("action", "'tickets__assign'"),
         ("requested_by", "'human:aiden'"),  # so a request can look self-made
-        ("expires_at", "(now() + interval '9 days')::text"),
+        (
+            "expires_at",
+            "to_char((now() + interval '9 days') AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')",
+        ),
         ("required_role", "'nobody'"),
         ("decision", "'reject'"),  # a decision that contradicts the status
         ("decision", "NULL"),  # no decision at all: NULL must not slip past the comparison
         ("resolved_by", "NULL"),
         ("resolved_at", "NULL"),
-        ("consumed_at", "now()::text"),
+        ("consumed_at", "to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')"),
     ],
 )
 async def test_the_approver_decides_a_request_and_changes_nothing_else_in_the_same_update(
@@ -424,7 +431,7 @@ async def test_the_approver_decides_a_request_and_changes_nothing_else_in_the_sa
         "status": "'approved'",
         "decision": "'approve'",
         "resolved_by": "'human:x'",
-        "resolved_at": "now()::text",
+        "resolved_at": "to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')",
         column: value,  # the one thing that should not be allowed
     }
     changes = ", ".join(f"{name} = {expression}" for name, expression in assignments.items())
@@ -432,9 +439,32 @@ async def test_the_approver_decides_a_request_and_changes_nothing_else_in_the_sa
     with pytest.raises(_REFUSED):
         await _run(
             policy_approver_url,
-            f"UPDATE agent_core_approvals SET {changes} WHERE id = %s",  # noqa: S608
+            f"UPDATE agent_core_approvals SET {changes} WHERE id = %s",
             str(request.id),  # type: ignore[attr-defined]
         )
+
+
+async def test_the_statements_the_attack_tests_alter_are_valid_when_nothing_is_altered(
+    policy: None, policy_gateway_url: str, policy_approver_url: str
+) -> None:
+    """The control for every refusal above: the same statements, with nothing wrong in them,
+    succeed. A refusal then comes from the clause under test, not from a malformed statement."""
+    request = await _pending(policy_gateway_url)
+    await _run(
+        policy_approver_url,
+        "UPDATE agent_core_approvals SET status = 'approved', decision = 'approve',"
+        f" resolved_by = 'human:x', resolved_at = {TS} WHERE id = %s",
+        str(request.id),  # type: ignore[attr-defined]
+    )
+    await _run(
+        policy_gateway_url,
+        f"UPDATE agent_core_approvals SET status = 'consumed', consumed_at = {TS} WHERE id = %s",
+        str(request.id),  # type: ignore[attr-defined]
+    )
+
+    stored = await _queue(policy_approver_url).get(request.id)  # type: ignore[attr-defined]
+    assert stored.status.value == "consumed"
+    assert stored.resolved_by == "human:x"
 
 
 async def test_the_approver_cannot_decide_a_request_twice_or_after_it_expired(
@@ -455,7 +485,7 @@ async def test_the_approver_cannot_decide_a_request_twice_or_after_it_expired(
         await _run(
             policy_approver_url,
             "UPDATE agent_core_approvals SET status = 'approved', decision = 'approve',"
-            " resolved_by = 'human:x', resolved_at = now()::text WHERE id = %s",
+            " resolved_by = 'human:x', resolved_at = to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') WHERE id = %s",
             str(expired.id),  # type: ignore[attr-defined]
         )
 
@@ -470,40 +500,123 @@ async def test_an_upsert_cannot_decide_a_request_either(
             policy_gateway_url,
             "INSERT INTO agent_core_approvals (id, action, summary, payload_sha256, requested_by,"
             " required_role, created_at, expires_at, status) VALUES (%s, 'a', 's', repeat('a', 64),"
-            " 'c', 'approver', now()::text, (now() + interval '1 hour')::text, 'pending')"
+            " 'c', 'approver', to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'), to_char((now() + interval '1 hour') AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'), 'pending')"
             " ON CONFLICT (id) DO UPDATE SET status = 'approved', decision = 'approve',"
-            " resolved_by = 'human:x', resolved_at = now()::text",
+            " resolved_by = 'human:x', resolved_at = to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')",
             str(request.id),  # type: ignore[attr-defined]
         )
 
 
-async def test_a_role_that_only_inherits_a_policy_role_cannot_change_an_approval_and_loses_it(
+async def _login_member_of(
+    owner_url: str, parent: str, name: str = "policy_intruder"
+) -> tuple[str, psycopg.AsyncConnection]:
+    """A role that can log in and is a member of `parent`, and a connection as that role."""
+    async with await _as(owner_url) as connection:
+        await connection.execute(f"DROP OWNED BY {name}".encode()) if await _exists(
+            connection, name
+        ) else None
+        await connection.execute(f"DROP ROLE IF EXISTS {name}".encode())
+        await connection.execute(f"CREATE ROLE {name} LOGIN PASSWORD 'intruder-pw'".encode())
+        await connection.execute(f"GRANT {parent} TO {name}".encode())
+    parts = urlsplit(owner_url)
+    netloc = f"{name}:intruder-pw@{parts.hostname}:{parts.port}"
+    return name, await psycopg.AsyncConnection.connect(
+        policy_url(urlunsplit(parts._replace(netloc=netloc))), autocommit=True
+    )
+
+
+async def _exists(connection: psycopg.AsyncConnection, role: str) -> bool:
+    cursor = await connection.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (role,))
+    return await cursor.fetchone() is not None
+
+
+async def test_a_member_of_the_gateway_role_is_the_requester_side_and_can_never_approve(
     policy: None, policy_gateway_url: str, test_database_url: str
 ) -> None:
-    """The guard keys on the current user, which for a member is the member and not the role it
-    inherits from; it refuses roles it does not know, and setup removes such memberships."""
+    """a3 counts a member of a policy role as that role's side (3a refused such a member by name).
+    A member of the requester role has the requester's powers and not the approver's: it cannot
+    approve. `policy-setup` removes the membership on its next run (tested below)."""
     request = await _pending(policy_gateway_url)
-    async with await _as(test_database_url) as connection:
-        await connection.execute("DROP ROLE IF EXISTS policy_intruder")
-        await connection.execute("CREATE ROLE policy_intruder NOLOGIN")
-        await connection.execute("GRANT policy_gateway TO policy_intruder")
-        await connection.execute("SET ROLE policy_intruder")
+    _, connection = await _login_member_of(test_database_url, "policy_gateway")
+    async with connection:
         with pytest.raises(_REFUSED):
             await connection.execute(
-                b"UPDATE agent_core_approvals SET status = 'approved', decision = 'approve',"
-                b" resolved_by = 'human:x', resolved_at = now()::text WHERE id = %s",
+                "UPDATE agent_core_approvals SET status = 'approved', decision = 'approve',"
+                f" resolved_by = 'human:x', resolved_at = {TS} WHERE id = %s",
                 (str(request.id),),  # type: ignore[attr-defined]
             )
-        await connection.execute("RESET ROLE")
-
-        await grant_policy_access(connection)
-
-        cursor = await connection.execute(
-            "SELECT count(*) FROM pg_auth_members m JOIN pg_roles r ON r.oid = m.member"
-            " WHERE r.rolname = 'policy_intruder'"
+        await connection.execute(  # the control: the requester's own change is allowed
+            f"UPDATE agent_core_approvals SET status = 'cancelled', closed_at = {TS} WHERE id = %s",
+            (str(request.id),),  # type: ignore[attr-defined]
         )
-        assert await cursor.fetchone() == (0,)
-        await connection.execute("DROP ROLE policy_intruder")
+    stored = await _queue(policy_gateway_url).get(request.id)  # type: ignore[attr-defined]
+    assert stored.status.value == "cancelled"
+    await _drop_role(test_database_url, "policy_intruder")
+
+
+async def test_a_member_of_the_approver_role_holds_its_privileges_until_setup_removes_the_membership(
+    policy: None,
+    policy_gateway_url: str,
+    policy_approver_url: str,
+    policy_auditor_url: str,
+    test_database_url: str,
+) -> None:
+    """The gap in the other direction, stated as it is: membership of the approver role is the
+    approver's capability (3a would have let such a member `SET ROLE` to the approver and do the
+    same). What bounds it is that setup removes every membership in the policy roles, each run."""
+    _, connection = await _login_member_of(test_database_url, "policy_approver")
+    async with connection:
+        cursor = await connection.execute("SELECT count(*) FROM agent_core_approvals")
+        assert await cursor.fetchone() == (0,), "it inherits the approver's rights"
+    await _setup(test_database_url, policy_gateway_url, policy_approver_url, policy_auditor_url)
+
+    # Its only way into the database was the role it was a member of: without it, it cannot connect.
+    parts = urlsplit(test_database_url)
+    netloc = f"policy_intruder:intruder-pw@{parts.hostname}:{parts.port}"
+    with pytest.raises(psycopg.OperationalError, match="CONNECT"):
+        await psycopg.AsyncConnection.connect(policy_url(urlunsplit(parts._replace(netloc=netloc))))
+    await _drop_role(test_database_url, "policy_intruder")
+
+
+async def test_an_approval_that_plain_sql_made_stops_setup_and_leaves_the_roles_their_grants(
+    policy: None,
+    policy_gateway_url: str,
+    policy_approver_url: str,
+    policy_auditor_url: str,
+    test_database_url: str,
+) -> None:
+    """a3's installer refuses to go on when an approved request has no approver's decision on
+    record and the audit log holds none to compare with. That must not leave the gateway and the
+    approver with no access: the installer runs before their grants are cleared."""
+    request = await _pending(policy_gateway_url)
+    _, connection = await _login_member_of(test_database_url, "policy_approver")
+    async with connection:
+        await connection.execute(
+            "UPDATE agent_core_approvals SET status = 'approved', decision = 'approve',"
+            f" resolved_by = 'human:x', resolved_at = {TS} WHERE id = %s",
+            (str(request.id),),  # type: ignore[attr-defined]
+        )
+    await _drop_role(test_database_url, "policy_intruder")
+
+    with pytest.raises(ConfigError, match=r"approval\.resolved"):
+        await _setup(test_database_url, policy_gateway_url, policy_approver_url, policy_auditor_url)
+
+    stored = await _queue(policy_gateway_url).get(request.id)  # type: ignore[attr-defined]
+    assert stored.status.value == "approved", "nothing was changed"
+    await _queue(policy_approver_url).list_pending(HUMAN)  # the roles can still work
+
+
+async def _setup(owner: str, gateway: str, approver: str, auditor: str) -> None:
+    await setup_policy(
+        owner, PolicyPasswords(password_of(gateway), password_of(approver), password_of(auditor))
+    )
+
+
+async def _drop_role(owner_url: str, name: str) -> None:
+    async with await _as(owner_url) as connection:
+        if await _exists(connection, name):
+            await connection.execute(f"DROP OWNED BY {name}".encode())
+            await connection.execute(f"DROP ROLE {name}".encode())
 
 
 async def test_a_membership_granted_by_another_role_is_revoked_and_one_that_stays_is_an_error(
@@ -544,7 +657,7 @@ async def test_a_role_that_only_inherits_the_gateway_role_cannot_create_a_reques
                     b"INSERT INTO agent_core_approvals (id, action, summary, payload_sha256,"
                     b" requested_by, required_role, created_at, expires_at, status)"
                     b" VALUES (gen_random_uuid()::text, 'a', 's', repeat('a', 64), 'c',"
-                    b" 'approver', now()::text, (now() + interval '1 hour')::text, 'pending')"
+                    b" 'approver', to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'), to_char((now() + interval '1 hour') AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'), 'pending')"
                 )
         finally:
             await connection.execute("RESET ROLE")
