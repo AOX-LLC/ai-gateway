@@ -188,6 +188,26 @@ def test_a_full_buffer_drops_the_oldest_row_and_counts_it() -> None:
     assert buffer.dropped_total == 2
 
 
+def test_a_flood_of_failed_logins_cannot_push_decision_records_out_of_the_buffer() -> None:
+    """Anyone who can reach the gateway can fail authentication as fast as they like."""
+    buffer = TelemetryBuffer(10, noisy_capacity=3)
+    buffer.put(*(Row("requests", {"n": n}) for n in range(10)))
+
+    buffer.put(*(Row("auth_failures", {"n": n}) for n in range(1000)))
+
+    taken = buffer.take(100)
+    assert [row.values["n"] for row in taken if row.table == "requests"] == list(range(10))
+    assert [row.values["n"] for row in taken if row.table == "auth_failures"] == [997, 998, 999]
+    assert buffer.dropped_total == 997
+
+
+def test_decision_records_are_taken_before_auth_failures() -> None:
+    buffer = TelemetryBuffer(10, noisy_capacity=10)
+    buffer.put(Row("auth_failures", {}), Row("requests", {}), Row("spans", {}))
+
+    assert [row.table for row in buffer.take(10)] == ["requests", "spans", "auth_failures"]
+
+
 def test_take_returns_the_oldest_rows_first_and_removes_them() -> None:
     buffer = TelemetryBuffer(10)
     buffer.put(*(Row("requests", {"n": n}) for n in range(5)))
