@@ -71,7 +71,7 @@ describe("the proxy", () => {
   it("sets the security headers, and no caching, on a redirect as on a page", async () => {
     for (const response of [await call("/"), await call("/signin")]) {
       expect(response.headers.get("x-content-type-options")).toBe("nosniff");
-      expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+      expect(response.headers.get("referrer-policy")).toBe("same-origin");
       expect(response.headers.get("x-frame-options")).toBe("DENY");
       expect(response.headers.get("cache-control")).toBe("no-store");
       expect(response.headers.get("cross-origin-opener-policy")).toBe("same-origin");

@@ -52,13 +52,25 @@ def settle(page: Page) -> None:
 def sign_in(page: Page, base: str, password: str) -> None:
     page.goto(f"{base}/signin")
     page.fill("#password", password)
+    answers: list[str] = []
+    page.on(
+        "response",
+        lambda r: (
+            answers.append(f"{r.status} {r.url} -> {r.headers.get('location', '')}")
+            if "/api/" in r.url
+            else None
+        ),
+    )
     page.click("button[type=submit]")
     try:
         page.wait_for_url(f"{base}/")
     except PlaywrightTimeoutError:
         alert = page.locator("[role=alert]")
         shown = alert.first.inner_text() if alert.count() else "no message"
-        sys.exit(f"screenshots: sign-in did not reach the overview; at {page.url} ({shown})")
+        sys.exit(
+            "screenshots: sign-in did not reach the overview; "
+            f"at {page.url} ({shown}); answers: {answers}"
+        )
 
 
 def main() -> None:

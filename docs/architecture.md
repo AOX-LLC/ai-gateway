@@ -1086,7 +1086,8 @@ Content-Security-Policy on every answer (`default-src 'none'`; scripts only `'se
 `'strict-dynamic'`; styles from `'self'` with the nonce and **no inline style attributes at all**, so
 there is no `style=` anywhere in the UI; `connect-src`, `img-src`, `font-src` `'self'`; `form-action`
 `'self'`; `frame-ancestors`, `base-uri` and `object-src` none) with `X-Content-Type-Options`,
-`Referrer-Policy: no-referrer`, `X-Frame-Options`, `Cross-Origin-Opener-Policy` and
+`Referrer-Policy: same-origin` (not `no-referrer`: a browser sends `Origin: null` on a form POST under
+`no-referrer`, and the same-origin check on sign-in would refuse the real form), `X-Frame-Options`, `Cross-Origin-Opener-Policy` and
 `Cross-Origin-Resource-Policy`, a `Permissions-Policy` that turns everything off, and
 `Cache-Control: no-store`. It sends anyone without a valid session to `/signin` (an API call gets 401);
 the sign-in page, its form and `/healthz` (which reads nothing) are open. It is the first gate, not the
