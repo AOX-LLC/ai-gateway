@@ -64,9 +64,13 @@ class LoginThrottle:
             return max(0.0, self._all_failures[0] + self._config.window_s - now)
         return None
 
-    def record_failure(self, lookup_id: str | None) -> None:
+    def record_failure(self, lookup_id: str | None, *, counts_toward_ceiling: bool = True) -> None:
+        """`counts_toward_ceiling` is False for a request that named no token at all: it costs
+        nothing to refuse, MCP clients probe without one first, and a flood of them must not shut
+        the gateway to the clients that have logged in."""
         now = self._clock()
-        self._all_failures.append(now)
+        if counts_toward_ceiling:
+            self._all_failures.append(now)
         self._trim_all(now)
         if lookup_id is None:
             return  # nothing to count it against: only the ceiling sees it

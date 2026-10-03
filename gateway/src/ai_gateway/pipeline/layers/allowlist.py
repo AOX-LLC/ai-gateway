@@ -1,4 +1,4 @@
-"""The allowlist layer: per-client rules on the values of a tool's arguments.
+r"""The allowlist layer: per-client rules on the values of a tool's arguments.
 
 Scope decides which tools a client may call; approval puts a person in front of a write. This layer
 decides what a client may *say* to a tool, for the cases where a person's yes should not be enough
@@ -14,10 +14,15 @@ pattern the whole value must match, a length, a numeric range. They never rewrit
     one_of = ["low", "normal", "high"]    # and/or pattern, max_length, minimum, maximum
     required = false                      # true: the argument must be present
 
+A pattern is compiled in ASCII mode: `\d` is 0-9 and nothing else, and case folding does not reach
+beyond ASCII. A value that is NaN or infinite fails any numeric rule.
+
 A call to a tool with no rule is not constrained by this layer. When several rules cover a call,
 every one must pass. A mistake in the file stops the gateway from starting.
 """
 
+import logging
+import math
 import re
 import tomllib
 from collections.abc import Mapping, Sequence
@@ -35,7 +40,11 @@ from ai_gateway.pipeline.types import (
     Verdict,
 )
 
+logger = logging.getLogger(__name__)
+
 POLICY_BLOCK_MESSAGE = "Request blocked by gateway policy."
+_CLIENT_NAME = re.compile(r"[a-z][a-z0-9-]{1,62}")
+_EXPOSED_TOOL = re.compile(r"[a-z][a-z0-9]*(?:_[a-z0-9]+)*__[a-z][a-z0-9_]*")
 _RULE_KEYS = frozenset(
     {
         "name",
@@ -96,6 +105,8 @@ class AllowlistRule:
         if self.minimum is not None or self.maximum is not None:
             if isinstance(value, bool) or not isinstance(value, int | float):
                 return True
+            if isinstance(value, float) and not math.isfinite(value):
+                return True  # NaN is neither below nor above anything: it would pass a range
             if (self.minimum is not None and value < self.minimum) or (
                 self.maximum is not None and value > self.maximum
             ):
@@ -132,6 +143,10 @@ def _parse_rule(entry: object, number: int) -> AllowlistRule:
         if not isinstance(entry.get(key), str) or not entry[key]:
             raise AllowlistError(f"{where} needs a non-empty string {key!r}")
     where = f"rule {entry['name']!r}"
+    if entry["client"] != "*" and not _CLIENT_NAME.fullmatch(entry["client"]):
+        raise AllowlistError(f"{where}: client {entry['client']!r} is not a client name or '*'")
+    if not _EXPOSED_TOOL.fullmatch(entry["tool"]):
+        raise AllowlistError(f"{where}: tool {entry['tool']!r} is not a <namespace>__<tool> name")
     one_of = entry.get("one_of")
     if one_of is not None and (not isinstance(one_of, list) or not one_of):
         raise AllowlistError(f"{where}: one_of must be a non-empty list")
@@ -140,7 +155,7 @@ def _parse_rule(entry: object, number: int) -> AllowlistRule:
         if not isinstance(entry["pattern"], str):
             raise AllowlistError(f"{where}: pattern must be a string")
         try:
-            pattern = re.compile(entry["pattern"])
+            pattern = re.compile(entry["pattern"], re.ASCII)
         except re.error as error:
             raise AllowlistError(f"{where}: pattern does not compile: {error}") from error
     max_length = entry.get("max_length")
@@ -191,6 +206,12 @@ class AllowlistLayer(BaseLayer):
         arguments = call.arguments
         for rule in self._rules:
             if rule.covers(ctx.client.name, call.exposed_name) and rule.violated_by(arguments):
-                # Which rule, and what it wanted, is for the operator's log, not the client.
+                # Which rule is for the operator's log, not the client. Never the value.
+                logger.warning(
+                    "allowlist rule %r refused request %s from %s",
+                    rule.name,
+                    ctx.request_id,
+                    ctx.client.name,
+                )
                 return Deny(DenyCode.ALLOWLIST_VIOLATION, POLICY_BLOCK_MESSAGE)
         return ALLOW

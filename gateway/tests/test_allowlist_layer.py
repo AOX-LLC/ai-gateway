@@ -201,3 +201,76 @@ def test_the_shipped_allowlist_loads_and_holds_the_urgent_ticket_rule() -> None:
     rules = load_allowlist(ROOT / "config" / "allowlist.toml")
 
     assert [rule.name for rule in rules] == ["support-bot-no-urgent-tickets"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+async def test_a_value_that_is_not_a_finite_number_fails_a_range(
+    tmp_path: Path, value: float
+) -> None:
+    """NaN is neither below nor above anything, so a bare comparison lets it through a range."""
+    layer = _layer(
+        tmp_path,
+        "[[rule]]\nname = 'n'\nclient = '*'\ntool = 'tickets__list_tickets'\n"
+        "argument = 'limit'\nminimum = 1\nmaximum = 50\n",
+    )
+
+    assert isinstance(
+        await layer.before_call(_ctx(), _call("tickets__list_tickets", limit=value)), Deny
+    )
+    assert await layer.before_call(_ctx(), _call("tickets__list_tickets", limit=5)) is ALLOW
+
+
+@pytest.mark.anyio
+async def test_a_pattern_means_ascii_digits_and_letters_and_nothing_wider(tmp_path: Path) -> None:
+    layer = _layer(
+        tmp_path,
+        r"""
+[[rule]]
+name = "z"
+client = "*"
+tool = "tickets__assign"
+argument = "zip"
+pattern = '\d{5}'
+""",
+    )
+
+    assert await layer.before_call(_ctx(), _call("tickets__assign", zip="12345")) is ALLOW
+    arabic_indic = "\u0661\u0662\u0663\u0664\u0665"
+    refused = await layer.before_call(_ctx(), _call("tickets__assign", zip=arabic_indic))
+    assert isinstance(refused, Deny)
+
+
+_HEAD_ANY = "[[rule]]\nname = 'a'\nclient = '*'\n"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "[[rule]]\nname = 'a'\nclient = 'Harborline-Support-Bot'\ntool = 'tickets__x'\n"
+        "argument = 'x'\nmax_length = 1\n",  # a typo that would never match
+        _HEAD_ANY + "tool = 'create_ticket'\nargument = 'x'\nmax_length = 1\n",
+        _HEAD_ANY + "tool = 'Tickets__create'\nargument = 'x'\nmax_length = 1\n",
+    ],
+)
+def test_a_client_or_tool_that_could_never_match_stops_startup(tmp_path: Path, text: str) -> None:
+    path = tmp_path / "allowlist.toml"
+    path.write_text(text)
+
+    with pytest.raises(AllowlistError):
+        load_allowlist(path)
+
+
+@pytest.mark.anyio
+async def test_the_rule_that_refused_a_call_is_logged_by_name_and_never_its_value(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    layer = _layer(tmp_path, RULE)
+    ctx = _ctx()
+
+    with caplog.at_level("WARNING", logger="ai_gateway.pipeline.layers.allowlist"):
+        await layer.before_call(ctx, _call(priority="urgent-secret-value"))
+
+    assert "'r'" in caplog.text
+    assert str(ctx.request_id) in caplog.text
+    assert "urgent-secret-value" not in caplog.text

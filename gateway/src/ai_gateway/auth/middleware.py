@@ -73,7 +73,9 @@ class BearerAuthMiddleware:
         )
         if isinstance(result, AuthFailure):
             if self._throttle is not None:
-                self._throttle.record_failure(lookup_id)
+                self._throttle.record_failure(
+                    lookup_id, counts_toward_ceiling=result.reason is not AuthFailureReason.MISSING
+                )
             await self._emit_failure(result, scope)
             await _send_unauthorized(send, token_was_presented=presented is not None)
             return

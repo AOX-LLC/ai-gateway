@@ -126,6 +126,7 @@ def create_app(settings: GatewaySettings, events: EventSink | None = None) -> Fa
                         window_s=settings.login_window_s,
                         lockout_s=settings.login_lockout_s,
                         global_ceiling=settings.login_global_ceiling,
+                        known_good_ttl_s=settings.login_known_good_ttl_s,
                     )
                 ),
             )

@@ -479,6 +479,11 @@ def main(argv: Sequence[str] | None = None) -> None:
     args = _parser().parse_args(argv)
     if args.calls < 1:
         sys.exit("simulate_traffic: --calls must be at least 1")
+    if args.verify and args.duration:
+        sys.exit(
+            "simulate_traffic: --verify expects the run to be quick (the login lockout lasts a"
+            " minute); use --duration without --verify"
+        )
     if not args.no_writes and not args.approve_as:
         sys.exit("simulate_traffic: writes wait for a person; use --approve-as or --no-writes")
     plan = build_plan(args.seed, args.calls, writes=not args.no_writes)

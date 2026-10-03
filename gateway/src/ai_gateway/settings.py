@@ -19,14 +19,18 @@ class GatewaySettings(ServiceSettings):
     port: Annotated[int, Field(ge=1, le=65535)] = 4401
     pipeline_file: Path = Path("config/pipeline.toml")
     approval_roles_file: Path = Path("config/approval_roles.toml")
-    allowlist_file: Path = Path("config/allowlist.toml")
-    rate_limits_file: Path = Path("config/rate_limits.toml")
     """The role that must approve each write tool. Read at startup with a policy database."""
+    allowlist_file: Path = Path("config/allowlist.toml")
+    """Per-client value rules on tool arguments (the allowlist layer)."""
+    rate_limits_file: Path = Path("config/rate_limits.toml")
+    """Token buckets per client for reads, writes and single tools (the rate limit layer)."""
     session_idle_timeout_s: Annotated[float, Field(gt=0)] = 900.0
     login_failures_per_id: Annotated[int, Field(ge=1)] = 5
     """Failed logins for one token id, within the window, before that id is refused."""
     login_window_s: Annotated[float, Field(gt=0)] = 60.0
     login_lockout_s: Annotated[float, Field(gt=0)] = 60.0
+    login_known_good_ttl_s: Annotated[float, Field(gt=0)] = 900.0
+    """Past the ceiling, a token id is still served if it logged in successfully this recently."""
     login_global_ceiling: Annotated[int, Field(ge=1)] = 200
     """Failures of any kind within the window after which only recently working ids are served."""
     max_sessions: Annotated[int, Field(ge=1)] = 1000

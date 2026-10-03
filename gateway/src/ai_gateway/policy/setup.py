@@ -330,10 +330,16 @@ async def _set_up_lab_role(connection: AsyncConnection, password: str | None) ->
     """The lab approver: a login role that is a member of the approver role, so it has exactly the
     approver's powers, and nothing else. Without a password it does not exist."""
     name = sql.Identifier(LAB_APPROVER_ROLE)
+    # Rebuilt every time, not reset: a grant, a table privilege or a role made a member of it by
+    # hand disappears with it, and its running sessions end. The role holds nothing worth keeping.
+    if await _role_exists(connection, LAB_APPROVER_ROLE):
+        await connection.execute(
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = %s",
+            (LAB_APPROVER_ROLE,),
+        )
+        await connection.execute(sql.SQL("DROP OWNED BY {}").format(name))
+        await connection.execute(sql.SQL("DROP ROLE {}").format(name))
     if not password:
-        if await _role_exists(connection, LAB_APPROVER_ROLE):
-            await connection.execute(sql.SQL("DROP OWNED BY {}").format(name))
-            await connection.execute(sql.SQL("DROP ROLE {}").format(name))
         return
     await ensure_role(connection, password, LAB_APPROVER_ROLE, POLICY_IDLE_IN_TRANSACTION_MS)
     await reset_role(connection, LAB_APPROVER_ROLE)

@@ -354,8 +354,14 @@ async def _audit_anchor(database_url: str, args: argparse.Namespace) -> None:
 async def _audit_verify(database_url: str, args: argparse.Namespace) -> None:
     log = _audit_log(database_url)
     anchors = read_anchors(args.anchors) if args.anchors else []
-    head = await verify_with_anchors(log, anchors)
+    lab_decisions: list[int] = []
+    head = await verify_with_anchors(log, anchors, lab_decisions=lab_decisions)
     print(f"ok: {head.seq} records chain correctly and match {len(anchors)} anchors")
+    if lab_decisions:
+        print(
+            f"note: {len(lab_decisions)} approval decision(s) were made by the lab approver role"
+            " (automatic): this stack was used as a lab"
+        )
 
 
 async def _client_add(database_url: str, args: argparse.Namespace) -> None:

@@ -181,3 +181,30 @@ async def test_another_clients_logins_are_unaffected_by_one_ids_lockout() -> Non
         fine = await client.get("/", headers={"Authorization": f"Bearer {other.plaintext}"})
 
     assert fine.status_code == 200
+
+
+def test_requests_with_no_token_never_trip_the_ceiling() -> None:
+    clock = Clock()
+    throttle = _throttle(clock)
+    throttle.record_success("goodgood")
+
+    for _ in range(500):  # MCP clients probe without a token first; a flood of them is harmless
+        throttle.record_failure(None, counts_toward_ceiling=False)
+
+    assert throttle.check("brandnew") is None
+    assert throttle.check(None) is None
+
+
+@pytest.mark.anyio
+async def test_a_flood_of_requests_without_a_token_does_not_close_the_gateway_to_anyone() -> None:
+    registry = InMemoryRegistry()
+    token = generate_token()
+    registry.add(token)
+    throttle = _throttle(Clock())
+
+    async with _client(TokenVerifier(registry), MemoryEventSink(), throttle) as client:
+        for _ in range(50):
+            assert (await client.get("/")).status_code == 401  # no Authorization header at all
+        fresh = await client.get("/", headers={"Authorization": f"Bearer {token.plaintext}"})
+
+    assert fresh.status_code == 200, "never logged in before, and still served"

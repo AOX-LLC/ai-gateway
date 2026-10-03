@@ -139,3 +139,66 @@ async def test_a_decision_by_the_lab_role_passes_the_audit_check_and_a_forgery_b
 
     with pytest.raises(AuditIntegrityError, match="written by role policy_lab_approver"):
         await verify_with_anchors(auditor, [])
+
+
+async def test_a_grant_or_membership_made_by_hand_does_not_survive_a_lab_mode_setup(
+    policy: None,
+    test_database_url: str,
+    policy_gateway_url: str,
+    policy_approver_url: str,
+    policy_auditor_url: str,
+) -> None:
+    args = (test_database_url, policy_gateway_url, policy_approver_url, policy_auditor_url)
+    await _setup(*args, lab=LAB_PASSWORD)
+    async with await psycopg.AsyncConnection.connect(
+        test_database_url, autocommit=True
+    ) as connection:
+        await connection.execute("DROP ROLE IF EXISTS lab_bystander")
+        await connection.execute("CREATE ROLE lab_bystander NOLOGIN")
+        try:
+            await connection.execute("GRANT policy_lab_approver TO lab_bystander")  # inherits it
+            await connection.execute("GRANT CREATE ON SCHEMA policy TO policy_lab_approver")
+            await connection.execute("GRANT SELECT ON policy.approvers TO policy_lab_approver")
+
+            await _setup(*args, lab=LAB_PASSWORD)
+
+            cursor = await connection.execute(
+                "SELECT (SELECT count(*) FROM pg_auth_members m JOIN pg_roles r ON r.oid = m.member"
+                " WHERE r.rolname = 'lab_bystander'),"
+                " has_schema_privilege('policy_lab_approver', 'policy', 'CREATE'),"
+                " pg_has_role('policy_lab_approver', 'policy_approver', 'MEMBER')"
+            )
+            assert await cursor.fetchone() == (0, False, True), "rebuilt: only the membership"
+        finally:
+            await connection.execute("DROP ROLE IF EXISTS lab_bystander")
+
+
+async def test_audit_verify_says_when_a_stack_has_been_used_as_a_lab(
+    policy: None,
+    test_database_url: str,
+    policy_gateway_url: str,
+    policy_approver_url: str,
+    policy_auditor_url: str,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from ai_gateway.admin.cli import _audit_verify
+
+    await _setup(
+        test_database_url,
+        policy_gateway_url,
+        policy_approver_url,
+        policy_auditor_url,
+        lab=LAB_PASSWORD,
+    )
+    await _approver_add(
+        test_database_url, argparse.Namespace(id="lab-approver", name="Lab approver", role=None)
+    )
+    pending = await _gate(policy_gateway_url, hold_s=0).decide(_context(), _call())
+    await Approvals(_lab_url(test_database_url), ROLES).decide(
+        UUID(pending.approval_id or ""), "lab-approver", Decision.APPROVE, None
+    )
+
+    await _audit_verify(policy_auditor_url, argparse.Namespace(anchors=None))
+
+    output = capsys.readouterr().out
+    assert "1 approval decision(s) were made by the lab approver role" in output
