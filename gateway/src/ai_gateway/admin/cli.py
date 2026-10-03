@@ -373,7 +373,9 @@ async def _audit_anchor(database_url: str, args: argparse.Namespace) -> None:
         if args.file.exists() or args.file.is_symlink():
             raise
         existing = []  # no file yet: the first anchor
-    verified = await verify_with_anchors(log, existing)
+    verified = await verify_with_anchors(
+        log, existing, approver_logins=await _approver_logins(database_url)
+    )
     anchor = append_anchor(args.file, verified)  # the head that was verified, not a fresh one
     print(f"anchored record {anchor.seq} ({anchor.record_hash[:12]}...) in {args.file}")
 

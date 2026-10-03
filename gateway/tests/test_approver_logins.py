@@ -4,12 +4,13 @@ the audit log and the database say about who decided."""
 import argparse
 import os
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
 import psycopg
 import pytest
-from aox_agent_core.approvals import Decision
+from aox_agent_core.approvals import Decision, Principal, PrincipalKind, RoleApproverPolicy
 from aox_agent_core.audit import AuditEvent
 from aox_agent_core.errors import AuditIntegrityError
 from aox_agent_core.storage import open_database
@@ -23,9 +24,11 @@ from ai_gateway.admin.cli import (
     _approver_logins,
     _approver_remove,
     _approver_rotate,
+    _audit_anchor,
+    _audit_verify,
 )
 from ai_gateway.approver.cli import Approvals
-from ai_gateway.policy import audit_log_on, policy_url
+from ai_gateway.policy import approval_queue_on, audit_log_on, policy_url
 from ai_gateway.policy.anchors import verify_with_anchors
 from ai_gateway.policy.approver_logins import (
     ApproverLoginError,
@@ -342,6 +345,26 @@ async def test_removing_takes_effect_on_what_the_approver_approved_but_nobody_us
     assert status == [("approved",)], "refused by the gate: not consumed"
 
 
+async def test_the_gate_goes_by_the_login_that_decided_not_by_the_name_the_decision_gives(
+    policy: None, make_approver: MakeApprover, policy_gateway_url: str
+) -> None:
+    """`resolved_by` is whatever the deciding tool put there; until agent-core binds it to the
+    login, the gate checks the record the database wrote about who decided."""
+    aiden, _ = await make_approver("aiden"), await make_approver("tyler")
+    gate, ctx, call = _gate(policy_gateway_url, hold_s=0), _context(), _call()
+    pending = await gate.decide(ctx, call)
+    queue = approval_queue_on(
+        open_database(SecretStr(policy_url(aiden))),
+        policy=RoleApproverPolicy(roles_by_action=ROLES),
+    )
+    tyler = Principal(id="human:tyler", kind=PrincipalKind.HUMAN, roles=frozenset({"approver"}))
+
+    # aiden's login decides it, saying tyler did.
+    await queue.resolve(UUID(pending.approval_id or ""), decision=Decision.APPROVE, principal=tyler)
+
+    assert (await gate.decide(ctx, call)).outcome is ApprovalOutcome.UNAVAILABLE
+
+
 async def test_setup_goes_on_when_the_only_decisions_are_by_removed_approvers(
     policy: None,
     make_approver: MakeApprover,
@@ -568,6 +591,23 @@ async def test_a_decision_that_claims_to_be_someone_elses_fails_verification(
 
     with pytest.raises(AuditIntegrityError, match=r"login of approver aiden.*human:tyler"):
         await verify_with_anchors(auditor, [], approver_logins=logins)
+
+
+async def test_anchoring_and_verifying_accept_a_decision_by_an_approvers_login(
+    policy: None,
+    make_approver: MakeApprover,
+    policy_gateway_url: str,
+    policy_auditor_url: str,
+    tmp_path: Path,
+) -> None:
+    """Both commands check the chain before they trust it, and both must know which login is
+    which approver, or every decision a person makes would fail them."""
+    aiden = Approvals(await make_approver("aiden"), ROLES)
+    await aiden.decide(await _ask(policy_gateway_url), Decision.REJECT, "no")
+    anchors = tmp_path / "anchors.jsonl"
+
+    await _audit_anchor(policy_auditor_url, argparse.Namespace(file=anchors))
+    await _audit_verify(policy_auditor_url, argparse.Namespace(anchors=anchors))
 
 
 async def test_only_the_gateway_role_may_have_written_a_provisioning_record(

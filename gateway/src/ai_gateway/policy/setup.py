@@ -292,7 +292,7 @@ LEFT JOIN {APPROVERS_TABLE} p ON a.resolved_by = 'human:' || p.id
 
 _ACTIVE_APPROVERS_VIEW = f"""
 CREATE OR REPLACE VIEW {ACTIVE_APPROVERS_VIEW} AS
-SELECT 'human:' || id AS principal FROM {APPROVERS_TABLE} WHERE active
+SELECT 'human:' || id AS principal, db_role FROM {APPROVERS_TABLE} WHERE active
 """  # noqa: S608 - fixed names and no input
 
 _APPROVER_LOGINS_VIEW = f"""

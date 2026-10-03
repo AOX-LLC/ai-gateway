@@ -249,18 +249,25 @@ class PostgresApprovalGate:
             )
 
     async def _decided_by_an_active_approver(self, request: ApprovalRequest) -> bool:
-        """A person approved this, and they are still an approver. Removing an approver takes effect
-        on the requests they approved but nobody has used yet, at once, not at the next setup."""
-        decider = request.resolved_by
+        """The decision was written by the login of an approver who is still active, and says it
+        is theirs. Who wrote it is the database's word (`db_role`, set by a trigger), not the
+        request's `resolved_by`, which is whatever the deciding tool put there. Removing an approver
+        takes effect on the requests they approved but nobody has used yet, at once, not at the
+        next setup. A decision made through the shared approver role, before the logins, does not
+        count: the client asks again."""
 
         def read(session: Any) -> list[tuple[Any, ...]]:
             rows: list[tuple[Any, ...]] = session.execute(
-                f"SELECT 1 FROM policy.{ACTIVE_APPROVERS_VIEW} WHERE principal = ?",  # noqa: S608
-                (decider,),
+                "SELECT 1 FROM policy.agent_core_audit e"  # noqa: S608 - fixed names
+                f" JOIN policy.{ACTIVE_APPROVERS_VIEW} a ON a.db_role = e.db_role"
+                " WHERE e.action = 'approval.resolved' AND e.subject_id = ?"
+                ' AND e.actor_id = a.principal AND e.payload LIKE \'%"decision":"approve"%\''
+                " LIMIT 1",
+                (str(request.id),),
             )
             return rows
 
-        return decider is not None and bool(await self._database.run(read))
+        return bool(await self._database.run(read))
 
     async def _find_approved(
         self, requested_by: str, payload_hash: str, *, besides: UUID
