@@ -463,6 +463,10 @@ made without it.
   appended after every layer has passed the call and before the upstream is called.
 - **Gaps in the log itself**, as `audit.gap` (see below). Approvals (Phase 3b) write their own events
   in the same transaction as the change they describe.
+- A call to a tool that does not exist is recorded too; if the name the client chose cannot be an
+  audit subject, the record has no subject and holds the name's hash. A call the client cancels while
+  it is being forwarded is not recorded as a `gateway.tool_call`, so a write cancelled then leaves
+  only its `call_started`.
 - Not `tools/list`, and not each failed login: an attacker would choose how fast the log grows.
   They stay in telemetry; a rate-limit trip (Phase 3c) is audited once.
 
@@ -482,8 +486,10 @@ is back, the first record written is an `audit.gap` stating how many records wer
 itself says it is incomplete. `[safety] allow_unaudited_writes = true` in `config/pipeline.toml`
 lets writes through without a record (it logs a warning, and is off by default); the same
 applies when no audit database is configured at all. `/healthz` reports `audit: {status,
-queue_depth, dropped_total, rejected_total, written_total}` and never becomes unhealthy over it: a
-failing log already refuses writes, and a restart would not help.
+queue_depth, dropped_total, rejected_total, written_total, write_ahead_failed_total}` and never
+becomes unhealthy over it: a failing log already refuses writes, and a restart would not help. The
+status is `degraded` while queued records cannot be written and until a failed write-ahead record
+is followed by one that succeeds.
 
 **How this coexists with telemetry.** They are two seams fed from the same decision record, and
 neither can block the other. Telemetry goes through the `EventSink`, awaited with a 2 s bound,
@@ -496,6 +502,17 @@ all tested.
 writes the queue in batches of up to 100 in one transaction, using `SQLAuditLog.append_in`: 100
 events took about 150 ms. Only the write-ahead record waits for its own transaction.
 
+**Bounded waits.** agent-core runs each operation on the event loop's default thread pool, which
+also resolves names for psycopg and httpx, and cancelling the task that awaits it does not stop the
+thread. Any role that can connect can hold an advisory lock, so the gateway keeps the audit log
+off that pool and bounds every wait on the database's side: its policy connections carry a 2 s
+connect timeout and server-side lock and statement timeouts (1.5 s and 1.8 s for the write-ahead
+record, so the database gives up before the request stops waiting and a refused write is never
+committed afterwards; 5 s and 8 s for the batches). Audit work runs on workers of its own, four for
+the write-ahead record and one for the batches, and a write is refused at once when all four are
+taken. A batch whose outcome is unknown (a timeout, or a connection lost after COMMIT) is checked
+against the newest records by `record_id` before it is retried, so it is never stored twice.
+
 ### Roles, and the approval guard
 
 | Role | Can |
@@ -506,14 +523,23 @@ events took about 150 ms. Only the write-ahead record waits for its own transact
 
 agent-core's installer gives one app role `UPDATE` on approvals, and the rule that only a human
 resolves one lives in library code. That role could therefore approve its own requests with plain
-SQL (confirmed). A guard trigger closes that: the gateway role may only move an *approved* request
-to *consumed*, the approver may only move a *pending* one to approved or rejected, and nobody may
-create a request that is already decided. The gateway cannot decide an approval by any route,
+SQL (confirmed). A guard trigger closes that:
+- the gateway role may only move an *approved*, unexpired request to *consumed*, and change nothing
+  else about it;
+- the approver may only decide a *pending*, unexpired request, with a decision that matches its
+  status and with who and when filled in, and change nothing about what it authorises, who asked or
+  when it expires;
+- nobody may create a request that is already decided;
+- any other role, including one that merely inherits a policy role's privileges (the guard keys on
+  the member's own name), is refused, and setup removes every membership in the policy roles. The gateway cannot decide an approval by any route,
 whatever its code does. `gateway-admin policy-setup` installs agent-core's tables once, for a
 scratch role that cannot log in (so no real role holds a grant before its guard exists), applies the
 grants and the guard in one transaction, guard first, and is safe to repeat and to run twice at
-once. The audit table's own protections are agent-core's: triggers that refuse `UPDATE`, `DELETE`
-and `TRUNCATE` (the owner included), and a check that the connecting role cannot do any of them.
+once, within one database (the scratch role is named per database, and any left by a killed setup is
+dropped by the next run). The audit table's own protections are agent-core's: triggers that refuse
+`UPDATE`, `DELETE` and `TRUNCATE`, and a check that the connecting role cannot do any of them. The
+database owner can disable the triggers, which is what the anchor test does; the chain and an
+anchor are what show it.
 
 ### Tamper evidence
 
@@ -529,8 +555,11 @@ the log's writers cannot reach shows the rewrite.
 
 Both run as `policy_auditor` (`POLICY_AUDITOR_DATABASE_URL`). Keep the anchor file on a different
 host, or at least a different account, from the database, and take an anchor on a schedule (cron is
-enough): an anchor protects what came before it. Verifying 381 records took about 30 ms, so a
-million would take about a minute and a half. Signed anchors or a timestamping service are not worth
+enough): an anchor protects what came before it. Verifying 381 records took about 30 ms and the
+command walks the log twice, so a million would take about three minutes. The anchor file is read
+without following symlinks and refused if others can write to it. The Compose `admin` service has
+a read-only root, so give `docker compose run admin audit-anchor` a mounted file
+(`-v "$PWD/anchors:/anchors"`), or run the command from the host. Signed anchors or a timestamping service are not worth
 it at this size.
 
 ## Data model

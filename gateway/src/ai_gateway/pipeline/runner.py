@@ -370,9 +370,8 @@ class Pipeline:
                 payload=payload,
             )
             if self._audit is not None and action == "gateway.tool_call":
-                self._audit.record(
-                    event
-                )  # queues; never waits, never raises. Listings are not audited.
+                # Queues the record: never waits, never raises. Listings are not audited.
+                self._audit.record(event)
             with anyio.fail_after(self._emit_timeout_s):
                 await self._events.emit(event)
         except Exception:
