@@ -10,7 +10,12 @@
 
 .kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
 .panel-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
-@media (min-width: 1100px) { .panel-grid { grid-template-columns: minmax(0, 3fr) minmax(320px, 2fr); align-items: start; } }
+/* The decisions table needs the full width; the queue sits under it and splits into two columns when wide. */
+.queue-body { display: grid; grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 1100px) { .queue-body { grid-template-columns: repeat(2, minmax(0, 1fr)); } .queue-column + .queue-column { border-left: 1px solid var(--pui-border); } }
+.queue-column { min-width: 0; }
+.queue-column ul { list-style: none; margin: 0; padding: 0; }
+.cell-trunc { max-width: 240px; overflow: hidden; text-overflow: ellipsis; }
 
 .range-seg { display: inline-flex; border: 1px solid var(--pui-border-control); border-radius: var(--pui-radius-sm); overflow: hidden; }
 .range-seg a { display: inline-flex; align-items: center; height: calc(var(--pui-control) - 2px); padding: 0 10px; font-size: 12px; font-weight: 500; color: var(--pui-text-secondary); background: var(--pui-surface); text-decoration: none; }
@@ -25,9 +30,9 @@
 .panel-note { margin: 0; padding: 10px 16px; border-bottom: 1px solid var(--pui-border); font-size: 12px; color: var(--pui-text-muted); }
 .queue-item { display: flex; flex-direction: column; gap: 6px; padding: 12px 16px; border-bottom: 1px solid var(--pui-border); }
 .queue-item:last-child { border-bottom: 0; }
-.queue-item[data-pending="true"] { border-top: 1px dashed var(--pui-pending); }
+.queue-item[data-pending="true"] { border-left: 2px dashed var(--pui-pending); }
 .queue-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
-.queue-meta { font-size: 12px; color: var(--pui-text-muted); }
+.queue-meta { font-size: 12px; line-height: 16px; color: var(--pui-text-muted); }
 .queue-section { padding: 8px 16px; background: var(--pui-surface-muted); border-bottom: 1px solid var(--pui-border); }
 .cell-badges { display: inline-flex; align-items: center; gap: 6px; }
 .pager { display: inline-flex; gap: 8px; }
@@ -39,5 +44,11 @@
 
 .signin-wrap { min-height: 100vh; display: grid; place-items: center; padding: 24px; background: var(--pui-bg); }
 .signin-card { width: 100%; max-width: 360px; }
-.signin-form { display: flex; flex-direction: column; gap: 16px; padding: 16px; }
-.signin-brand { display: flex; align-items: center; gap: 10px; padding: 16px 16px 0; }
+.signin-form { display: flex; flex-direction: column; gap: 16px; padding: 20px 16px 16px; }
+.signin-brand { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--pui-border); }
+.signin-form .pui-hint { margin: 0; padding-top: 12px; border-top: 1px solid var(--pui-border); }
+
+.pui-kpi-top { min-height: 20px; }
+.pui-kpi-unit { line-height: 1; }
+.queue-column:only-child { grid-column: 1 / -1; }
+.pui-panel > .pui-alert { border-radius: 0 0 var(--pui-radius-md) var(--pui-radius-md); }

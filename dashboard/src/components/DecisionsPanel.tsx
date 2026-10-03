@@ -31,14 +31,28 @@ export function look(decision: Decision): Look {
   return { rail: "success", badge: "pui-badge--success", icon: "check", label: "Forwarded" };
 }
 
+/** A call waiting for approval is held by the gateway for tens of seconds. That is how long it waited, not
+ * how slow anything was, so it reads "held 45 s" in muted type rather than as a latency. */
+function timeTaken(decision: Decision) {
+  if (decision.durationMs === null) return "—";
+  if (decision.denyCode === "approval_pending") {
+    return (
+      <span className="pui-muted" title="How long the gateway held the call while it waited for a person">
+        held {Math.round(decision.durationMs / 1000)} s
+      </span>
+    );
+  }
+  return `${formatMs(decision.durationMs)} ms`;
+}
+
 function Row({ decision }: { decision: Decision }) {
   const shown = look(decision);
   return (
     <tr>
       <td className="pui-rail" data-status={shown.rail} />
       <td className="pui-mono">{clock(decision.ts)}</td>
-      <td className="pui-mono">{decision.clientName}</td>
-      <td className="pui-mono">{decision.tool}</td>
+      <td className="pui-mono cell-trunc" title={decision.clientName}>{decision.clientName}</td>
+      <td className="pui-mono cell-trunc" title={decision.tool}>{decision.tool}</td>
       <td>
         <span className="cell-badges">
           <span className={`pui-badge ${shown.badge}`}>
@@ -55,7 +69,7 @@ function Row({ decision }: { decision: Decision }) {
       </td>
       <td>{decision.blockedBy ? words(decision.blockedBy) : <span className="pui-muted">—</span>}</td>
       <td className="pui-mono pui-muted">{decision.denyCode ?? "—"}</td>
-      <td className="pui-num">{decision.durationMs === null ? "—" : `${formatMs(decision.durationMs)} ms`}</td>
+      <td className="pui-num">{timeTaken(decision)}</td>
     </tr>
   );
 }

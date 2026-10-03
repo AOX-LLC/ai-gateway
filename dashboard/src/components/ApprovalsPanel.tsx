@@ -86,29 +86,32 @@ export function ApprovalsPanel({ approvals, error, stale, since, loading }: Prop
       {!approvals && loading ? <SkeletonLines rows={5} /> : null}
       {!approvals && !loading ? <ErrorState message={error ?? "No data."} /> : null}
       {approvals ? (
-        <>
-          {waiting === 0 ? (
-            <EmptyState icon="inbox" title="Queue clear">
-              Every decision is in the audit log.
-            </EmptyState>
-          ) : (
-            <ul aria-label="Waiting for a person">
-              {approvals.pending.map((approval) => (
-                <PendingItem key={approval.id} approval={approval} />
-              ))}
-            </ul>
-          )}
+        <div className="queue-body">
+          <div className="queue-column">
+            <div className="queue-section pui-eyebrow">Waiting for a person</div>
+            {waiting === 0 ? (
+              <EmptyState icon="inbox" title="Queue clear">
+                Every decision is in the audit log.
+              </EmptyState>
+            ) : (
+              <ul aria-label="Waiting for a person">
+                {approvals.pending.map((approval) => (
+                  <PendingItem key={approval.id} approval={approval} />
+                ))}
+              </ul>
+            )}
+          </div>
           {approvals.recent.length > 0 ? (
-            <>
+            <div className="queue-column">
               <div className="queue-section pui-eyebrow">Recently decided</div>
               <ul aria-label="Recently decided">
                 {approvals.recent.map((approval) => (
                   <DecidedItem key={approval.id} approval={approval} />
                 ))}
               </ul>
-            </>
+            </div>
           ) : null}
-        </>
+        </div>
       ) : null}
     </section>
   );
