@@ -540,9 +540,9 @@ record is built once, so a retry does not store either twice.
 
 | Role | Can |
 | --- | --- |
-| `policy_gateway` (the gateway) | read and append the audit log; create approval requests (pending only) and consume an approved one |
-| `policy_approver` (a person's tool, `gateway-approver`) | read and append the audit log (it writes the audit event of a decision); decide a pending request; read the approvers and the stored arguments |
-| `policy_auditor` | read the audit log, and nothing else (never the arguments) |
+| `policy_gateway` (the gateway) | read and append the audit log; create approval requests (pending only) and consume an approved one (not one whose approver has been removed: it may ask whether an approver is still active, and nothing else about them) |
+| `policy_approver` (a group: nobody logs in as it; each approver's own login is a member, see [Approver identity](#approver-identity-phase-5c-1)) | read and append the audit log (a login writes the audit event of its decision); decide a pending request; read the approvers and the stored arguments |
+| `policy_auditor` | read the audit log and which login is which approver, and nothing else (never the arguments or the approvers' names) |
 
 The gateway can insert a request's arguments (`approval_arguments`) and never read them back; only
 the approver reads them.
@@ -570,8 +570,9 @@ with a positive control, so a refusal comes from the clause under test), and eve
 refused. The differences, as gaps in what 3a enforced, are these, and none lets the gateway approve:
 - a role that is a *member* of `policy_gateway` counts as the requester side, and a member of
   `policy_approver` as the approver side (3a refused both by name). A member has exactly that
-  role's powers, and `policy-setup` revokes every membership in the policy roles on each run: that
-  is a point-in-time control, not a continuous one;
+  role's powers, and `policy-setup` revokes every membership in the policy roles on each run, except
+  an active approver's login in the approver role: that is a point-in-time control, not a
+  continuous one;
 - 3a refused the owner and a superuser outside the two roles by name; a3 refuses them as neither
   side, which is stricter (the tests no longer rewrite a request's lifetime as the owner).
 
@@ -645,34 +646,86 @@ are purged) and cannot read them; the approver role reads them; the auditor and 
 record or in telemetry, and `policy.purge_approval_arguments()` (run hourly by the gateway; only the
 gateway role may call it) deletes them 7 days after they were stored.
 
-**`gateway-approver`** runs as the approver role (`docker compose run --rm approver --as <id>
-list | show | approve | reject`). `--as` names a person registered with `gateway-admin
-approver-add`, who must be active and hold the request's role (`approver`). The database role is
-shared, so `--as` records who decided; it does not prove it. The dashboard and the lab approver of
-later phases authenticate people themselves. Before it shows a request as approvable, the tool
+**`gateway-approver`** (`docker compose run --rm approver list | show | approve | reject | whoami`)
+is a person's tool, and it takes no name: who is deciding is read from the database session (the
+approver whose login it is, [below](#approver-identity-phase-5c-1)), who must be active and hold the
+request's role (`approver`). Before it shows a request as approvable, the tool
 parses the arguments back from the text it is about to display and hashes them with the tool name:
 the hash must be the one stored when the gateway asked, or it refuses (a request whose arguments
 were changed, or purged, can only be rejected). The arguments are shown as JSON with every
 non-ASCII and control character escaped, and anything from outside (names, summaries) has control
-characters and ANSI sequences removed, so nothing in a call can redraw the approver's screen.
+characters and ANSI sequences removed, so nothing in a call can redraw the approver's screen. The
+upstream is shown by name (the namespace in the tool's name, `tickets` for `tickets__assign`) beside
+its identity digest: the digest is what was hashed into the request and cannot be read back, so the
+name comes from the tool.
 
-`policy.dash_approvals` is the dashboard's view of the requests (tool, client, status, who decided,
-times) with no arguments and no free text; the dashboard's reader role is granted that view and
-nothing else in the schema.
+`policy.dash_approvals` is the dashboard's view of the requests (tool, the upstream's namespace,
+client, status, who decided and their display name, times) with no arguments and no free text; the
+dashboard's reader role is granted that view and nothing else in the schema.
 
 Audit records carry the database role that wrote them (set by a trigger), and `audit-verify`
-fails a `gateway.*` record, an `audit.gap`, an `approval.requested` or an `approval.consumed` that
-the gateway role did not write, or an `approval.resolved` that the approver role did not: the
-approver role may append to the audit log, and without this a holder of its credential could add
-records the gateway never wrote under a chain that still verifies.
+fails a `gateway.*` record, an `audit.gap`, an `approval.requested`, an `approval.consumed` or an
+`approver.*` record that the gateway role did not write, and an `approval.resolved` that no approver's
+login (or, in a log from before the logins, the approver role) wrote: the approver role may append to
+the audit log, and without this a holder of its credential could add records the gateway never wrote
+under a chain that still verifies. A decision written by a login must also be that approver's: a
+decision by `aiden`'s login that says `human:tyler` decided fails. (agent-core a7's guard can enforce
+that when the decision is made; until 04 moves to it, this check is the control.)
 
-What is *not* here: a person's identity is not authenticated by the CLI (above) — anyone holding
-the approver database credential can decide a request as any `human:<id>`, registered or not, so
-treat that credential as the approver's, and keep it out of the `.env` of anyone who is not one; and the approval
-is consumed before the audit write-ahead, so a write refused because the audit log is down has used
-up its approval (the client asks again). `scripts/auto_approver.py` approves for the scenario and
-the simulator; it is test tooling, outside the gateway, and needs `--approve-as` and
-`LAB_AUTO_APPROVE=yes`.
+What is *not* here: the approval is consumed before the audit write-ahead, so a write refused because
+the audit log is down has used up its approval (the client asks again). `scripts/auto_approver.py`
+approves for the scenario and the simulator; it is test tooling, outside the gateway, and needs
+`--approve-as` (which must be the login's own approver: it checks) and `LAB_AUTO_APPROVE=yes`.
+
+### Approver identity (Phase 5c-1)
+
+Each approver has a database login of their own, and the tool reads who they are from it. The
+audit trigger sets `db_role := current_user` on every record, so a decision is recorded with the
+login that wrote it, whatever the tool claims; `approvers.db_role` maps the login to the person.
+
+| Command (`gateway-admin`, as the owner) | Does |
+| --- | --- |
+| `approver-add <id> --name N [--role R]` | Records the approver and makes `policy_approver_<id>` (`.` and `-` become `_`; ids are at most 40 characters). Prints the login and a generated password **once**; nothing keeps it. Adding an active approver again only updates the name and roles. |
+| `approver-rotate <id>` | A new password, shown once; the old one stops working and the open sessions end. Makes the login again if its role is missing. |
+| `approver-remove <id>` | Ends the sessions and drops the login. The row stays, inactive and marked removed. |
+| `approver-list` | Each approver, their roles, state and login. |
+
+A login is `LOGIN` with no other attribute, `CONNECTION LIMIT 2`, a password valid for 90 days
+(`VALID UNTIL`; rotate before then), the 5 s idle-in-transaction limit, and exactly one membership:
+the approver role, `WITH INHERIT TRUE, SET FALSE`. Inheritance is how it connects and reads the
+queue; without `SET` it cannot `SET ROLE` to the group. The shared approver role itself is `NOLOGIN`
+and there is no shared approver password: `POLICY_APPROVER_DB_PASSWORD` is gone. The tool signs in
+with `APPROVER_LOGIN` and `APPROVER_PASSWORD` (or asks), never from `.env`.
+
+`policy.approvers` is the map of who is who, shaped for agent-core a7's guard to bind `resolved_by`
+to the deciding login: one row per approver principal (`human:<id>`), one login per row, unique both
+ways; only the owner writes it (no other role can insert, update or delete); a row is never deleted,
+its login never changes once set, and a removed approver stays removed, so an id and a login are
+never given to anyone else. A trigger enforces the last three; the owner can disable triggers, as it
+can for the audit log's, and `audit-verify` does not look at this table.
+
+**Audited.** `approver.added`, `.updated`, `.rotated` and `.removed` are appended to the audit log
+with the approver's id, their login and roles: never the password, never their name. They are
+appended as the gateway role, because agent-core refuses an append from the role that owns the
+table; the actor is `admin`, which names the tool, since the admin CLI has no identity beyond the
+owner's credential. An add whose record cannot be written is undone (the login is dropped).
+`audit-verify` accepts these records from the gateway role only.
+
+**Setup and removal.** `policy-setup` keeps each active approver's login as recorded (its
+attributes, its one membership, no direct grants) and revokes every other membership of the policy
+roles, as before. agent-core's installer counts a decision only while its writer is a member of the
+approver role, so a removed approver's approved-but-unused requests are cancelled by the next setup
+(when someone else's decision is on record). When the only decisions are by removed approvers the
+installer would refuse; setup then goes on without cancelling, and still stops for an approval no
+approver's login made (plain SQL). The gateway also refuses to use an approval whose approver is no
+longer active, at once, so a removal does not wait for a setup: such a request answers
+"unavailable" until it expires (30 minutes at most). The lab approver is the one login setup makes
+itself, recorded as approver `lab-approver`, which `approver-add` refuses.
+
+**Limits.** A login shows which credential decided, not which human typed it: share one and the log
+cannot tell. The owner's credential makes and removes approvers, so it stays off approvers'
+machines. Postgres does not throttle password guesses; the database is published on `127.0.0.1`
+only, and passwords are 256 random bits.
 
 ### Allowlist and rate limits (Phase 3c)
 
@@ -751,8 +804,8 @@ no image). It is off unless asked for three times, and each is enforced:
 The role is rebuilt, not reset, on every setup that has the password (a grant or membership made by
 hand does not survive it). Its decisions are in the audit log under its own role name, which
 `audit-verify` accepts for `approval.resolved` and for nothing else, and says so when it finds any:
-a stack that was used as a lab is not quietly mistaken for one that was not. Register its approver first
-(`docker compose run --rm admin approver-add lab-approver --name "Lab approver"`). Never use it
+a stack that was used as a lab is not quietly mistaken for one that was not. Setup records it as
+approver `lab-approver` (inactive when the role is gone). Never use it
 against anything real: it defeats approval. CI sets the switch on the Harborline step only, for the
 test approver (`scripts/auto_approver.py`), and a test pins that.
 
