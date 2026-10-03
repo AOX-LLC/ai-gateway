@@ -54,3 +54,23 @@
 .pui-panel > .pui-alert { border-radius: 0 0 var(--pui-radius-md) var(--pui-radius-md); }
 
 .paging-notice { margin: 12px 16px 0; }
+
+/* Charts. Colours are tokens; a would-block bar is told from a blocked one by its dashed outline, not by hatching or a gradient. */
+.chart-section { display: flex; flex-direction: column; gap: 12px; }
+.chart-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+@media (min-width: 1100px) { .chart-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .chart-grid .chart-wide { grid-column: 1 / -1; } }
+.chart-body { padding: 12px 16px 8px; display: flex; flex-direction: column; gap: 12px; }
+.chart-note { margin: 0; font-size: 12px; color: var(--pui-text-muted); }
+.chart-legend { align-items: center; }
+.legend-swatch { display: inline-block; width: 12px; height: 12px; border-radius: 2px; box-sizing: border-box; }
+.swatch-ok { background: var(--pui-chart-3); }
+.swatch-error { background: var(--pui-chart-6); }
+.swatch-blocked { background: var(--pui-danger); }
+.swatch-would { background: var(--pui-warning-soft); border: 1.5px dashed var(--pui-warning); }
+.pui-bar.bar-blocked { fill: var(--pui-danger); }
+.pui-bar.bar-would { fill: var(--pui-warning-soft); stroke: var(--pui-warning); stroke-width: 1.5; stroke-dasharray: 4 3; }
+.pui-chart .chart-label { fill: var(--pui-text-secondary); }
+.chart-data { border-top: 1px solid var(--pui-border); padding-top: 8px; font-size: 12px; }
+.chart-data summary { cursor: pointer; color: var(--pui-text-secondary); padding: 2px 0; }
+.chart-data summary:focus-visible { outline: var(--pui-focus-width) solid var(--pui-focus-ring); outline-offset: 2px; }
+.chart-table-wrap { max-height: 240px; overflow: auto; margin-top: 8px; border: 1px solid var(--pui-border); border-radius: var(--pui-radius-sm); }

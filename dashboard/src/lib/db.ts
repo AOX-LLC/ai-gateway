@@ -28,7 +28,7 @@ function realPool(): Queryable {
 }
 
 /** For tests: use another pool. */
-export function usePool(replacement: Queryable | undefined): void {
+export function setPool(replacement: Queryable | undefined): void {
   pool = replacement;
 }
 
