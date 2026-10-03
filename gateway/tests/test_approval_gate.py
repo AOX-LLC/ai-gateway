@@ -429,3 +429,47 @@ async def test_a_hand_given_create_on_the_schema_does_not_survive_setup(
             ("policy_auditor", False, True),
             ("policy_gateway", False, True),
         ]
+
+
+async def test_two_retries_at_once_after_one_approval_run_the_call_exactly_once(
+    policy: None, policy_gateway_url: str, policy_approver_url: str
+) -> None:
+    gate, ctx, call = _gate(policy_gateway_url, hold_s=0), _context(), _call()
+    pending = await gate.decide(ctx, call)
+    await _approver(policy_approver_url).resolve(
+        UUID(pending.approval_id or ""), decision=Decision.APPROVE, principal=HUMAN
+    )
+    outcomes = []
+
+    async def retry() -> None:
+        outcomes.append((await gate.decide(ctx, call)).outcome)
+
+    async with anyio.create_task_group() as tasks:
+        for _ in range(4):
+            tasks.start_soon(retry)
+
+    assert outcomes.count(ApprovalOutcome.APPROVED) == 1, "one approval, one run"
+    assert not set(outcomes) - {
+        ApprovalOutcome.APPROVED,
+        ApprovalOutcome.UNAVAILABLE,
+        ApprovalOutcome.PENDING,
+    }
+
+
+async def test_an_approval_that_expired_before_the_retry_is_not_used(
+    policy: None, policy_gateway_url: str, policy_approver_url: str
+) -> None:
+    gate, ctx, call = _gate(policy_gateway_url, ttl_s=1, hold_s=0), _context(), _call()
+    pending = await gate.decide(ctx, call)
+    await _approver(policy_approver_url).resolve(
+        UUID(pending.approval_id or ""), decision=Decision.APPROVE, principal=HUMAN
+    )
+    await anyio.sleep(1.2)
+
+    retried = await gate.decide(ctx, call)
+
+    assert retried.outcome is not ApprovalOutcome.APPROVED
+    assert retried.approval_id != pending.approval_id or retried.outcome in {
+        ApprovalOutcome.EXPIRED,
+        ApprovalOutcome.UNAVAILABLE,
+    }
