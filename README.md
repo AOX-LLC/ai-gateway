@@ -18,6 +18,21 @@ placeholder, so this step is not optional. The first build downloads the 30 MB e
 model of the handbook server (checked against pinned hashes); after that nothing needs the
 network. See `docs/architecture.md` for the rest.
 
+### Simulated traffic and telemetry
+
+The gateway stores a record of every request, its spans and every failed authentication in
+Postgres (see Telemetry in `docs/architecture.md`). To fill it with a repeatable, seeded mix of
+normal calls, refused calls and failed logins as both fictional bots, with no API key:
+
+```sh
+docker compose run --rm -T admin seed-demo > demo.json    # tokens; keep it out of git
+uv run scripts/simulate_traffic.py --tokens-file demo.json --calls 300 --verify
+rm demo.json
+```
+
+`--verify` reads the stored telemetry back through the dashboard's read-only role and checks it
+matches what was sent. Records older than 30 days (spans: 7) are purged hourly.
+
 ## Licence
 
 MIT, copyright AOX LLC. See `LICENSE`. Harborline Supply Co. and all its data are fictional.
