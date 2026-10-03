@@ -167,7 +167,8 @@ class PostgresApprovalGate:
 
         def read(session: Any) -> list[tuple[Any, ...]]:
             rows: list[tuple[Any, ...]] = session.execute(
-                "SELECT id FROM agent_core_approvals WHERE requested_by = ? AND payload_sha256 = ?"
+                "SELECT id FROM policy.agent_core_approvals"
+                " WHERE requested_by = ? AND payload_sha256 = ?"
                 " AND status IN ('pending', 'approved', 'rejected') AND expires_at > ?"
                 " ORDER BY created_at DESC LIMIT 1",
                 (requested_by, payload_hash, _now_text()),
@@ -205,7 +206,7 @@ class PostgresApprovalGate:
         # refuses such a request: an orphan stays pending until it expires.
         await self._database.run(
             lambda session: session.execute(
-                "INSERT INTO approval_arguments (request_id, arguments_json) VALUES (?, ?)",
+                "INSERT INTO policy.approval_arguments (request_id, arguments_json) VALUES (?, ?)",
                 (str(request.id), text),
             ),
             write=True,

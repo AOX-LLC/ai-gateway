@@ -356,7 +356,7 @@ class PostgresAuditRecorder:
 
         def read(session: Any) -> list[tuple[Any, ...]]:
             rows: list[tuple[Any, ...]] = session.execute(
-                "SELECT payload FROM agent_core_audit WHERE seq > ? ORDER BY seq DESC",
+                "SELECT payload FROM policy.agent_core_audit WHERE seq > ? ORDER BY seq DESC",
                 (last_seq,),
             )
             return rows

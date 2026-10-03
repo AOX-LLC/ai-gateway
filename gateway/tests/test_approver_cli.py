@@ -4,6 +4,7 @@ import argparse
 import json
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -20,6 +21,7 @@ from ai_gateway.policy import policy_url
 from ai_gateway.seams.approvals import ApprovalOutcome
 from tests.test_approval_gate import ROLES, _call, _context, _gate
 
+ROLES_FILE = Path(__file__).resolve().parents[2] / "config" / "approval_roles.toml"
 ACTION = "tickets__change_status"
 ESCAPES = "\x1b[2J\x1b[1;31mAPPROVED BY SECURITY\x1b[0m\x1b]0;owned\x07‮\r"
 
@@ -212,6 +214,7 @@ class TestAgainstTheDatabase:
     ) -> None:
         request_id = await _ask(policy_gateway_url)
         monkeypatch.setenv("POLICY_APPROVER_DATABASE_URL", policy_approver_url)
+        monkeypatch.setenv("APPROVAL_ROLES_FILE", str(ROLES_FILE))
 
         for argv in (
             ["--as", "aiden", "list"],
@@ -232,6 +235,7 @@ class TestAgainstTheDatabase:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.setenv("POLICY_APPROVER_DATABASE_URL", policy_approver_url)
+        monkeypatch.setenv("APPROVAL_ROLES_FILE", str(ROLES_FILE))
 
         with pytest.raises(SystemExit) as exit_info:
             await anyio.to_thread.run_sync(main, ["--as", "nobody\x1b[2J", "list"])

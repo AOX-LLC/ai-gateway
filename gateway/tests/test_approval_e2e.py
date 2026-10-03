@@ -10,9 +10,10 @@ import anyio
 import psycopg
 import pytest
 from aox_agent_core.approvals import Decision, Principal, PrincipalKind
-from aox_agent_core.errors import NotAuthorizedToResolveError
+from aox_agent_core.errors import ConfigError, NotAuthorizedToResolveError
 from mcp.shared.exceptions import MCPError
 from psycopg import errors
+from pydantic import SecretStr
 
 from ai_gateway.admin.cli import _approver_add
 from ai_gateway.app import create_app
@@ -184,7 +185,11 @@ def test_the_gateways_http_surface_has_no_route_that_approves(
 def _settings(url: str, tmp_path: Path) -> GatewaySettings:
     pipeline = tmp_path / "pipeline.toml"
     pipeline.write_text('[layers]\napproval = "enforce"\n')
-    return GatewaySettings(database_url=url, pipeline_file=pipeline)  # type: ignore[arg-type]
+    roles = tmp_path / "approval_roles.toml"
+    roles.write_text("[roles_by_action]\n")
+    return GatewaySettings(
+        database_url=SecretStr(url), pipeline_file=pipeline, approval_roles_file=roles
+    )
 
 
 async def test_the_gateways_own_role_cannot_approve_even_with_a_human_principal(
@@ -193,10 +198,19 @@ async def test_the_gateways_own_role_cannot_approve_even_with_a_human_principal(
     gate = _gate(policy_gateway_url)
     pending = await gate.decide(_context(), _call())
 
-    with pytest.raises(errors.RaiseException, match="may only consume"):
+    # The library refuses on the requester's connection, before the database is asked ...
+    with pytest.raises(ConfigError, match="cannot decide requests"):
         await gate._queue.resolve(
             UUID(pending.approval_id or ""), decision=Decision.APPROVE, principal=HUMAN
         )
+    # ... and the database refuses the same change in plain SQL.
+    async with await psycopg.AsyncConnection.connect(policy_url(policy_gateway_url)) as connection:
+        with pytest.raises((errors.RaiseException, errors.InsufficientPrivilege)):
+            await connection.execute(
+                b"UPDATE agent_core_approvals SET status = 'approved', decision = 'approve',"
+                b" resolved_by = 'human:x', resolved_at = now()::text WHERE id = %s",
+                (pending.approval_id,),
+            )
     assert (
         await _approver(policy_approver_url).get(UUID(pending.approval_id or ""))
     ).status.value == "pending"

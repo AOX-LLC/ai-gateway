@@ -54,7 +54,7 @@ class Approvals:
     async def principal(self, approver_id: str) -> Principal:
         def read(session: Any) -> list[tuple[Any, ...]]:
             rows: list[tuple[Any, ...]] = session.execute(
-                "SELECT roles, active FROM approvers WHERE id = ?", (approver_id,)
+                "SELECT roles, active FROM policy.approvers WHERE id = ?", (approver_id,)
             )
             return rows
 
@@ -70,7 +70,7 @@ class Approvals:
     async def arguments_json(self, request_id: UUID) -> str | None:
         def read(session: Any) -> list[tuple[Any, ...]]:
             rows: list[tuple[Any, ...]] = session.execute(
-                "SELECT arguments_json FROM approval_arguments WHERE request_id = ?",
+                "SELECT arguments_json FROM policy.approval_arguments WHERE request_id = ?",
                 (str(request_id),),
             )
             return rows
