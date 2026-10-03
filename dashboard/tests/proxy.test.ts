@@ -10,8 +10,11 @@ beforeAll(() => {
 });
 
 const nowS = () => Math.floor(Date.now() / 1000);
+// A real server always has a Host header; the test request has to say it.
 const request = (path: string, cookie?: string) =>
-  new NextRequest(`http://127.0.0.1:4400${path}`, { headers: cookie ? { cookie: `${COOKIE_NAME}=${cookie}` } : {} });
+  new NextRequest(`http://127.0.0.1:4400${path}`, {
+    headers: { host: "127.0.0.1:4400", ...(cookie ? { cookie: `${COOKIE_NAME}=${cookie}` } : {}) },
+  });
 
 async function call(path: string, cookie?: string) {
   const { proxy } = await import("@/proxy");
@@ -19,6 +22,15 @@ async function call(path: string, cookie?: string) {
 }
 
 describe("the proxy", () => {
+  it("turns away a request sent under a name that is not ours, signed in or not", async () => {
+    const { proxy } = await import("@/proxy");
+    const good = issue(SECRET, nowS());
+    for (const host of ["evil.example", "evil.example:4400", "127.0.0.1.evil.example", "localhost.evil.example:4400", ""]) {
+      const request = new NextRequest("http://127.0.0.1:4400/api/live", { headers: { host, cookie: `${COOKIE_NAME}=${good}` } });
+      expect(proxy(request).status, `Host: ${host}`).toBe(421);
+    }
+  });
+
   it("sends a visitor with no session to sign in, and answers an API call with 401", async () => {
     const page = await call("/");
     const api = await call("/api/live");

@@ -219,6 +219,8 @@ services:
       DASHBOARD_SESSION_SECRET: ${DASHBOARD_SESSION_SECRET:?set it in .env (python3 scripts/init_env.py adds it)}
       DASHBOARD_ADMIN_PASSWORD_HASH: ${DASHBOARD_ADMIN_PASSWORD_HASH:-}
       DASHBOARD_SAMPLE_DATA: ${DASHBOARD_SAMPLE_DATA:-1}
+      # The Host values it answers to (anything else is refused: DNS rebinding); loopback by default.
+      DASHBOARD_ALLOWED_HOSTS: ${DASHBOARD_ALLOWED_HOSTS:-127.0.0.1:*,localhost:*,[::1]:*}
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4400/healthz').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
       interval: 10s

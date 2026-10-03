@@ -57,12 +57,41 @@ describe("signing in", () => {
   it("does not look at the password while throttled, even if it is right", async () => {
     const throttle = new Throttle();
     for (let i = 0; i < MAX_FAILURES; i++) throttle.failed(1000);
+    expect(throttle.begin(1000)).toBe(LOCKOUT_S);
     let looked = false;
 
     const result = await attemptSignIn("right", base(async () => (looked = true), throttle));
 
     expect(result).toEqual({ status: "throttled", retryAfter: LOCKOUT_S });
     expect(looked).toBe(false);
+  });
+
+  it("counts guesses sent at the same time, so a burst cannot get past the limit", async () => {
+    let checked = 0;
+    const slow = async () => {
+      checked += 1;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      return false;
+    };
+    const throttle = new Throttle();
+
+    const results = await Promise.all(Array.from({ length: 50 }, () => attemptSignIn("guess", base(slow, throttle))));
+
+    expect(checked).toBe(MAX_FAILURES);
+    expect(results.filter((r) => r.status === "denied")).toHaveLength(MAX_FAILURES);
+    expect(results.filter((r) => r.status === "throttled")).toHaveLength(50 - MAX_FAILURES);
+  });
+
+  it("lets the right password through among the last of the allowed attempts, and clears the count", async () => {
+    const throttle = new Throttle();
+    for (let i = 0; i < MAX_FAILURES - 2; i++) await attemptSignIn("wrong", base(async () => false, throttle));
+
+    const result = await attemptSignIn("right", base(async (p) => p === "right", throttle));
+    const after = await attemptSignIn("wrong", base(async () => false, throttle));
+
+    expect(result.status).toBe("ok");
+    expect(after.status).toBe("denied");
+    expect(throttle.retryAfter(1000)).toBe(0);
   });
 
   it("lets nobody in when no credential is set", async () => {

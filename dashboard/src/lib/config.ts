@@ -1,12 +1,16 @@
 /** The dashboard's settings, read from the environment once and checked. A missing or weak one stops
  * the process from serving: nothing here falls back to a default that would open the dashboard. */
 
+import { parseHosts } from "./auth/hosts";
+
 export type Config = {
   readonly databaseUrl: string;
   /** Empty: nobody can sign in, and the sign-in page says so. */
   readonly adminPasswordHash: string;
   readonly sessionSecret: string;
   readonly sampleData: boolean;
+  /** The Host values this dashboard answers to (see auth/hosts.ts). */
+  readonly allowedHosts: readonly string[];
 };
 
 export class ConfigError extends Error {}
@@ -27,6 +31,7 @@ export function parseConfig(env: Readonly<Record<string, string | undefined>>): 
     adminPasswordHash: env.DASHBOARD_ADMIN_PASSWORD_HASH ?? "",
     sessionSecret,
     sampleData: env.DASHBOARD_SAMPLE_DATA === "1",
+    allowedHosts: parseHosts(env.DASHBOARD_ALLOWED_HOSTS),
   };
 }
 

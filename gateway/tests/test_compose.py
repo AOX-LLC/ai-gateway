@@ -125,6 +125,7 @@ def test_the_dashboard_holds_the_telemetry_readers_credential_and_no_other_secre
         "DASHBOARD_SESSION_SECRET",
         "DASHBOARD_ADMIN_PASSWORD_HASH",
         "DASHBOARD_SAMPLE_DATA",
+        "DASHBOARD_ALLOWED_HOSTS",
     }
     assert environment["DASHBOARD_DATABASE_URL"].startswith("postgresql://telemetry_reader:")
     assert "POSTGRES_PASSWORD" not in str(environment)

@@ -1,5 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { config as settings } from "./lib/config";
+import { hostAllowed } from "./lib/auth/hosts";
 import { COOKIE_NAME, REFRESH_AFTER_S, cookieAttributes, issue, verify } from "./lib/auth/session";
 import { ABSOLUTE_LIFETIME_S } from "./lib/auth/session";
 
@@ -49,6 +50,10 @@ export function proxy(request: NextRequest): NextResponse {
   const nonce = Buffer.from(crypto.randomUUID()).toString("base64");
   const csp = policy(nonce);
   const path = request.nextUrl.pathname;
+  // A request sent under a name that is not ours (DNS rebinding) is turned away before anything else.
+  if (!hostAllowed(request.headers.get("host"), settings().allowedHosts)) {
+    return secure(new NextResponse("Misdirected Request", { status: 421 }), csp);
+  }
   const payload = verify(request.cookies.get(COOKIE_NAME)?.value, settings().sessionSecret, now());
 
   if (!payload && !OPEN_PATHS.has(path)) {
