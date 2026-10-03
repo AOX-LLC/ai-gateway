@@ -1124,9 +1124,34 @@ are UTC.
 
 ### What is not here
 
-No charts (5c-3). The memory limit, 256 MiB, is provisional until 5c-3 measures the peak. The
+### Charts, the demo stack and the memory limit (5c-3)
+
+Five charts sit between the KPIs and the decisions: request volume (forwarded and blocked), latency
+(p50, p95, p99), success and errors by tool, blocked by layer (blocked, and would-block in monitor
+mode) and failed sign-ins by reason with a trend. They are server-rendered SVG with no chart library,
+in the UI system's chart tokens. Each has a plain-words summary and its numbers as a table, and every
+status is an icon and a word, never colour alone. When one spike would flatten the latency lines, the
+axis stops at a labelled ceiling; the table and summary keep the true peak.
+
+`scripts/run_dashboard_demo.sh all` brings up a separate Compose project (`ai-gateway-demo`, never a
+real stack's name) with `compose.demo.yaml`, seeds about a week of fictional Harborline Supply Co.
+telemetry with `scripts/seed_dashboard_demo.py` (a daily rhythm and four attack episodes; the same seed
+gives the same counts), puts four approvals pending and one each approved, rejected and expired through
+the real path with two demo approver logins, and takes the screenshots in `docs/images/` with
+`scripts/screenshots.py`. The demo admin password is made for the run and kept only in a git-ignored
+`.demo/`; `DASHBOARD_DEMO=1` pins "now" to the newest seeded row so the week is always in range.
+
+The memory limit is measured, not guessed: `scripts/measure_dashboard_memory.py` samples the container
+once a second through a first load, ten concurrent loads in both themes, the 7- and 30-day ranges and a
+30-attempt sign-in burst, three rounds. The highest sampled value was 76 MiB and the cgroup's own peak
+94 MiB, so the limit is 144 MiB (1.5 times 94) and the Node heap 86 MiB (60%). The Compose total stays
+under 3072 MiB.
+
+### What is not here
+
+Sign-out revocation and the sign-in throttle are held in memory, so a restart forgets them. The
 dashboard's fonts (IBM Plex Sans and Mono, Space Grotesk) are self-hosted under the SIL Open Font
-License 1.1; their notices come with 5c-3.
+License 1.1; see `THIRD_PARTY_NOTICES.md`.
 
 ## Health check
 

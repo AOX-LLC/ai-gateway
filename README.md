@@ -50,6 +50,12 @@ accept on `127.0.0.1` over http but **Safari does not**: there, sign-in appears 
 page is not signed in. Use Chromium or Firefox, or put TLS in front. `scripts/check_dashboard.py` checks
 the running dashboard end to end. See Dashboard in `docs/architecture.md`.
 
+To see it full of data without touching your own stack, `scripts/run_dashboard_demo.sh all` starts a
+separate demo stack with a week of seeded, fictional Harborline Supply Co. telemetry and a demo-only
+password, and takes the screenshots in `docs/images/`; `scripts/run_dashboard_demo.sh down` removes it.
+
+![The dashboard overview in the dark theme, on fictional sample data](docs/images/overview-dark.png)
+
 ## Licence
 
 MIT, copyright AOX LLC. See `LICENSE`. Third-party licences (the self-hosted fonts under the SIL Open Font License, the icon set, the pgvector database image and the dashboard's npm packages) are in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md). Harborline Supply Co. and all its data are fictional.
