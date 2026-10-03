@@ -1,0 +1,10 @@
+node_modules
+.next
+npm-debug.log*
+tests
+*.md
+.env*
+.claude
+*.tsbuildinfo
+AGENTS.md
+CLAUDE.md

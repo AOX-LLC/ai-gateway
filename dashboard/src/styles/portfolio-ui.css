@@ -1,0 +1,209 @@
+/* AOX Portfolio UI · portfolio-ui.css
+ * CSS variables for both themes plus font imports. Generated from tokens.json; do not hand-edit values.
+ * Usage: import once at the app root, then set data-theme and data-accent on <html>.
+ *   <html data-theme="dark" data-accent="verdigris" data-density="compact">
+ * Fonts: Space Grotesk, IBM Plex Sans, IBM Plex Mono — all SIL Open Font License 1.1.
+ * In Next.js prefer next/font/google (see README) and delete the @import below. */
+
+
+:root,
+[data-theme="light"] {
+  color-scheme: light;
+  --pui-bg: #F6F7F8;
+  --pui-surface: #FFFFFF;
+  --pui-surface-muted: #F0F2F4;
+  --pui-surface-sunken: #EDEFF1;
+  --pui-border: #DDE1E5;
+  --pui-border-strong: #C5CBD1;
+  --pui-border-control: #828A92;
+  --pui-text: #15181B;
+  --pui-text-secondary: #3D444B;
+  --pui-text-muted: #5B636B;
+  --pui-grid-line: #E6E9EC;
+  --pui-scrim: rgba(14, 16, 18, 0.48);
+  --pui-verdigris: #0F7A6F;
+  --pui-verdigris-hover: #0B6159;
+  --pui-on-verdigris: #FFFFFF;
+  --pui-verdigris-soft: #E3F2EF;
+  --pui-verdigris-text: #0B6159;
+  --pui-ink: #15181B;
+  --pui-ink-hover: #2A2F35;
+  --pui-on-ink: #FFFFFF;
+  --pui-ink-soft: #E9ECEF;
+  --pui-ink-text: #15181B;
+  --pui-signal: #C2410C;
+  --pui-signal-hover: #A3360A;
+  --pui-on-signal: #FFFFFF;
+  --pui-signal-soft: #FBEAE1;
+  --pui-signal-text: #A3360A;
+  --pui-accent: var(--pui-verdigris);
+  --pui-accent-hover: var(--pui-verdigris-hover);
+  --pui-on-accent: var(--pui-on-verdigris);
+  --pui-accent-soft: var(--pui-verdigris-soft);
+  --pui-accent-text: var(--pui-verdigris-text);
+  --pui-focus-ring: var(--pui-accent);
+  --pui-success: #1E7A44;
+  --pui-success-soft: #E4F2E9;
+  --pui-warning: #8A5700;
+  --pui-warning-soft: #FBF0DA;
+  --pui-danger: #B4233A;
+  --pui-danger-soft: #FBE7EA;
+  --pui-danger-hover: #961C30;
+  --pui-on-danger: #FFFFFF;
+  --pui-info: #2F5FB3;
+  --pui-info-soft: #E6EDF9;
+  --pui-pending: #6B4FC2;
+  --pui-pending-soft: #EFEBFA;
+  --pui-chart-1: #2F6FB0;
+  --pui-chart-2: #A86E00;
+  --pui-chart-3: #00805B;
+  --pui-chart-4: #AD4F84;
+  --pui-chart-5: #3D8CC4;
+  --pui-chart-6: #CC4A12;
+  --pui-chart-7: #5F5300;
+  --pui-chart-8: #7C848C;
+  --pui-defect-crack: #FFD60A;
+  --pui-defect-spalling: #FF4FA3;
+  --pui-defect-efflorescence: #3EE0F0;
+  --pui-defect-rebar: #FF7A1A;
+  --pui-defect-corrosion: #9BE15D;
+  --pui-defect-other: #FFFFFF;
+  --pui-defect-halo: #0E1012;
+  --pui-shadow-overlay: 0 8px 24px rgba(21, 24, 27, 0.12), 0 2px 6px rgba(21, 24, 27, 0.08);
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+  --pui-bg: #0E1012;
+  --pui-surface: #15181B;
+  --pui-surface-muted: #1C2024;
+  --pui-surface-sunken: #111316;
+  --pui-border: #2A2F35;
+  --pui-border-strong: #3A4148;
+  --pui-border-control: #6B747D;
+  --pui-text: #E6E8EA;
+  --pui-text-secondary: #C3C8CD;
+  --pui-text-muted: #9AA1A9;
+  --pui-grid-line: #22272C;
+  --pui-scrim: rgba(0, 0, 0, 0.62);
+  --pui-verdigris: #3FC1B0;
+  --pui-verdigris-hover: #5FD0C1;
+  --pui-on-verdigris: #08201D;
+  --pui-verdigris-soft: #12302C;
+  --pui-verdigris-text: #5FD0C1;
+  --pui-ink: #E6E8EA;
+  --pui-ink-hover: #FFFFFF;
+  --pui-on-ink: #0E1012;
+  --pui-ink-soft: #23282D;
+  --pui-ink-text: #E6E8EA;
+  --pui-signal: #F58A4B;
+  --pui-signal-hover: #F8A274;
+  --pui-on-signal: #2A1206;
+  --pui-signal-soft: #34200F;
+  --pui-signal-text: #F8A274;
+  --pui-success: #4CC985;
+  --pui-success-soft: #132A1D;
+  --pui-warning: #E8B23A;
+  --pui-warning-soft: #2E2410;
+  --pui-danger: #F2707F;
+  --pui-danger-soft: #33161B;
+  --pui-danger-hover: #F58C98;
+  --pui-on-danger: #1A0A0D;
+  --pui-info: #7EA6F0;
+  --pui-info-soft: #16223A;
+  --pui-pending: #A792F2;
+  --pui-pending-soft: #231D3A;
+  --pui-chart-1: #6AA8E8;
+  --pui-chart-2: #F0B429;
+  --pui-chart-3: #2DBE8C;
+  --pui-chart-4: #E08CBB;
+  --pui-chart-5: #9ACFF2;
+  --pui-chart-6: #F07A3A;
+  --pui-chart-7: #E6D84A;
+  --pui-chart-8: #8A9199;
+  --pui-shadow-overlay: 0 8px 24px rgba(0, 0, 0, 0.55), 0 2px 6px rgba(0, 0, 0, 0.4);
+}
+
+[data-accent="verdigris"] {
+  --pui-accent: var(--pui-verdigris);
+  --pui-accent-hover: var(--pui-verdigris-hover);
+  --pui-on-accent: var(--pui-on-verdigris);
+  --pui-accent-soft: var(--pui-verdigris-soft);
+  --pui-accent-text: var(--pui-verdigris-text);
+}
+
+[data-accent="ink"] {
+  --pui-accent: var(--pui-ink);
+  --pui-accent-hover: var(--pui-ink-hover);
+  --pui-on-accent: var(--pui-on-ink);
+  --pui-accent-soft: var(--pui-ink-soft);
+  --pui-accent-text: var(--pui-ink-text);
+}
+
+[data-accent="signal"] {
+  --pui-accent: var(--pui-signal);
+  --pui-accent-hover: var(--pui-signal-hover);
+  --pui-on-accent: var(--pui-on-signal);
+  --pui-accent-soft: var(--pui-signal-soft);
+  --pui-accent-text: var(--pui-signal-text);
+}
+
+:root {
+  --pui-font-display: "Space Grotesk", "IBM Plex Sans", system-ui, sans-serif;
+  --pui-font-sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --pui-font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --pui-space-1: 4px;
+  --pui-space-2: 8px;
+  --pui-space-3: 12px;
+  --pui-space-4: 16px;
+  --pui-space-5: 20px;
+  --pui-space-6: 24px;
+  --pui-space-8: 32px;
+  --pui-space-12: 48px;
+  --pui-radius-none: 0px;
+  --pui-radius-sm: 2px;
+  --pui-radius-md: 4px;
+  --pui-radius-dot: 50%;
+  --pui-control-sm: 28px;
+  --pui-control-md: 32px;
+  --pui-control-lg: 40px;
+  --pui-row-compact: 36px;
+  --pui-row-comfortable: 44px;
+  --pui-sidebar-width: 232px;
+  --pui-topbar-height: 56px;
+  --pui-border-width: 1px;
+  --pui-focus-width: 2px;
+  --pui-z-sticky: 10;
+  --pui-z-popover: 30;
+  --pui-z-dialog: 40;
+  --pui-z-toast: 50;
+  --pui-text-body: 13px;
+  --pui-leading-body: 20px;
+  --pui-control: var(--pui-control-md);
+  --pui-row: var(--pui-row-compact);
+}
+
+[data-density="comfortable"] {
+  --pui-text-body: 15px;
+  --pui-leading-body: 24px;
+  --pui-control: var(--pui-control-lg);
+  --pui-row: var(--pui-row-comfortable);
+}
+
+/* Base */
+html { background: var(--pui-bg); }
+body {
+  margin: 0;
+  background: var(--pui-bg);
+  color: var(--pui-text);
+  font-family: var(--pui-font-sans);
+  font-size: var(--pui-text-body);
+  line-height: var(--pui-leading-body);
+  -webkit-font-smoothing: antialiased;
+  font-feature-settings: "ss02" 0;
+}
+:focus-visible { outline: var(--pui-focus-width) solid var(--pui-focus-ring); outline-offset: 2px; }
+::selection { background: var(--pui-accent-soft); color: var(--pui-text); }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}

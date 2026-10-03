@@ -1015,6 +1015,118 @@ machine, these options keep that binding. None of them is built into this reposi
 
 Any option that crosses a network carries the bearer token, so it must use TLS or SSH.
 
+## Dashboard (Phase 5c)
+
+A read-only Next.js app in `dashboard/`, published on `127.0.0.1:4400` (standalone output, run by a
+non-root user on a read-only filesystem). It shows what the gateway has recorded and changes nothing:
+there is no approve, deny or revoke in it (approvals are decided with `gateway-approver`). Phase 5c-2
+has the overview's KPIs, the recent decisions and the approval queue; the charts, the seeded demo
+backfill and the memory measurement are 5c-3.
+
+### What it can reach
+
+It is on a network of its own with PostgreSQL (`dashboard`), not on `edge` with the gateway and not
+on `backend`, so it has no route to the gateway or the MCP servers. A published port cannot come from
+an internal network, so this one is an ordinary bridge with a route out; the dashboard holds only the
+telemetry reader's credential and has no use for it. It reads through that role (`telemetry_reader`:
+`SELECT` on the four telemetry views and `policy.dash_approvals`, five connections at most) and nothing
+else: no base table, no registry, no arguments, no addresses.
+
+Next.js's own telemetry is off (`NEXT_TELEMETRY_DISABLED=1` in every stage of the image and in the
+service; a test pins both).
+
+### The database, bounded by the dashboard
+
+The reader role's read-only, 5 s and 10 s settings are session defaults a session can change, so the
+dashboard sets its own: a pool of three connections that start `default_transaction_read_only=on` with
+a statement timeout, and every query runs in `BEGIN READ ONLY` with `SET LOCAL statement_timeout`
+(4 s). That bounds the dashboard's own queries; it is not a control against a compromised dashboard
+process, which could reset the settings: what binds then is the role's grants and its five-connection
+limit.
+
+### Signing in
+
+One admin, whose password is kept as a scrypt hash in `DASHBOARD_ADMIN_PASSWORD_HASH`
+(`scrypt:<N>:<r>:<p>:<salt>:<hash>`, written without `$` so Compose does not read it as a variable).
+Set it with `python3 scripts/set_dashboard_password.py`, which asks twice and prints nothing; empty
+means nobody can sign in, and the sign-in page says so. scrypt uses 32 MiB a verification, so they are
+done one at a time.
+
+- **Session.** A signed cookie, `__Host-aig_session`: `HttpOnly; Secure; SameSite=Strict; Path=/`, no
+  `Domain`. Its payload (a random id, when it was issued, when it was last seen) is signed with
+  HMAC-SHA256 under `DASHBOARD_SESSION_SECRET`. It ends 30 minutes after it was last used and 8 hours
+  after it was issued, however busy. The last-seen time moves when the person does something (opens or
+  changes a page, pages the decisions), at most once a minute; the page's own 15-second refresh does not
+  move it, so a tab left open ends 30 minutes after the last real use and its next refresh is turned
+  away with a 401. The session itself is stored nowhere, so a restart signs nobody out and changing the
+  secret signs everybody out. **Signing out is remembered in memory:** the session id goes on a list that
+  the proxy and the pages check, so a copied cookie stops working at once; the list is lost on a restart,
+  after which a cookie signed out before it is good again until it expires (at most 8 hours).
+- **`Secure` is always set,** so the cookie is only kept where the browser treats the origin as secure.
+  Chromium and Firefox do that for `localhost` and `127.0.0.1` over plain http; Safari does not for
+  `http://127.0.0.1`, so there signing in appears to work and the next request is not signed in. Use
+  Chromium or Firefox, or put TLS in front. (This is a known limitation, not something to turn off.)
+- **Form posts** (sign in, sign out) must carry an `Origin` that names the host they were sent to, and
+  `Sec-Fetch-Site` of `same-origin` where the browser sends it; with `SameSite=Strict` that is the second
+  defence against a cross-site post.
+- **Failed sign-ins** are counted for the whole dashboard (behind Docker's port publishing every client
+  arrives from the bridge's address, so a per-address count would be one count anyway). Five attempts are
+  allowed; the fifth starts a one-minute lockout in which the password is not looked at, and each attempt
+  after a lockout starts one twice as long, up to 15 minutes. So a guesser gets five tries and then one
+  per lockout, about 96 a day, however long they wait: the count does not expire, only a success (or a
+  restart) clears it, because a window that forgets lets the guesser have a fresh burst once the
+  lockouts outgrow it. An attempt is counted when it starts, so guesses sent at once are counted too. The
+  real admin, locked out by someone else's guesses, waits at most 15 minutes. Every failure is the same
+  "did not match". The password is also limited to 12 to 512 characters.
+
+### Headers and the proxy
+
+`src/proxy.ts` runs before every request that is not a static file. It puts a fresh nonce
+Content-Security-Policy on every answer (`default-src 'none'`; scripts only `'self'` with the nonce and
+`'strict-dynamic'`; styles from `'self'` with the nonce and **no inline style attributes at all**, so
+there is no `style=` anywhere in the UI; `connect-src`, `img-src`, `font-src` `'self'`; `form-action`
+`'self'`; `frame-ancestors`, `base-uri` and `object-src` none) with `X-Content-Type-Options`,
+`Referrer-Policy: no-referrer`, `X-Frame-Options`, `Cross-Origin-Opener-Policy` and
+`Cross-Origin-Resource-Policy`, a `Permissions-Policy` that turns everything off, and
+`Cache-Control: no-store`. It sends anyone without a valid session to `/signin` (an API call gets 401);
+the sign-in page, its form and `/healthz` (which reads nothing) are open. It is the first gate, not the
+only one: the pages check the session, and so does every data function.
+
+Three details that matter. The proxy does not run on static files, so `next.config.ts` gives `/_next/static`,
+`/brand` and `/fonts` `X-Content-Type-Options` and `Cross-Origin-Resource-Policy` itself. Next's built-in
+404 and last-resort error pages use inline styles and un-nonced scripts, which this CSP would block, so
+the app has its own `not-found.tsx` and `global-error.tsx` made of the system's classes. And Next
+buffers a request body for the proxy before the proxy looks at the request, so the limit is set to
+16 KB (`proxyClientMaxBodySize`): the only body the dashboard takes is a password form. Every request
+is also refused with 421 unless its `Host` is in `DASHBOARD_ALLOWED_HOSTS` (loopback by default), which
+is what stops DNS rebinding: the `Origin` check alone compares `Host` with a value an attacker also
+controls.
+
+### Every data function takes a session
+
+`src/lib/data` exports three functions (`getKpis`, `getDecisions`, `getApprovals`), each with an
+`AuthedSession` first. That type can only be made by the code that has checked the signed cookie
+(`mint`), and each function, and the database runner under them, checks it again before anything is
+read. A test loads every export of the module and requires each to reject a missing, empty, forged or
+wrong-typed session before the database is touched, so a function added without the check fails it.
+
+### Panels and refresh
+
+Each panel has loading, empty, error and (for tokens and cost, which start with the injection
+classifier in Phase 4) not-active states, and status is always an icon and words, never colour alone.
+The page is rendered on the server with the data, then refreshed every 15 seconds from `/api/live`
+while the tab is visible: it stops when the tab is hidden and refreshes at once on return after a gap,
+and a failed refresh keeps the last good data on screen with its age. The decisions are paged by
+keyset (time to the microsecond, then request id), so a row written while someone pages is neither
+skipped nor shown twice; a cursor comes back from the browser and is checked before it is used. Times
+are UTC.
+
+### What is not here
+
+No charts (5c-3). The memory limit, 256 MiB, is provisional until 5c-3 measures the peak. The
+dashboard's fonts (IBM Plex Sans and Mono, Space Grotesk) are self-hosted under the SIL Open Font
+License 1.1; their notices come with 5c-3.
+
 ## Health check
 
 `GET /healthz` needs no token and, like everything else, is published on 127.0.0.1 only.
@@ -1043,7 +1155,7 @@ itself).
 
 | Service | Address |
 | --- | --- |
-| Dashboard (Phase 5) | 127.0.0.1:4400 |
+| Dashboard (Phase 5c) | 127.0.0.1:4400 |
 | Gateway | 127.0.0.1:4401 |
 | PostgreSQL | 127.0.0.1:4402 |
 | MCP servers (Phase 2) | none on the host; 4410 (handbook), 4411 (CRM) and 4412 (ticketing) inside the `backend` network |
@@ -1052,11 +1164,12 @@ The test-only echo server has no published port either.
 
 ## Networks
 
-Compose has two networks:
+Compose has three networks:
 
 | Network | Kind | Members |
 | --- | --- | --- |
 | `edge` | ordinary bridge | the gateway and PostgreSQL, the two services that publish a port |
+| `dashboard` | ordinary bridge | the dashboard and PostgreSQL, and nothing else |
 | `backend` | `internal: true` | the three MCP servers, `servers-setup`, `telemetry-setup`, `telemetry-purge`, `policy-setup`, `migrate`, `admin`, `direct-check`, the test upstream, and also the gateway and PostgreSQL |
 
 Docker gives an internal network no route to the outside world and publishes no port from
@@ -1069,7 +1182,7 @@ the gateway, **cannot reach the Internet or the host's services**, and neither c
 else on `backend` alone: a server that a prompt injection or a bug turns against its operator
 has nowhere to send what it read. It also makes the handbook's "no network at run time"
 claim true by construction instead of by reading the code. The gateway and PostgreSQL are on
-both networks, because the host reaches them and they reach the servers.
+both networks, because the host reaches them and they reach the servers. PostgreSQL is also on `dashboard`.
 
 A server therefore publishes no host port, and the host cannot call it, not even by the
 container's address. Anything that needs to call a server directly runs inside the network:

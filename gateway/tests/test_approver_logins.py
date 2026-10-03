@@ -37,7 +37,7 @@ from ai_gateway.policy.approver_logins import (
 )
 from ai_gateway.policy.setup import PolicyPasswords, setup_policy
 from ai_gateway.seams.approvals import ApprovalOutcome
-from tests.conftest import MakeApprover, login_url, password_of
+from tests.conftest import MakeApprover, MakeClient, login_url, password_of
 from tests.test_approval_gate import ROLES, _call, _context, _gate
 
 pytestmark = [pytest.mark.integration, pytest.mark.anyio]
@@ -539,30 +539,41 @@ async def test_only_the_owner_writes_the_approvers_and_none_of_them_is_ever_dele
             )
 
 
-async def test_the_dashboard_reader_sees_the_upstream_and_who_decided_and_no_more(
+async def test_the_dashboard_reader_sees_the_upstream_the_client_and_who_decided_and_no_more(
     policy: None,
     telemetry: None,
     make_approver: MakeApprover,
+    make_client: MakeClient,
     test_database_url: str,
     policy_gateway_url: str,
     policy_auditor_url: str,
     reader_url: str,
 ) -> None:
     aiden = Approvals(await make_approver("aiden"), ROLES)
+    client_id, _ = await make_client("harborline-ops-bot", [])
     # The reader's role exists now (the telemetry setup made it), so this setup grants it the view.
     await _setup(test_database_url, policy_gateway_url, policy_auditor_url)
-    await aiden.decide(await _ask(policy_gateway_url), Decision.APPROVE, None)
+    registered = await _gate(policy_gateway_url).decide(_context(client_id), _call())
+    unregistered = await _ask(policy_gateway_url, ticket_id="TKT-000002", status="closed")
+    await aiden.decide(UUID(registered.approval_id or ""), Decision.APPROVE, None)
+    await aiden.decide(unregistered, Decision.REJECT, "no")
 
     rows = await _rows(
         reader_url,
-        "SELECT namespace, resolved_by, resolved_by_name, status FROM policy.dash_approvals",
+        "SELECT namespace, resolved_by, resolved_by_name, status, client_name"
+        " FROM policy.dash_approvals ORDER BY status",
     )
 
-    assert rows == [("tickets", "human:aiden", "Aiden", "approved")]
+    assert rows == [
+        ("tickets", "human:aiden", "Aiden", "approved", "harborline-ops-bot"),
+        ("tickets", "human:aiden", "Aiden", "rejected", None),
+    ], "a client that is not in the registry has no name to show"
     with pytest.raises(errors.InsufficientPrivilege):
         await _rows(reader_url, "SELECT * FROM policy.approvers")
     with pytest.raises(errors.InsufficientPrivilege):
         await _rows(reader_url, "SELECT * FROM policy.approver_logins")
+    with pytest.raises(errors.InsufficientPrivilege):
+        await _rows(reader_url, "SELECT * FROM public.clients")
 
 
 # --- what the audit log says ---------------------------------------------------------------

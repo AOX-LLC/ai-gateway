@@ -56,7 +56,8 @@ services:
       GATEWAY_APP_DB_PASSWORD: ${GATEWAY_APP_DB_PASSWORD:?set it in .env}
     ports:
       - "127.0.0.1:4402:5432"
-    networks: [edge, backend]
+    # On the dashboard's own network too, so the dashboard reaches the database and nothing else.
+    networks: [edge, backend, dashboard]
     mem_limit: 256m
     volumes:
       - postgres-data:/var/lib/postgresql/data
@@ -193,6 +194,45 @@ services:
       retries: 5
       start_period: 10s
     <<: *hardening
+
+  # The dashboard (Phase 5c): read-only, on 127.0.0.1:4400, through the telemetry reader role. It is on
+  # a network of its own with Postgres, not on `edge` with the gateway. The memory limit is provisional
+  # (Phase 5c-3 measures it). Sign in with the admin password: scripts/set_dashboard_password.py.
+  dashboard:
+    build: ./dashboard
+    image: ai-gateway-dashboard
+    restart: unless-stopped
+    <<: *hardening
+    tmpfs:
+      - /tmp
+      - /app/.next/cache
+    networks: [dashboard]
+    ports:
+      - "127.0.0.1:4400:4400"
+    mem_limit: 256m
+    environment:
+      NEXT_TELEMETRY_DISABLED: "1"
+      NODE_OPTIONS: --max-old-space-size=160
+      DASHBOARD_DATABASE_URL: postgresql://telemetry_reader:${TELEMETRY_READER_DB_PASSWORD:?set it in .env}@postgres:5432/${POSTGRES_DB}
+      DASHBOARD_SESSION_SECRET: ${DASHBOARD_SESSION_SECRET:?set it in .env (python3 scripts/init_env.py adds it)}
+      DASHBOARD_ADMIN_PASSWORD_HASH: ${DASHBOARD_ADMIN_PASSWORD_HASH:-}
+      DASHBOARD_SAMPLE_DATA: ${DASHBOARD_SAMPLE_DATA:-1}
+      # The Host values it answers to (anything else is refused: DNS rebinding); loopback by default.
+      DASHBOARD_ALLOWED_HOSTS: ${DASHBOARD_ALLOWED_HOSTS:-127.0.0.1:*,localhost:*,[::1]:*}
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4400/healthz').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      # The reader role and the views it reads exist after these.
+      telemetry-setup:
+        condition: service_completed_successfully
+      policy-setup:
+        condition: service_completed_successfully
 
   # Runs as the database owner: creates each server's role and schema, migrates and seeds
   # them. The servers themselves connect only as their own least-privilege role.
@@ -418,6 +458,10 @@ services:
 
 networks:
   edge: {}
+  # The dashboard's own: it and Postgres, nothing else, so the dashboard cannot reach the gateway or the
+  # servers. A published port cannot come from an internal network, so this one has a route out;
+  # the dashboard holds only the telemetry reader's credential and has no use for it.
+  dashboard: {}
   backend:
     internal: true
     driver_opts:

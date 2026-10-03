@@ -52,6 +52,49 @@ jobs:
           uv run --frozen pip-audit -r "$RUNNER_TEMP/requirements-audit.txt" \
             --no-deps --disable-pip --progress-spinner off
 
+  dashboard:
+    runs-on: ubuntu-latest
+    env:
+      NEXT_TELEMETRY_DISABLED: "1"
+    defaults:
+      run:
+        working-directory: dashboard
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+      - run: npm ci --ignore-scripts
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  dashboard-audit:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dashboard
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+      - run: npm ci --ignore-scripts
+      - name: Audit the dashboard's production dependencies
+        # Only what ships (not the build and test tools), against the npm advisory database. The
+        # advisories are live, so a new one can fail a build that changed nothing: upgrade the
+        # package, or say here, with a reason and a date to revisit, why it does not apply.
+        run: npm audit --omit=dev --audit-level=high
+
   test:
     runs-on: ubuntu-latest
     services:
@@ -222,6 +265,16 @@ jobs:
           LAB_AUTO_APPROVE: "yes"
         run: |
           scripts/run_harborline_check.sh
+      - name: The dashboard signs in and shows live data
+        shell: bash
+        env:
+          # A throwaway password for this CI stack; the dashboard reads it as a hash.
+          DASHBOARD_PASSWORD: ci-only-dashboard-password
+        run: |
+          set -euo pipefail
+          python3 scripts/set_dashboard_password.py --password-env DASHBOARD_PASSWORD
+          docker compose up -d --force-recreate --wait dashboard
+          python3 scripts/check_dashboard.py --expect-data
       - name: Show stack logs
         if: failure()
         run: docker compose --profile test logs --no-color

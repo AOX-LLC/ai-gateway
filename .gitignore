@@ -70,3 +70,7 @@ Desktop.ini
 # Tokens printed by `gateway-admin seed-demo`, for scripts/simulate_traffic.py
 /demo.json
 /seed.json
+
+# Written by `next dev`; not ours (its CLAUDE.md imports instructions from a package)
+dashboard/AGENTS.md
+dashboard/CLAUDE.md

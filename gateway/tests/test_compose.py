@@ -65,8 +65,70 @@ def test_a_service_with_no_business_outside_sits_only_on_the_internal_network(
 
 
 def test_the_gateway_and_postgres_bridge_the_two_networks(compose: dict[str, Any]) -> None:
-    for service in ("gateway", "postgres"):
-        assert compose["services"][service]["networks"] == ["edge", "backend"]
+    assert compose["services"]["gateway"]["networks"] == ["edge", "backend"]
+    # Postgres is also on the dashboard's network, which is why the dashboard can reach it.
+    assert compose["services"]["postgres"]["networks"] == ["edge", "backend", "dashboard"]
+
+
+DASHBOARD_DIRECTORY = COMPOSE_FILE.parent / "dashboard"
+
+
+def test_the_dashboard_is_on_a_network_with_postgres_only_and_cannot_reach_the_gateway(
+    compose: dict[str, Any],
+) -> None:
+    """It reads the database and nothing else, so it shares no network with the gateway or the
+    servers. The network is not internal, since a published port cannot come from one."""
+    services = compose["services"]
+
+    assert services["dashboard"]["networks"] == ["dashboard"]
+    on_dashboard = {
+        name for name, svc in services.items() if "dashboard" in svc.get("networks", [])
+    }
+    assert on_dashboard == {"dashboard", "postgres"}
+    assert not (compose["networks"]["dashboard"] or {}).get("internal")
+    assert {"edge", "backend"}.isdisjoint(services["dashboard"]["networks"])
+
+
+def test_the_dashboard_publishes_4400_on_loopback_and_runs_hardened(
+    compose: dict[str, Any],
+) -> None:
+    dashboard = compose["services"]["dashboard"]
+
+    assert dashboard["ports"] == ["127.0.0.1:4400:4400"]
+    assert dashboard["read_only"] is True
+    assert dashboard["cap_drop"] == ["ALL"]
+    assert dashboard["security_opt"] == ["no-new-privileges:true"]
+    assert dashboard["restart"] == "unless-stopped"
+    assert dashboard["mem_limit"] == "256m", "provisional: Phase 5c-3 measures it"
+
+
+def test_next_telemetry_is_disabled_in_the_dashboard_service_and_image(
+    compose: dict[str, Any],
+) -> None:
+    assert compose["services"]["dashboard"]["environment"]["NEXT_TELEMETRY_DISABLED"] == "1"
+    dockerfile = (DASHBOARD_DIRECTORY / "Dockerfile").read_text(encoding="utf-8")
+    stages = dockerfile.split("\nFROM ")[1:]
+    assert len(stages) == 3
+    for stage in stages:
+        assert "NEXT_TELEMETRY_DISABLED=1" in stage, stage.splitlines()[0]
+
+
+def test_the_dashboard_holds_the_telemetry_readers_credential_and_no_other_secret(
+    compose: dict[str, Any],
+) -> None:
+    environment = compose["services"]["dashboard"]["environment"]
+
+    assert set(environment) == {
+        "NEXT_TELEMETRY_DISABLED",
+        "NODE_OPTIONS",
+        "DASHBOARD_DATABASE_URL",
+        "DASHBOARD_SESSION_SECRET",
+        "DASHBOARD_ADMIN_PASSWORD_HASH",
+        "DASHBOARD_SAMPLE_DATA",
+        "DASHBOARD_ALLOWED_HOSTS",
+    }
+    assert environment["DASHBOARD_DATABASE_URL"].startswith("postgresql://telemetry_reader:")
+    assert "POSTGRES_PASSWORD" not in str(environment)
 
 
 def test_every_service_names_its_networks(compose: dict[str, Any]) -> None:
@@ -114,7 +176,15 @@ def test_long_running_services_restart_and_finished_one_shots_do_not(
     out-of-memory kill; a setup job that has finished must not start over."""
     services = compose["services"]
 
-    for name in ("gateway", "postgres", "crm", "ticketing", "handbook", "telemetry-purge"):
+    for name in (
+        "gateway",
+        "postgres",
+        "crm",
+        "ticketing",
+        "handbook",
+        "telemetry-purge",
+        "dashboard",
+    ):
         assert services[name]["restart"] == "unless-stopped", name
     for name in ("migrate", "telemetry-setup", "policy-setup", "servers-setup", "lab-approver"):
         assert services[name]["restart"] == "no", name
