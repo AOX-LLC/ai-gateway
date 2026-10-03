@@ -113,6 +113,7 @@ def run_gateway(
     workdir: Path,
     telemetry_database_url: str | None = None,
     policy_database_url: str | None = None,
+    unaudited_writes: bool | None = None,
 ) -> Iterator[RunningGateway]:
     """The whole gateway on a free port, with only the scope layer, recording its events (and,
     given a telemetry database, storing them there too).
@@ -120,7 +121,9 @@ def run_gateway(
     Writes are allowed without an audit record unless a policy database is given: a test that is
     not about the audit log should not need one, and a test that is gets the shipped behaviour."""
     pipeline_file = workdir / "pipeline.toml"
-    unaudited = "false" if policy_database_url else "true"
+    if unaudited_writes is None:
+        unaudited_writes = policy_database_url is None
+    unaudited = "true" if unaudited_writes else "false"
     pipeline_file.write_text(
         f'[layers]\nscope = "enforce"\n\n[safety]\nallow_unaudited_writes = {unaudited}\n'
     )
