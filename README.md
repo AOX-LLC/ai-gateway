@@ -33,6 +33,23 @@ rm demo.json
 `--verify` reads the stored telemetry back through the dashboard's read-only role and checks it
 matches what was sent. Records older than 30 days (spans: 7) are purged hourly.
 
+### The dashboard
+
+A read-only dashboard is on <http://127.0.0.1:4400> once the stack is up (`docker compose up` starts
+it). Sign in with the admin password, which you set yourself and which is stored only as a hash:
+
+```sh
+python3 scripts/set_dashboard_password.py     # asks twice; prints nothing
+docker compose up -d dashboard                # it reads the password when it starts
+```
+
+Until a password is set nobody can sign in. The dashboard shows the overview, the recent decisions and
+the approval queue, refreshing every 15 seconds; it cannot approve, deny or revoke anything (use
+`gateway-approver` for approvals). Its session cookie is always `Secure`, which Chromium and Firefox
+accept on `127.0.0.1` over http but **Safari does not**: there, sign-in appears to work and the next
+page is not signed in. Use Chromium or Firefox, or put TLS in front. `scripts/check_dashboard.py` checks
+the running dashboard end to end. See Dashboard in `docs/architecture.md`.
+
 ## Licence
 
 MIT, copyright AOX LLC. See `LICENSE`. Harborline Supply Co. and all its data are fictional.
