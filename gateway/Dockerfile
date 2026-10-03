@@ -5,6 +5,11 @@ FROM python:3.12-slim@sha256:dddfd7e07f9d15aeeca61529320492139d21cac7f0070c00609
 COPY --from=ghcr.io/astral-sh/uv:0.12.10@sha256:2bb3ebca0a796a155094a27773d290c4b074572e6107f171d88d086682fd2500 /uv /usr/local/bin/uv
 ENV UV_PYTHON_DOWNLOADS=never UV_LINK_MODE=copy UV_COMPILE_BYTECODE=1 UV_PROJECT_ENVIRONMENT=/app/.venv
 WORKDIR /src
+# agent-core is pinned by git tag (gateway/pyproject.toml), and uv fetches it with git. Only this
+# build stage has git; the final image does not.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 COPY pyproject.toml uv.lock ./
 COPY gateway/ gateway/
 COPY servers/ servers/

@@ -95,6 +95,25 @@ services:
         condition: service_healthy
     restart: "no"
 
+  # Creates the policy schema's three roles, installs agent-core's audit log and approval queue
+  # once, and grants (as the database owner).
+  policy-setup:
+    build: *gateway-build
+    image: ai-gateway-gateway
+    command: ["gateway-admin", "policy-setup"]
+    <<: *hardening
+    networks: [backend]
+    mem_limit: 192m
+    environment:
+      GATEWAY_MIGRATE_DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      POLICY_GATEWAY_DB_PASSWORD: ${POLICY_GATEWAY_DB_PASSWORD:?set it in .env}
+      POLICY_APPROVER_DB_PASSWORD: ${POLICY_APPROVER_DB_PASSWORD:?set it in .env}
+      POLICY_AUDITOR_DB_PASSWORD: ${POLICY_AUDITOR_DB_PASSWORD:?set it in .env}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
   # Deletes telemetry past its retention (spans 7 days, everything else 30 by default), hourly,
   # as a role that can delete rows and read nothing but their times.
   telemetry-purge:
@@ -128,6 +147,10 @@ services:
       # Spans and decision records are stored through this append-only role. If the database
       # cannot be reached the gateway still serves; /healthz then reports degraded telemetry.
       GATEWAY_TELEMETRY_DATABASE_URL: postgresql://telemetry_writer:${TELEMETRY_WRITER_DB_PASSWORD:?set it in .env}@postgres:5432/${POSTGRES_DB}
+      # The audit log: the gateway appends through this role, which can read and append and,
+      # through a guard on the approval table, cannot decide an approval. A write is refused when
+      # its audit record cannot be written.
+      GATEWAY_POLICY_DATABASE_URL: postgresql://policy_gateway:${POLICY_GATEWAY_DB_PASSWORD:?set it in .env}@postgres:5432/${POSTGRES_DB}
       # The gateway presents these to the servers (upstream_servers.credential_env).
       TICKETING_SERVICE_TOKEN: ${TICKETING_SERVICE_TOKEN:?set it in .env}
       CRM_SERVICE_TOKEN: ${CRM_SERVICE_TOKEN:?set it in .env}
@@ -144,6 +167,8 @@ services:
       migrate:
         condition: service_completed_successfully
       telemetry-setup:
+        condition: service_completed_successfully
+      policy-setup:
         condition: service_completed_successfully
     healthcheck:
       test:
@@ -276,6 +301,8 @@ services:
     mem_limit: 128m
     environment:
       GATEWAY_MIGRATE_DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      # For audit-anchor and audit-verify, which run as the auditor role and can only read.
+      POLICY_AUDITOR_DATABASE_URL: postgresql://policy_auditor:${POLICY_AUDITOR_DB_PASSWORD:?set it in .env}@postgres:5432/${POSTGRES_DB}
     depends_on:
       postgres:
         condition: service_healthy
