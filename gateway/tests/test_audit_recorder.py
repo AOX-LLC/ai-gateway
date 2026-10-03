@@ -75,13 +75,12 @@ class FakeSession:
 
     def execute(self, sql: str, params: tuple[Any, ...]) -> list[tuple[Any, ...]]:
         """The recorder's one read: the payloads of the newest records after a sequence number."""
-        after_seq, limit = params
-        rows = [
+        (after_seq,) = params
+        return [
             (json.dumps(event.payload),)
             for seq, event in reversed(list(enumerate(self.log.committed, start=1)))
             if seq > after_seq
         ]
-        return rows[:limit]
 
 
 class FakeDatabase:
@@ -365,6 +364,27 @@ async def test_a_batch_that_may_have_committed_is_not_written_twice_on_retry(
 
     assert [e.action for e in log.committed] == ["gateway.tool_call"] * 3, "stored exactly once"
     assert recorder.status().queue_depth == 0
+
+
+@pytest.mark.anyio
+async def test_a_gap_record_is_not_written_twice_when_its_batch_is_retried(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    log = FakeLog()
+    recorder = _recorder(log, spool_size=3, batch_size=100)
+    for _ in range(5):
+        recorder.record(_decision(request_id=str(uuid4())))  # 2 dropped
+    log.mode = "fail_after_commit"
+    monkeypatch.setattr(audit_module, "_BACKOFF_START_S", 0.01)
+
+    await recorder._write_next_batch()
+    log.mode = "ok"
+    await recorder._write_next_batch()
+
+    gaps = [e for e in log.committed if e.action == "audit.gap"]
+    assert len(gaps) == 1
+    assert gaps[0].payload["dropped"] == 2
+    assert recorder.status().dropped_total == 2
 
 
 @pytest.mark.parametrize(

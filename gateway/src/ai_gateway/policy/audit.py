@@ -40,8 +40,6 @@ BATCH_SIZE = 100
 FLUSH_INTERVAL_S = 0.5
 WRITE_AHEAD_TIMEOUT_S = 2.0
 BATCH_TIMEOUT_S = 15.0
-DEDUPE_WINDOW = 2_000
-"""How many of the newest records a retried batch is checked against."""
 _BACKOFF_START_S = 1.0
 _BACKOFF_MAX_S = 30.0
 _LOG_EVERY_S = 60.0
@@ -215,6 +213,9 @@ class PostgresAuditRecorder:
         self._flush_interval_s = flush_interval_s
         self._write_ahead_timeout_s = write_ahead_timeout_s
         self._pending: list[AuditEvent] = []
+        self._pending_gap: tuple[AuditEvent, int] | None = None
+        """The gap record of the batch in flight and the drops it reports: built once, so a retry
+        sends the same record_id and is deduplicated, not written twice."""
         self._dropped_total = 0
         self._unreported_drops = 0
         self._rejected_total = 0
@@ -303,8 +304,9 @@ class PostgresAuditRecorder:
             self._pending = self._take_batch()
         if not self._pending:
             return False
-        reported = self._unreported_drops
-        gap = self._gap_event(reported) if reported else None
+        if self._pending_gap is None and self._unreported_drops:
+            self._pending_gap = (self._gap_event(self._unreported_drops), self._unreported_drops)
+        gap, reported = self._pending_gap or (None, 0)
         try:
             with anyio.fail_after(BATCH_TIMEOUT_S):
                 to_write = [gap, *self._pending] if gap is not None else list(self._pending)
@@ -325,6 +327,7 @@ class PostgresAuditRecorder:
             self._last_seq = records[-1].seq
         if gap is not None:
             self._unreported_drops -= reported  # drops counted while this batch was in flight stay
+            self._pending_gap = None
         self._written_total += len(self._pending)
         full = len(self._pending) >= self._batch_size
         self._pending = []
@@ -342,8 +345,8 @@ class PostgresAuditRecorder:
 
         def read(session: Any) -> list[tuple[Any, ...]]:
             rows: list[tuple[Any, ...]] = session.execute(
-                "SELECT payload FROM agent_core_audit WHERE seq > ? ORDER BY seq DESC LIMIT ?",
-                (last_seq, DEDUPE_WINDOW),
+                "SELECT payload FROM agent_core_audit WHERE seq > ? ORDER BY seq DESC",
+                (last_seq,),
             )
             return rows
 
@@ -351,9 +354,11 @@ class PostgresAuditRecorder:
         present = set()
         for (payload,) in rows:
             try:
-                present.add(json.loads(payload).get("record_id"))
+                record_id = json.loads(payload).get("record_id")
             except (ValueError, AttributeError):
                 continue
+            if isinstance(record_id, str):
+                present.add(record_id)
         return [event for event in events if event.payload.get("record_id") not in present]
 
     def _take_batch(self) -> list[AuditEvent]:
