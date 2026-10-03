@@ -26,6 +26,8 @@ COPY --from=build --chown=node:node /app/public ./public
 COPY --from=build --chown=node:node /app/src/fonts/ibm-plex-sans/OFL.txt ./licenses/ibm-plex-sans-OFL.txt
 COPY --from=build --chown=node:node /app/src/fonts/ibm-plex-mono/OFL.txt ./licenses/ibm-plex-mono-OFL.txt
 COPY --from=build --chown=node:node /app/src/fonts/space-grotesk/OFL.txt ./licenses/space-grotesk-OFL.txt
+# The icon paths in the bundle follow Tabler Icons (MIT): its notice travels with them.
+COPY --from=build --chown=node:node /app/licenses/tabler-icons-MIT.txt ./licenses/tabler-icons-MIT.txt
 USER node
 EXPOSE 4400
 CMD ["node", "server.js"]

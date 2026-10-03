@@ -1122,8 +1122,6 @@ keyset (time to the microsecond, then request id), so a row written while someon
 skipped nor shown twice; a cursor comes back from the browser and is checked before it is used. Times
 are UTC.
 
-### What is not here
-
 ### Charts, the demo stack and the memory limit (5c-3)
 
 Five charts sit between the KPIs and the decisions: request volume (forwarded and blocked), latency

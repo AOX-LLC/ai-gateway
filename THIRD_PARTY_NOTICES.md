@@ -14,7 +14,7 @@ The dashboard self-hosts these three families (nothing is fetched from a font se
 | IBM Plex Mono | `dashboard/src/fonts/ibm-plex-mono/*.woff2` (400, 500) | Copyright © 2017 IBM Corp. | `dashboard/src/fonts/ibm-plex-mono/OFL.txt` |
 | Space Grotesk | `dashboard/src/fonts/space-grotesk/*.woff2` (500, 600) | Copyright 2020 The Space Grotesk Project Authors (https://github.com/floriankarsten/space-grotesk) | `dashboard/src/fonts/space-grotesk/OFL.txt` |
 
-The Plex texts are IBM's own `LICENSE.txt` (https://github.com/IBM/plex) and the Space Grotesk text is the project's `OFL.txt`, fetched on 2026-10-03. The dashboard image carries the three texts under `/app/licenses/`, so they travel with the font files.
+The Plex texts are IBM's own `LICENSE.txt` (https://github.com/IBM/plex) and the Space Grotesk text is the project's `OFL.txt`, fetched on 2026-10-03. The dashboard image carries the three texts, and the Tabler Icons MIT text, under `/app/licenses/`, so they travel with the font files.
 
 **Provenance.** The eight `.woff2` files came to this repository through the AOX Portfolio UI design system. Each is **byte-identical** (SHA-256 compared on 2026-10-03) to the file of the same name in the npm packages `@fontsource/ibm-plex-sans`, `@fontsource/ibm-plex-mono` and `@fontsource/space-grotesk`, version 5.3.0 (`latin` subset, WOFF2). They are therefore the upstream fonts as converted and subset to Latin by Fontsource; AOX has not changed them further.
 

@@ -84,13 +84,13 @@ seed() {
 case "${1:-}" in
   up) up ;;
   seed) seed ;;
-  shots) demo_password; nice -n 19 uv run scripts/screenshots.py --out docs/images ;;
+  shots) demo_password; nice -n 19 uv run --group demo scripts/screenshots.py --out docs/images ;;
   memory) demo_password; nice -n 19 python3 scripts/measure_dashboard_memory.py ;;
   down)
     export DEMO_DASHBOARD_PASSWORD_HASH=unused DEMO_SESSION_SECRET=unused
     "${COMPOSE[@]}" down -v
     rm -rf "$STATE"
     ;;
-  all) up; seed; demo_password; nice -n 19 uv run scripts/screenshots.py --out docs/images ;;
+  all) up; seed; demo_password; nice -n 19 uv run --group demo scripts/screenshots.py --out docs/images ;;
   *) sed -n '2,12p' "$0" >&2; exit 2 ;;
 esac

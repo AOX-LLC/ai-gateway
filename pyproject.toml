@@ -25,9 +25,9 @@ dev = [
 
 [tool.uv]
 package = false
-# The demo group (Playwright, for scripts/screenshots.py) installs by default; the browser itself does not:
-# `uv run playwright install chromium` once.
-default-groups = ["dev", "demo"]
+# The demo group (Playwright, for scripts/screenshots.py) is opt-in: `uv run --group demo ...`, and the
+# browser once with `uv run --group demo playwright install chromium`.
+default-groups = ["dev"]
 
 [tool.uv.workspace]
 members = ["gateway", "servers/*"]
@@ -79,6 +79,11 @@ files = ["gateway/src", "gateway/tests", "servers/echo/src", "servers/common/src
 plugins = ["pydantic.mypy"]
 mypy_path = "scripts:gateway:gateway/src:servers/echo/src:servers/common/src:servers/ticketing/src:servers/crm/src:servers/handbook/src:servers/setup/src"
 explicit_package_bases = true
+
+[[tool.mypy.overrides]]
+# Playwright is in the opt-in demo group, so it is not always installed where mypy runs.
+module = ["playwright", "playwright.*"]
+ignore_missing_imports = true
 
 [tool.pydantic-mypy]
 init_forbid_extra = true

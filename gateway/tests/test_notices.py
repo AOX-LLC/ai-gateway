@@ -23,9 +23,12 @@ def test_each_font_family_has_its_licence_beside_its_files(family: str) -> None:
 
 
 def test_every_font_file_is_listed_and_the_open_question_is_stated() -> None:
+    counts = {family: len(list((FONTS / family).glob("*.woff2"))) for family in FAMILIES}
+    assert counts == {"ibm-plex-sans": 4, "ibm-plex-mono": 2, "space-grotesk": 2}, (
+        "a font file was added or removed: update THIRD_PARTY_NOTICES.md and this count"
+    )
     for family in FAMILIES:
-        for font in (FONTS / family).glob("*.woff2"):
-            assert font.parent.name in NOTICES
+        assert f"dashboard/src/fonts/{family}/*.woff2" in NOTICES
     assert "Reserved Font Name" in NOTICES
     assert "byte-identical" in NOTICES
     assert "@fontsource" in NOTICES
@@ -63,3 +66,16 @@ def test_the_dashboard_image_carries_the_font_licences_and_leaves_out_the_lgpl_i
     assert "outputFileTracingExcludes" in config
     assert "node_modules/sharp" in config
     assert "node_modules/@img" in config
+
+
+def test_the_image_carries_every_licence_text_the_notice_promises() -> None:
+    dockerfile = (ROOT / "dashboard" / "Dockerfile").read_text(encoding="utf-8")
+
+    for family in FAMILIES:
+        assert f"/fonts/{family}/OFL.txt" in dockerfile
+    assert "licenses/tabler-icons-MIT.txt" in dockerfile
+    assert (
+        (ROOT / "dashboard" / "licenses" / "tabler-icons-MIT.txt")
+        .read_text(encoding="utf-8")
+        .startswith("MIT License")
+    )
