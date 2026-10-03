@@ -3,8 +3,10 @@
 # audit log anchored and verified. Run from the repository root with the stack up. Prints no secret.
 set -euo pipefail
 . "$(dirname "$0")/mask.sh"
-# The demo approver is registered below for this run only; it is deactivated when the run ends.
-trap 'rm -f demo.json; docker compose run --rm -T admin approver-deactivate harborline-approver >/dev/null 2>&1 || true' EXIT
+# The demo approver is registered below for this run only, under an id of its own (an id is never
+# reused), and removed, login and all, when the run ends.
+APPROVER_ID="harborline-demo-$(date -u +%Y%m%d%H%M%S)"
+trap 'rm -f demo.json; docker compose run --rm -T admin approver-remove "$APPROVER_ID" >/dev/null 2>&1 || true' EXIT
 docker compose run --rm -T admin seed-demo > demo.json
 SUPPORT=$(python3 -c 'import json; print(json.load(open("demo.json"))["harborline-support-bot"])')
 mask "$SUPPORT"
@@ -16,11 +18,19 @@ mask "$DECOY"
 # approver approves for it (scripts/auto_approver.py, test tooling that needs the two switches:
 # --approve-as below, and LAB_AUTO_APPROVE=yes in the environment, which CI sets on this step and
 # nothing else does; run it by hand with LAB_AUTO_APPROVE=yes in front).
-docker compose run --rm -T admin approver-add harborline-approver \
-  --name "Harborline demo approver (fictional, demo data)" > /dev/null
-POLICY_APPROVER_DATABASE_URL=$(sed -n 's/^POLICY_APPROVER_DATABASE_URL=//p' .env)
-POLICY_APPROVER_DB_PASSWORD=$(sed -n 's/^POLICY_APPROVER_DB_PASSWORD=//p' .env)
-mask "$POLICY_APPROVER_DB_PASSWORD"
+ADDED=$(docker compose run --rm -T admin approver-add "$APPROVER_ID" \
+  --name "Harborline demo approver (fictional, demo data)")
+LOGIN=$(sed -n 's/^login  *//p' <<<"$ADDED")
+PASSWORD=$(sed -n 's/^password  *//p' <<<"$ADDED")
+mask "$PASSWORD"
+# The same database as the auditor's URL, signed in as the demo approver's login.
+POLICY_APPROVER_DATABASE_URL=$(
+  BASE=$(sed -n 's/^POLICY_AUDITOR_DATABASE_URL=//p' .env) LOGIN="$LOGIN" PASSWORD="$PASSWORD" \
+    python3 -c 'import os; from urllib.parse import quote, urlsplit, urlunsplit
+u = urlsplit(os.environ["BASE"])
+login, password = quote(os.environ["LOGIN"], safe=""), quote(os.environ["PASSWORD"], safe="")
+print(urlunsplit(u._replace(netloc=f"{login}:{password}@{u.hostname}:{u.port}")))'
+)
 mask "$POLICY_APPROVER_DATABASE_URL"
 export POLICY_APPROVER_DATABASE_URL
 # The gateway polls the registry every 5 seconds, so the tickets tools can take a
@@ -28,10 +38,10 @@ export POLICY_APPROVER_DATABASE_URL
 retry() { for _ in $(seq 1 30); do "$@" && return 0; sleep 2; done; "$@"; }
 GATEWAY_TOKEN="$SUPPORT" retry uv run scripts/test_client.py \
   --scenario scripts/scenarios/harborline.toml --as harborline-support-bot \
-  --approve-as harborline-approver
+  --approve-as "$APPROVER_ID"
 GATEWAY_TOKEN="$OPS" uv run scripts/test_client.py \
   --scenario scripts/scenarios/harborline.toml --as harborline-ops-bot \
-  --approve-as harborline-approver
+  --approve-as "$APPROVER_ID"
 # The servers publish no port: the scenario runs inside their network.
 scripts/direct_check.sh
 # Simulated traffic as both bots: what the gateway stored, read back through the
@@ -61,7 +71,7 @@ fresh_gateway() {
 }
 fresh_gateway
 sleep "${SETTLE_S:-8}"  # the catalogue loads the servers' tools just after the gateway answers
-uv run scripts/simulate_traffic.py --calls 200 --verify --approve-as harborline-approver
+uv run scripts/simulate_traffic.py --calls 200 --verify --approve-as "$APPROVER_ID"
 curl -sSf http://127.0.0.1:4401/healthz | python3 -c '
 import json, sys
 health = json.load(sys.stdin)
@@ -79,6 +89,6 @@ rm -f "$ANCHORS"
 uv run gateway-admin audit-anchor --file "$ANCHORS"
 fresh_gateway
 sleep "${SETTLE_S:-8}"
-uv run scripts/simulate_traffic.py --calls 60 --seed 7 --verify --approve-as harborline-approver
+uv run scripts/simulate_traffic.py --calls 60 --seed 7 --verify --approve-as "$APPROVER_ID"
 uv run gateway-admin audit-verify --anchors "$ANCHORS"
 rm -f "$ANCHORS"

@@ -1,11 +1,12 @@
 """The approver's tool: what is shown, what is refused, and who may decide."""
 
-import argparse
+import inspect
 import json
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote, urlsplit, urlunsplit
 from uuid import UUID, uuid4
 
 import anyio
@@ -14,11 +15,11 @@ import pytest
 from aox_agent_core.approvals import ApprovalRequest, Decision, approval_payload_hash
 from aox_agent_core.errors import NotAuthorizedToResolveError
 
-from ai_gateway.admin.cli import _approver_add, _approver_deactivate
-from ai_gateway.approver.cli import Approvals, ApproverError, main
+from ai_gateway.approver.cli import Approvals, ApproverError, _sign_in, main
 from ai_gateway.approver.display import ApprovalNotShowableError, render
 from ai_gateway.policy import policy_url
 from ai_gateway.seams.approvals import ApprovalOutcome
+from tests.conftest import MakeApprover
 from tests.test_approval_gate import ROLES, _call, _context, _gate
 
 ROLES_FILE = Path(__file__).resolve().parents[2] / "config" / "approval_roles.toml"
@@ -139,15 +140,6 @@ def test_a_request_whose_arguments_are_missing_or_different_is_never_shown_as_ap
 # --- against the database -------------------------------------------------------------------
 
 
-@pytest.fixture
-async def people(policy: None, test_database_url: str) -> None:
-    for approver_id in ("aiden", "tyler"):
-        await _approver_add(
-            test_database_url,
-            argparse.Namespace(id=approver_id, name=approver_id.title(), role=None),
-        )
-
-
 async def _ask(url: str, **arguments: Any) -> UUID:
     decision = await _gate(url).decide(_context(), _call(**arguments))
     assert decision.outcome is ApprovalOutcome.PENDING
@@ -160,62 +152,85 @@ async def _owner(url: str, statement: str, *params: object) -> None:
         await db.execute(statement, params)
 
 
+async def _audit_roles(url: str) -> list[tuple[str, str, str]]:
+    """(action, actor, database role that wrote it) of every approval decision."""
+    async with await psycopg.AsyncConnection.connect(policy_url(url), autocommit=True) as db:
+        cursor = await db.execute(
+            "SELECT action, actor_id, db_role FROM agent_core_audit"
+            " WHERE action = 'approval.resolved' ORDER BY seq"
+        )
+        return [(str(a), str(b), str(c)) for a, b, c in await cursor.fetchall()]
+
+
 @pytest.mark.integration
 @pytest.mark.anyio
 class TestAgainstTheDatabase:
-    async def test_a_registered_approver_approves_and_the_call_then_goes_through(
-        self, people: None, policy_gateway_url: str, policy_approver_url: str
+    async def test_an_approver_approves_and_the_call_then_goes_through(
+        self, make_approver: MakeApprover, policy_gateway_url: str
     ) -> None:
         gate, ctx, call = _gate(policy_gateway_url), _context(), _call()
         pending = await gate.decide(ctx, call)
 
-        request = await Approvals(policy_approver_url, ROLES).decide(
-            UUID(pending.approval_id or ""), "aiden", Decision.APPROVE, None
+        request = await Approvals(await make_approver("aiden"), ROLES).decide(
+            UUID(pending.approval_id or ""), Decision.APPROVE, None
         )
 
         assert request.resolved_by == "human:aiden"
         assert (await gate.decide(ctx, call)).outcome is ApprovalOutcome.APPROVED
 
-    async def test_nobody_unregistered_or_deactivated_can_decide(
-        self,
-        people: None,
-        policy_gateway_url: str,
-        policy_approver_url: str,
-        test_database_url: str,
+    async def test_who_decided_is_the_login_that_decided_and_the_log_says_so(
+        self, make_approver: MakeApprover, policy_gateway_url: str, test_database_url: str
     ) -> None:
-        request_id = await _ask(policy_gateway_url)
-        approvals = Approvals(policy_approver_url, ROLES)
-        await _approver_deactivate(test_database_url, argparse.Namespace(id="tyler"))
+        aiden, tyler = await make_approver("aiden"), await make_approver("tyler")
+        first = await _ask(policy_gateway_url)
+        second = await _ask(policy_gateway_url, ticket_id="TKT-000002", status="closed")
 
-        for who in ("stranger", "tyler"):
-            with pytest.raises(ApproverError, match="not a registered, active approver"):
-                await approvals.decide(request_id, who, Decision.APPROVE, None)
-        assert (await approvals.queue.get(request_id)).status.value == "pending"
+        await Approvals(aiden, ROLES).decide(first, Decision.APPROVE, None)
+        await Approvals(tyler, ROLES).decide(second, Decision.REJECT, "no")
+
+        assert [
+            (a, who, role)
+            for _, who, role in [await _audit_roles(test_database_url)][0]
+            for a in ("x",)
+        ] == [
+            ("x", "human:aiden", "policy_approver_aiden"),
+            ("x", "human:tyler", "policy_approver_tyler"),
+        ]
+
+    async def test_nobody_can_decide_as_someone_else_through_the_tool(
+        self, make_approver: MakeApprover, policy_gateway_url: str
+    ) -> None:
+        """The tool takes no name: its principal is whoever the database says is signed in."""
+        tyler = Approvals(await make_approver("tyler"), ROLES)
+        await make_approver("aiden")
+
+        assert (await tyler.principal()).id == "human:tyler"
+        assert "approver" not in inspect.signature(tyler.decide).parameters
+
+    async def test_a_login_that_is_not_an_active_approver_cannot_decide(
+        self, make_approver: MakeApprover, policy_gateway_url: str, test_database_url: str
+    ) -> None:
+        tyler = Approvals(await make_approver("tyler"), ROLES)
+        request_id = await _ask(policy_gateway_url)
+        await _owner(test_database_url, "UPDATE approvers SET active = false WHERE id = 'tyler'")
+
+        with pytest.raises(ApproverError, match="not a registered, active approver"):
+            await tyler.decide(request_id, Decision.APPROVE, None)
+        assert (await tyler.queue.get(request_id)).status.value == "pending"
 
     async def test_an_approver_without_the_role_is_refused_by_the_queue(
-        self,
-        people: None,
-        policy_gateway_url: str,
-        policy_approver_url: str,
-        test_database_url: str,
+        self, make_approver: MakeApprover, policy_gateway_url: str
     ) -> None:
-        await _approver_add(
-            test_database_url, argparse.Namespace(id="intern", name="Intern", role=["reader"])
-        )
+        intern = Approvals(await make_approver("intern", ["reader"]), ROLES)
         request_id = await _ask(policy_gateway_url)
 
         with pytest.raises(NotAuthorizedToResolveError):
-            await Approvals(policy_approver_url, ROLES).decide(
-                request_id, "intern", Decision.APPROVE, None
-            )
+            await intern.decide(request_id, Decision.APPROVE, None)
 
     async def test_arguments_changed_after_the_request_are_not_approvable_but_can_be_rejected(
-        self,
-        people: None,
-        policy_gateway_url: str,
-        policy_approver_url: str,
-        test_database_url: str,
+        self, make_approver: MakeApprover, policy_gateway_url: str, test_database_url: str
     ) -> None:
+        approvals = Approvals(await make_approver("aiden"), ROLES)
         request_id = await _ask(policy_gateway_url)
         await _owner(
             test_database_url,
@@ -223,64 +238,115 @@ class TestAgainstTheDatabase:
             _stored({"ticket_id": "TKT-999999", "status": "closed"}),
             str(request_id),
         )
-        approvals = Approvals(policy_approver_url, ROLES)
 
         with pytest.raises(ApprovalNotShowableError, match="do not match"):
-            await approvals.decide(request_id, "aiden", Decision.APPROVE, None)
+            await approvals.decide(request_id, Decision.APPROVE, None)
         assert (await approvals.queue.get(request_id)).status.value == "pending"
-        rejected = await approvals.decide(request_id, "aiden", Decision.REJECT, "does not match")
+        rejected = await approvals.decide(request_id, Decision.REJECT, "does not match")
         assert rejected.status.value == "rejected"
 
     async def test_a_request_whose_arguments_were_purged_is_not_approvable(
-        self,
-        people: None,
-        policy_gateway_url: str,
-        policy_approver_url: str,
-        test_database_url: str,
+        self, make_approver: MakeApprover, policy_gateway_url: str, test_database_url: str
     ) -> None:
+        approvals = Approvals(await make_approver("aiden"), ROLES)
         request_id = await _ask(policy_gateway_url)
         await _owner(test_database_url, "DELETE FROM approval_arguments")
 
         with pytest.raises(ApprovalNotShowableError, match="not stored"):
-            await Approvals(policy_approver_url, ROLES).decide(
-                request_id, "aiden", Decision.APPROVE, None
-            )
+            await approvals.decide(request_id, Decision.APPROVE, None)
 
-    async def test_the_command_lists_shows_and_approves(
+    async def test_the_command_signs_in_with_the_login_from_the_environment_and_decides(
         self,
-        people: None,
+        make_approver: MakeApprover,
         policy_gateway_url: str,
-        policy_approver_url: str,
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
+        signed_in = urlsplit(await make_approver("aiden"))
         request_id = await _ask(policy_gateway_url)
-        monkeypatch.setenv("POLICY_APPROVER_DATABASE_URL", policy_approver_url)
+        # The URL names the database and nothing else; who signs in comes from the environment.
+        database = urlunsplit(signed_in._replace(netloc=f"{signed_in.hostname}:{signed_in.port}"))
+        monkeypatch.setenv("POLICY_APPROVER_DATABASE_URL", database)
+        monkeypatch.setenv("APPROVER_LOGIN", signed_in.username or "")
+        monkeypatch.setenv("APPROVER_PASSWORD", signed_in.password or "")
         monkeypatch.setenv("APPROVAL_ROLES_FILE", str(ROLES_FILE))
 
         for argv in (
-            ["--as", "aiden", "list"],
-            ["--as", "aiden", "show", str(request_id)],
-            ["--as", "aiden", "approve", "--yes", str(request_id)],
+            ["whoami"],
+            ["list"],
+            ["show", str(request_id)],
+            ["approve", "--yes", str(request_id)],
         ):
             await anyio.to_thread.run_sync(main, argv)
 
         output = capsys.readouterr().out
+        assert "human:aiden" in output
         assert str(request_id) in output
         assert "TKT-000001" in output
-        assert f"approved: {request_id}" in output
+        assert "upstream   tickets (identity" in output, "the upstream is named, with its identity"
+        assert f"approved: {request_id} (decided by human:aiden)" in output
 
-    async def test_the_command_exits_with_one_line_for_an_unknown_approver(
+    async def test_the_command_exits_with_one_line_for_a_login_that_is_not_an_approver(
         self,
-        people: None,
-        policy_approver_url: str,
+        policy: None,
+        test_database_url: str,
+        policy_auditor_url: str,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        monkeypatch.setenv("POLICY_APPROVER_DATABASE_URL", policy_approver_url)
+        # The auditor's login connects, and is not an approver: the same refusal as any stranger.
+        monkeypatch.setenv("POLICY_APPROVER_DATABASE_URL", policy_auditor_url)
         monkeypatch.setenv("APPROVAL_ROLES_FILE", str(ROLES_FILE))
 
         with pytest.raises(SystemExit) as exit_info:
-            await anyio.to_thread.run_sync(main, ["--as", "nobody\x1b[2J", "list"])
+            await anyio.to_thread.run_sync(main, ["whoami"])
 
-        assert "\x1b" not in str(exit_info.value)
         assert "not a registered, active approver" in str(exit_info.value)
+        assert "\n" not in str(exit_info.value)
+
+    async def test_a_wrong_password_is_one_line_and_never_shows_the_password(
+        self,
+        make_approver: MakeApprover,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        signed_in = urlsplit(await make_approver("aiden"))
+        database = urlunsplit(signed_in._replace(netloc=f"{signed_in.hostname}:{signed_in.port}"))
+        monkeypatch.setenv("POLICY_APPROVER_DATABASE_URL", database)
+        monkeypatch.setenv("APPROVER_LOGIN", signed_in.username or "")
+        monkeypatch.setenv("APPROVER_PASSWORD", "wrong-password-0123456789")
+        monkeypatch.setenv("APPROVAL_ROLES_FILE", str(ROLES_FILE))
+
+        with pytest.raises(SystemExit) as exit_info:
+            await anyio.to_thread.run_sync(main, ["whoami"])
+
+        assert "wrong-password-0123456789" not in str(exit_info.value)
+        assert "\n" not in str(exit_info.value)
+
+
+def test_the_command_asks_when_the_environment_has_no_login_and_says_so_without_a_terminal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("APPROVER_LOGIN", raising=False)
+    monkeypatch.delenv("APPROVER_PASSWORD", raising=False)
+    answers = iter(["policy_approver_aiden"])
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+    monkeypatch.setattr("getpass.getpass", lambda _prompt: "p@ss/word:1")
+
+    url = _sign_in("postgresql://postgres:5432/ai_gateway")
+
+    parts = urlsplit(url)
+    assert (parts.username, parts.password) == ("policy_approver_aiden", "p%40ss%2Fword%3A1")
+    assert unquote(parts.password or "") == "p@ss/word:1"
+    assert (parts.hostname, parts.port) == ("postgres", 5432)
+
+    def no_terminal(_prompt: str) -> str:
+        raise EOFError
+
+    monkeypatch.setattr("builtins.input", no_terminal)
+    with pytest.raises(ApproverError, match="APPROVER_LOGIN and APPROVER_PASSWORD"):
+        _sign_in("postgresql://postgres:5432/ai_gateway")
+
+
+def test_a_url_that_already_names_a_login_is_used_as_it_is() -> None:
+    url = "postgresql://policy_approver_aiden:pw@postgres:5432/ai_gateway"
+
+    assert _sign_in(url) == url

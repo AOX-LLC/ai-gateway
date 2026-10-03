@@ -88,7 +88,6 @@ async def test_setup_installs_the_tables_in_the_policy_schema_once_and_is_safe_t
     policy: None,
     test_database_url: str,
     policy_gateway_url: str,
-    policy_approver_url: str,
     policy_auditor_url: str,
 ) -> None:
     await _queue(policy_gateway_url).database.run(lambda s: s.execute("SELECT 1"))
@@ -96,11 +95,7 @@ async def test_setup_installs_the_tables_in_the_policy_schema_once_and_is_safe_t
 
     await setup_policy(
         test_database_url,
-        PolicyPasswords(
-            password_of(policy_gateway_url),
-            password_of(policy_approver_url),
-            password_of(policy_auditor_url),
-        ),
+        PolicyPasswords(password_of(policy_gateway_url), password_of(policy_auditor_url)),
     )
 
     async with await _as(test_database_url) as connection:
@@ -122,11 +117,7 @@ async def test_two_setups_at_once_do_not_collide(
 ) -> None:
     async with await _as(test_database_url) as connection:
         await connection.execute("DROP SCHEMA IF EXISTS policy CASCADE")
-    passwords = PolicyPasswords(
-        password_of(policy_gateway_url),
-        password_of(policy_approver_url),
-        password_of(policy_auditor_url),
-    )
+    passwords = PolicyPasswords(password_of(policy_gateway_url), password_of(policy_auditor_url))
     failures: list[BaseException] = []
 
     async def run() -> None:
@@ -147,9 +138,9 @@ async def test_two_setups_at_once_do_not_collide(
         assert await cursor.fetchone() == (1,)
 
 
-@pytest.mark.parametrize("empty", ["gateway", "approver", "auditor"])
+@pytest.mark.parametrize("empty", ["gateway", "auditor"])
 async def test_setup_refuses_an_empty_password(test_database_url: str, empty: str) -> None:
-    passwords = {"gateway": "g", "approver": "a", "auditor": "u", **{empty: ""}}
+    passwords = {"gateway": "g", "auditor": "u", **{empty: ""}}
 
     with pytest.raises(ValueError, match="empty"):
         await setup_policy(test_database_url, PolicyPasswords(**passwords))
@@ -569,7 +560,7 @@ async def test_a_member_of_the_approver_role_holds_its_privileges_until_setup_re
     async with connection:
         cursor = await connection.execute("SELECT count(*) FROM agent_core_approvals")
         assert await cursor.fetchone() == (0,), "it inherits the approver's rights"
-    await _setup(test_database_url, policy_gateway_url, policy_approver_url, policy_auditor_url)
+    await _setup(test_database_url, policy_gateway_url, policy_auditor_url)
 
     # Its only way into the database was the role it was a member of: without it, it cannot connect.
     parts = urlsplit(test_database_url)
@@ -600,17 +591,15 @@ async def test_an_approval_that_plain_sql_made_stops_setup_and_leaves_the_roles_
     await _drop_role(test_database_url, "policy_intruder")
 
     with pytest.raises(ConfigError, match=r"approval\.resolved"):
-        await _setup(test_database_url, policy_gateway_url, policy_approver_url, policy_auditor_url)
+        await _setup(test_database_url, policy_gateway_url, policy_auditor_url)
 
     stored = await _queue(policy_gateway_url).get(request.id)  # type: ignore[attr-defined]
     assert stored.status.value == "approved", "nothing was changed"
     await _queue(policy_approver_url).list_pending(HUMAN)  # the roles can still work
 
 
-async def _setup(owner: str, gateway: str, approver: str, auditor: str) -> None:
-    await setup_policy(
-        owner, PolicyPasswords(password_of(gateway), password_of(approver), password_of(auditor))
-    )
+async def _setup(owner: str, gateway: str, auditor: str) -> None:
+    await setup_policy(owner, PolicyPasswords(password_of(gateway), password_of(auditor)))
 
 
 async def _drop_role(owner_url: str, name: str) -> None:

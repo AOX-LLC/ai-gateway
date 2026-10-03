@@ -1,6 +1,5 @@
 """A write through the whole gateway waits for a person, and the guarantees around that."""
 
-import argparse
 import json
 from collections.abc import Iterator
 from pathlib import Path
@@ -15,7 +14,6 @@ from mcp.shared.exceptions import MCPError
 from psycopg import errors
 from pydantic import SecretStr
 
-from ai_gateway.admin.cli import _approver_add
 from ai_gateway.app import create_app
 from ai_gateway.approver.cli import Approvals
 from ai_gateway.auth.tokens import IssuedToken
@@ -76,8 +74,7 @@ def fast_gateway(
 
 
 @pytest.fixture
-async def person(test_database_url: str, policy_approver_url: str) -> Approvals:
-    await _approver_add(test_database_url, argparse.Namespace(id="aiden", name="Aiden", role=None))
+async def person(policy_approver_url: str) -> Approvals:
     return Approvals(policy_approver_url, SHOUT_ROLES)
 
 
@@ -101,7 +98,7 @@ async def test_a_write_waits_for_a_person_runs_once_when_approved_and_leaves_no_
             "nothing was about to run"
         )
 
-        await person.decide(request_id, "aiden", Decision.APPROVE, None)
+        await person.decide(request_id, Decision.APPROVE, None)
         done = await ops.call_tool("echo__shout", {"text": MARKER})
         again = await ops.call_tool("echo__shout", {"text": MARKER})
 
@@ -111,8 +108,9 @@ async def test_a_write_waits_for_a_person_runs_once_when_approved_and_leaves_no_
     assert again.structured_content is not None
     assert again.structured_content["approval_id"] != str(request_id)
 
-    # Nine: the calls' own records, and the queue's (requested, resolved, consumed, requested).
-    records = await _wait_for(policy_gateway_url, 9)
+    # Ten: the approver's own (`approver.added`), the calls' own records, and the queue's
+    # (requested, resolved, consumed, requested).
+    records = await _wait_for(policy_gateway_url, 10)
     ran = [p for a, _, p in records if a == "gateway.tool_call" and p["outcome"] == "forwarded"]
     shout = next(p for p in ran if p["effect"] == "write")
     assert shout["approval_id"] == str(request_id)
@@ -135,9 +133,7 @@ async def test_a_rejected_write_never_runs_and_the_client_is_told_so(
     async with connect(gateway.url, ops_token.plaintext) as ops:
         waiting = await ops.call_tool("echo__shout", {"text": "no"})
         assert waiting.structured_content is not None
-        await person.decide(
-            UUID(waiting.structured_content["approval_id"]), "aiden", Decision.REJECT, "no"
-        )
+        await person.decide(UUID(waiting.structured_content["approval_id"]), Decision.REJECT, "no")
 
         with pytest.raises(MCPError) as refused:
             await ops.call_tool("echo__shout", {"text": "no"})
@@ -151,9 +147,7 @@ async def test_changed_arguments_are_a_new_request_the_old_approval_does_not_cov
     async with connect(gateway.url, ops_token.plaintext) as ops:
         first = await ops.call_tool("echo__shout", {"text": "close TKT-000001"})
         assert first.structured_content is not None
-        await person.decide(
-            UUID(first.structured_content["approval_id"]), "aiden", Decision.APPROVE, None
-        )
+        await person.decide(UUID(first.structured_content["approval_id"]), Decision.APPROVE, None)
 
         other = await ops.call_tool("echo__shout", {"text": "close TKT-000002"})
 
@@ -282,7 +276,7 @@ async def test_a_registry_change_after_approval_invalidates_it(
         waiting = await ops.call_tool("echo__shout", {"text": "move the namespace"})
         assert waiting.structured_content is not None
         first_id = waiting.structured_content["approval_id"]
-        await person.decide(UUID(first_id), "aiden", Decision.APPROVE, None)
+        await person.decide(UUID(first_id), Decision.APPROVE, None)
 
         # The same server at another address (a query string the server ignores): still
         # reachable, but not the upstream that was approved.

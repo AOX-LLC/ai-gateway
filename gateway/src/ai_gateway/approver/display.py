@@ -37,6 +37,14 @@ def _strings(value: Any, path: str = "") -> list[tuple[str, str]]:
     return []
 
 
+def _namespace(action: str) -> str:
+    """The upstream a tool belongs to: the gateway names every tool <namespace>__<tool>. The
+    identity hashed into the request is a digest that cannot be read back, so the name a person
+    recognises comes from the tool, and the identity stays beside it to compare."""
+    namespace, separator, _ = action.partition("__")
+    return printable(namespace, 40) if separator else "(unknown)"
+
+
 def render(request: ApprovalRequest, arguments_json: str | None) -> Rendered:
     """The request as an approver should see it, or ApprovalNotShowableError."""
     if arguments_json is None:
@@ -83,7 +91,8 @@ def render(request: ApprovalRequest, arguments_json: str | None) -> Rendered:
         f"summary    {printable(request.summary, 300)}",
         f"asked at   {request.created_at.isoformat()}",
         f"expires    {request.expires_at.isoformat()}",
-        f"upstream   {printable(arguments['upstream'], 64)}",
+        f"upstream   {_namespace(request.action)}"
+        f" (identity {printable(arguments['upstream'], 64)})",
         f"hash       {request.payload_sha256[:16]}... verified against the upstream and arguments",
         "arguments",
         *(f"  {line}" for line in shown.splitlines()),

@@ -18,7 +18,7 @@ from pydantic import SecretStr
 from ai_gateway.policy import approval_queue_on, audit_log_on, policy_url
 from ai_gateway.policy.anchors import read_anchors, verify_with_anchors
 from ai_gateway.policy.setup import PolicyPasswords, setup_policy
-from tests.conftest import password_of
+from tests.conftest import MakeApprover, password_of
 from tests.test_audit_anchors import _append
 
 pytestmark = [pytest.mark.integration, pytest.mark.anyio]
@@ -44,10 +44,10 @@ async def _load_a2(owner_url: str) -> None:
         await connection.execute(dump.encode())
 
 
-async def _upgrade(owner: str, gateway: str, approver: str, auditor: str) -> None:
+async def _upgrade(owner: str, gateway: str, auditor: str) -> None:
     await setup_policy(
         owner,
-        PolicyPasswords(password_of(gateway), password_of(approver), password_of(auditor)),
+        PolicyPasswords(password_of(gateway), password_of(auditor)),
     )
 
 
@@ -63,7 +63,6 @@ async def test_an_a2_schema_is_upgraded_in_place_and_the_chain_and_an_old_anchor
     policy: None,
     test_database_url: str,
     policy_gateway_url: str,
-    policy_approver_url: str,
     policy_auditor_url: str,
     tmp_path: Path,
 ) -> None:
@@ -78,7 +77,7 @@ async def test_an_a2_schema_is_upgraded_in_place_and_the_chain_and_an_old_anchor
     shutil.copy(FIXTURES / "policy_a2_anchor.jsonl", anchors)
     anchors.chmod(0o600)
 
-    await _upgrade(test_database_url, policy_gateway_url, policy_approver_url, policy_auditor_url)
+    await _upgrade(test_database_url, policy_gateway_url, policy_auditor_url)
 
     assert (
         await _rows(
@@ -112,14 +111,11 @@ async def test_the_upgrade_is_repeatable_and_leaves_the_a3_guard_in_place(
     policy: None,
     test_database_url: str,
     policy_gateway_url: str,
-    policy_approver_url: str,
     policy_auditor_url: str,
 ) -> None:
     await _load_a2(test_database_url)
     for _ in range(2):
-        await _upgrade(
-            test_database_url, policy_gateway_url, policy_approver_url, policy_auditor_url
-        )
+        await _upgrade(test_database_url, policy_gateway_url, policy_auditor_url)
 
     guards = await _rows(
         test_database_url,
@@ -139,7 +135,6 @@ async def test_an_approval_that_plain_sql_made_under_a2_is_cancelled_by_the_upgr
     policy: None,
     test_database_url: str,
     policy_gateway_url: str,
-    policy_approver_url: str,
     policy_auditor_url: str,
 ) -> None:
     """a2 let the app role approve its own request with SQL. Such an approval has no
@@ -154,7 +149,7 @@ async def test_an_approval_that_plain_sql_made_under_a2_is_cancelled_by_the_upgr
             (PENDING,),
         )
 
-    await _upgrade(test_database_url, policy_gateway_url, policy_approver_url, policy_auditor_url)
+    await _upgrade(test_database_url, policy_gateway_url, policy_auditor_url)
 
     rows = await _rows(test_database_url, "SELECT id, status FROM agent_core_approvals")
     assert {str(row[0]): row[1] for row in rows}[PENDING] == "cancelled"
@@ -164,14 +159,13 @@ async def test_a_wrong_anchor_still_fails_against_the_upgraded_chain(
     policy: None,
     test_database_url: str,
     policy_gateway_url: str,
-    policy_approver_url: str,
     policy_auditor_url: str,
     tmp_path: Path,
 ) -> None:
     """The control for the test above: it passes because the anchor matches, not because nothing
     is checked."""
     await _load_a2(test_database_url)
-    await _upgrade(test_database_url, policy_gateway_url, policy_approver_url, policy_auditor_url)
+    await _upgrade(test_database_url, policy_gateway_url, policy_auditor_url)
     anchors = tmp_path / "anchors.jsonl"
     anchors.write_text(
         (FIXTURES / "policy_a2_anchor.jsonl").read_text().replace("89d74057", "00000000")
@@ -195,7 +189,7 @@ async def test_roles_that_held_other_grants_get_exactly_the_layout_and_can_still
     policy: None,
     test_database_url: str,
     policy_gateway_url: str,
-    policy_approver_url: str,
+    make_approver: MakeApprover,
     policy_auditor_url: str,
 ) -> None:
     """3a gave the gateway and the approver table-level UPDATE. The installer grants a role its
@@ -214,7 +208,7 @@ async def test_roles_that_held_other_grants_get_exactly_the_layout_and_can_still
                 f"GRANT SELECT, INSERT ON policy.agent_core_audit TO {role}".encode()
             )
 
-    await _upgrade(test_database_url, policy_gateway_url, policy_approver_url, policy_auditor_url)
+    await _upgrade(test_database_url, policy_gateway_url, policy_auditor_url)
 
     rows = await _rows(
         test_database_url,
@@ -229,7 +223,7 @@ async def test_roles_that_held_other_grants_get_exactly_the_layout_and_can_still
         ("policy_gateway", False, False, True, False),
     ]
     approver = approval_queue_on(
-        open_database(SecretStr(policy_url(policy_approver_url))),
+        open_database(SecretStr(policy_url(await make_approver("aiden")))),
         policy=RoleApproverPolicy(roles_by_action={"tickets__change_status": "approver"}),
     )
     request = await approver.resolve(
@@ -246,7 +240,6 @@ async def test_setup_names_duplicate_pending_requests_and_goes_on_once_one_is_ca
     policy: None,
     test_database_url: str,
     policy_gateway_url: str,
-    policy_approver_url: str,
     policy_auditor_url: str,
 ) -> None:
     """A volume from before the unique index can hold identical pending requests. Setup cannot
@@ -269,16 +262,14 @@ async def test_setup_names_duplicate_pending_requests_and_goes_on_once_one_is_ca
     assert second is not None
 
     with pytest.raises(RuntimeError) as stopped:
-        await _upgrade(
-            test_database_url, policy_gateway_url, policy_approver_url, policy_auditor_url
-        )
+        await _upgrade(test_database_url, policy_gateway_url, policy_auditor_url)
 
     assert str(first.approval_id) in str(stopped.value)
     assert str(second.id) in str(stopped.value)
     await gate._queue.cancel(
         second.id, principal=Principal(id=ctx.client.actor_id, kind=PrincipalKind.SERVICE)
     )
-    await _upgrade(test_database_url, policy_gateway_url, policy_approver_url, policy_auditor_url)
+    await _upgrade(test_database_url, policy_gateway_url, policy_auditor_url)
     indexes = await _rows(
         test_database_url,
         "SELECT indexname FROM pg_indexes WHERE schemaname = 'policy'"

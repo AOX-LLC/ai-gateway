@@ -7,7 +7,6 @@ container. A new token is printed once, to stdout, and is not stored anywhere.
 import argparse
 import json
 import os
-import re
 import sys
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
@@ -19,16 +18,23 @@ from aox_agent_core.audit import SQLAuditLog
 from aox_agent_core.errors import AuditIntegrityError, ConfigError
 from aox_agent_core.storage import open_database
 from psycopg import AsyncConnection
-from psycopg.errors import CheckViolation
+from psycopg.errors import InsufficientPrivilege, UndefinedTable
 from pydantic import SecretStr
 
 from ai_gateway.auth.tokens import IssuedToken, generate_token
-from ai_gateway.policy import audit_log_on, policy_url
+from ai_gateway.policy import APPROVER_LOGINS_VIEW, SCHEMA, audit_log_on, policy_url
 from ai_gateway.policy.anchors import (
     AnchorFileError,
     append_anchor,
     read_anchors,
     verify_with_anchors,
+)
+from ai_gateway.policy.approver_logins import (
+    ApproverLoginError,
+    Provisioned,
+    add_approver,
+    remove_approver,
+    rotate_approver,
 )
 from ai_gateway.policy.setup import PolicyPasswords, setup_policy
 from ai_gateway.proxy.naming import split_exposed
@@ -41,6 +47,8 @@ from mcp_common.migrate import apply_migrations
 
 _DATABASE_URL_ENV = "GATEWAY_MIGRATE_DATABASE_URL"
 _AUDITOR_URL_ENV = "POLICY_AUDITOR_DATABASE_URL"
+_GATEWAY_URL_ENV = "POLICY_GATEWAY_DATABASE_URL"
+"""The role the provisioning events are appended as: agent-core refuses an append from the owner."""
 MAX_LIVE_TOKENS_PER_CLIENT = 2
 
 # Fictional demo data for the test profile. Harborline Supply Co. does not exist.
@@ -106,6 +114,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         anyio.run(args.handler, database_url, args)
     except (
         AdminError,
+        ApproverLoginError,
         ClientNotFoundError,
         AnchorFileError,
         AuditIntegrityError,
@@ -148,16 +157,26 @@ def _parser() -> argparse.ArgumentParser:
     verify.set_defaults(handler=_audit_verify, database_env=_AUDITOR_URL_ENV)
 
     approver_add = commands.add_parser(
-        "approver-add", help="register (or update) a person who may approve writes"
+        "approver-add",
+        help="register a person who may approve writes and make their database login"
+        f" (needs {_GATEWAY_URL_ENV})",
     )
     approver_add.add_argument("id", help="lowercase letters, digits, . _ -")
     approver_add.add_argument("--name", required=True, help="who they are, for the log")
     approver_add.add_argument("--role", action="append", default=None, help="default: approver")
     approver_add.set_defaults(handler=_approver_add)
+    approver_rotate = commands.add_parser(
+        "approver-rotate",
+        help="give an approver a new password and end their sessions (the old one stops at once)",
+    )
+    approver_rotate.add_argument("id")
+    approver_rotate.set_defaults(handler=_approver_rotate)
+    approver_remove = commands.add_parser(
+        "approver-remove", help="remove an approver's login; their past decisions stay named"
+    )
+    approver_remove.add_argument("id")
+    approver_remove.set_defaults(handler=_approver_remove)
     commands.add_parser("approver-list", help="list approvers").set_defaults(handler=_approver_list)
-    approver_off = commands.add_parser("approver-deactivate", help="stop an approver deciding")
-    approver_off.add_argument("id")
-    approver_off.set_defaults(handler=_approver_deactivate)
 
     client_add = commands.add_parser("client-add", help="create or update a client")
     client_add.add_argument("name")
@@ -275,11 +294,7 @@ async def _telemetry_setup(database_url: str, _: argparse.Namespace) -> None:
 
 
 async def _policy_setup(database_url: str, _: argparse.Namespace) -> None:
-    variables = (
-        "POLICY_GATEWAY_DB_PASSWORD",
-        "POLICY_APPROVER_DB_PASSWORD",
-        "POLICY_AUDITOR_DB_PASSWORD",
-    )
+    variables = ("POLICY_GATEWAY_DB_PASSWORD", "POLICY_AUDITOR_DB_PASSWORD")
     missing = [name for name in variables if not os.environ.get(name)]
     if missing:
         raise AdminError(f"{', '.join(missing)} is not set (python3 scripts/init_env.py adds it)")
@@ -287,7 +302,6 @@ async def _policy_setup(database_url: str, _: argparse.Namespace) -> None:
         database_url,
         PolicyPasswords(
             gateway=os.environ["POLICY_GATEWAY_DB_PASSWORD"],
-            approver=os.environ["POLICY_APPROVER_DB_PASSWORD"],
             auditor=os.environ["POLICY_AUDITOR_DB_PASSWORD"],
             lab_approver=os.environ.get("POLICY_LAB_APPROVER_DB_PASSWORD") or None,
         ),
@@ -299,41 +313,54 @@ def _audit_log(database_url: str) -> SQLAuditLog:
     return audit_log_on(open_database(SecretStr(policy_url(database_url))))
 
 
+def _gateway_audit_log() -> SQLAuditLog:
+    url = os.environ.get(_GATEWAY_URL_ENV)
+    if not url:
+        raise AdminError(f"{_GATEWAY_URL_ENV} is not set: the change is recorded in the audit log")
+    return _audit_log(url)
+
+
+def _print_login(action: str, provisioned: Provisioned) -> None:
+    if provisioned.password is None:
+        print(f"approver {provisioned.approver_id} {action}; the login and password are unchanged")
+        return
+    # The one time the password is shown: stdout only, never a log, and nothing keeps it.
+    print(f"approver {provisioned.approver_id} {action}")
+    print(f"login     {provisioned.login}")
+    print(f"password  {provisioned.password}")
+    print("The password is shown once and kept nowhere. Give it to the person directly.")
+
+
 async def _approver_add(database_url: str, args: argparse.Namespace) -> None:
-    roles = args.role or ["approver"]
-    for role in roles:
-        if not re.fullmatch(r"[a-z][a-z0-9_.-]{0,63}", role):
-            raise AdminError(f"{role!r} is not a role name (lowercase letters, digits, . _ -)")
-    async with await AsyncConnection.connect(policy_url(database_url), autocommit=True) as db:
-        try:
-            await db.execute(
-                "INSERT INTO approvers (id, display_name, roles) VALUES (%s, %s, %s)"
-                " ON CONFLICT (id) DO UPDATE SET display_name = EXCLUDED.display_name,"
-                " roles = EXCLUDED.roles, active = true",
-                (args.id, args.name, roles),
-            )
-        except CheckViolation:
-            raise AdminError(
-                "the id must be lowercase letters, digits, . _ -, starting with a letter"
-            ) from None
-    print(f"approver {args.id} registered with roles {', '.join(roles)}")
+    audit = _gateway_audit_log()
+    async with await AsyncConnection.connect(database_url, autocommit=True) as db:
+        provisioned = await add_approver(db, audit, args.id, args.name, args.role or ["approver"])
+    _print_login("registered", provisioned)
+
+
+async def _approver_rotate(database_url: str, args: argparse.Namespace) -> None:
+    audit = _gateway_audit_log()
+    async with await AsyncConnection.connect(database_url, autocommit=True) as db:
+        provisioned = await rotate_approver(db, audit, args.id)
+    _print_login("has a new password", provisioned)
+
+
+async def _approver_remove(database_url: str, args: argparse.Namespace) -> None:
+    audit = _gateway_audit_log()
+    async with await AsyncConnection.connect(database_url, autocommit=True) as db:
+        await remove_approver(db, audit, args.id)
+    print(f"approver {args.id} removed: no login, no sessions; past decisions still name them")
 
 
 async def _approver_list(database_url: str, args: argparse.Namespace) -> None:
     async with await AsyncConnection.connect(policy_url(database_url)) as db:
         cursor = await db.execute(
-            "SELECT id, display_name, roles, active FROM approvers ORDER BY id"
+            "SELECT id, display_name, roles, active, removed_at IS NOT NULL, db_role"
+            " FROM approvers ORDER BY id"
         )
-        for approver_id, name, roles, active in await cursor.fetchall():
-            print(f"{approver_id}  {name}  {','.join(roles)}  {'active' if active else 'inactive'}")
-
-
-async def _approver_deactivate(database_url: str, args: argparse.Namespace) -> None:
-    async with await AsyncConnection.connect(policy_url(database_url), autocommit=True) as db:
-        cursor = await db.execute("UPDATE approvers SET active = false WHERE id = %s", (args.id,))
-        if cursor.rowcount == 0:
-            raise AdminError(f"no approver {args.id!r}")
-    print(f"approver {args.id} deactivated")
+        for approver_id, name, roles, active, removed, login in await cursor.fetchall():
+            state = "removed" if removed else ("active" if active else "inactive")
+            print(f"{approver_id}  {name}  {','.join(roles)}  {state}  {login or 'no login'}")
 
 
 async def _audit_anchor(database_url: str, args: argparse.Namespace) -> None:
@@ -346,16 +373,37 @@ async def _audit_anchor(database_url: str, args: argparse.Namespace) -> None:
         if args.file.exists() or args.file.is_symlink():
             raise
         existing = []  # no file yet: the first anchor
-    verified = await verify_with_anchors(log, existing)
+    verified = await verify_with_anchors(
+        log, existing, approver_logins=await _approver_logins(database_url)
+    )
     anchor = append_anchor(args.file, verified)  # the head that was verified, not a fresh one
     print(f"anchored record {anchor.seq} ({anchor.record_hash[:12]}...) in {args.file}")
+
+
+async def _approver_logins(database_url: str) -> dict[str, str]:
+    """Which login is which approver, as the auditor sees it. A database that has not been set up
+    with the logins yet (the view is missing, or not yet granted) has none, and a decision then
+    has to come from the shared approver role, as it did before."""
+    try:
+        async with await AsyncConnection.connect(database_url) as db:
+            cursor = await db.execute(
+                f"SELECT db_role, approver_id FROM {SCHEMA}.{APPROVER_LOGINS_VIEW}"  # noqa: S608
+            )
+            return {str(role): str(who) for role, who in await cursor.fetchall()}
+    except (UndefinedTable, InsufficientPrivilege):
+        return {}
 
 
 async def _audit_verify(database_url: str, args: argparse.Namespace) -> None:
     log = _audit_log(database_url)
     anchors = read_anchors(args.anchors) if args.anchors else []
     lab_decisions: list[int] = []
-    head = await verify_with_anchors(log, anchors, lab_decisions=lab_decisions)
+    head = await verify_with_anchors(
+        log,
+        anchors,
+        lab_decisions=lab_decisions,
+        approver_logins=await _approver_logins(database_url),
+    )
     print(f"ok: {head.seq} records chain correctly and match {len(anchors)} anchors")
     if lab_decisions:
         print(

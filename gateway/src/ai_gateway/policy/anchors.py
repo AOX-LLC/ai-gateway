@@ -13,11 +13,12 @@ import json
 import os
 import re
 from collections import defaultdict
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from aox_agent_core.audit import GENESIS_HASH, AuditHead, SQLAuditLog
+from aox_agent_core.audit import GENESIS_HASH, AuditHead, AuditRecord, SQLAuditLog
 from aox_agent_core.errors import AuditIntegrityError
 
 from ai_gateway.policy import APPROVER_ROLE, GATEWAY_ROLE, LAB_APPROVER_ROLE
@@ -90,31 +91,57 @@ _WRITTEN_BY = {
     "audit.gap": GATEWAY_ROLE,
     "approval.requested": GATEWAY_ROLE,
     "approval.consumed": GATEWAY_ROLE,
-    "approval.resolved": APPROVER_ROLE,
 }
 """Which database role writes each kind of record. The approver role may append to the audit log
 (it writes its own decisions), so without this a holder of its credential could add a
 `gateway.tool_call` that no gateway wrote, and the hash chain would still verify. `db_role` is set
-by a trigger, whoever the writer claims to be. Records from before audit schema 3 have none."""
-_ALSO_WRITES = {"approval.resolved": LAB_APPROVER_ROLE}
-"""The lab approver (when the stack has one) decides requests as a member of the approver role."""
+by a trigger, whoever the writer claims to be. Records from before audit schema 3 have none.
+`approver.*` (a person added, rotated or removed) are the admin tool's, which appends as the
+gateway role: agent-core refuses an append from the role that owns the table."""
 
 
-def _check_provenance(seq: int, action: str, db_role: str | None) -> None:
-    expected = GATEWAY_ROLE if action.startswith("gateway.") else _WRITTEN_BY.get(action)
-    if (
-        expected is not None
-        and db_role is not None
-        and db_role != expected
-        and db_role != _ALSO_WRITES.get(action)
-    ):
+def _check_provenance(
+    record: AuditRecord, logins: Mapping[str, str], *, shared_role_may_decide: bool
+) -> None:
+    """Who may have written the record, and for a decision, whose it says it is.
+
+    A decision is written by an approver's own login (`logins` maps each login to the approver it
+    is), by the lab approver, or, in a log from before the logins, by the shared approver role. A
+    decision by a login must name that login's approver: whoever holds the login can append to the
+    log, so a decision claiming to be someone else's is caught here."""
+    action, db_role = record.action, record.db_role
+    if db_role is None:  # from before audit schema 3
+        return
+    if action == "approval.resolved":
+        if db_role in logins:
+            if record.actor_id != f"human:{logins[db_role]}":
+                raise AuditIntegrityError(
+                    f"record {record.seq} ({action}) was written by the login of approver"
+                    f" {logins[db_role]} but is a decision by {record.actor_id}"
+                )
+        elif db_role == APPROVER_ROLE and shared_role_may_decide:
+            pass
+        elif db_role != LAB_APPROVER_ROLE:
+            raise AuditIntegrityError(
+                f"record {record.seq} ({action}) was written by role {db_role},"
+                " which is not an approver's login"
+            )
+        return
+    expected = (
+        GATEWAY_ROLE if action.startswith(("gateway.", "approver.")) else _WRITTEN_BY.get(action)
+    )
+    if expected is not None and db_role != expected:
         raise AuditIntegrityError(
-            f"record {seq} ({action}) was written by role {db_role}, not {expected}"
+            f"record {record.seq} ({action}) was written by role {db_role}, not {expected}"
         )
 
 
 async def verify_with_anchors(
-    log: SQLAuditLog, anchors: list[Anchor], *, lab_decisions: list[int] | None = None
+    log: SQLAuditLog,
+    anchors: list[Anchor],
+    *,
+    lab_decisions: list[int] | None = None,
+    approver_logins: Mapping[str, str] | None = None,
 ) -> AuditHead:
     """Walk the whole chain, then check every anchor against it. Returns the chain's head.
 
@@ -136,8 +163,20 @@ async def verify_with_anchors(
             raise AuditIntegrityError(f"anchors disagree about record {seq}: the log was rewritten")
     newest = max(taken, key=lambda anchor: anchor.seq, default=None)
     head = await log.verify(expected_head=newest.head if newest else None)
+    first_login_seq: int | None = None
+    resolved: set[str | None] = set()
     async for record in log.iter_records():
-        _check_provenance(record.seq, record.action, record.db_role)
+        if record.action.startswith("approver.") and first_login_seq is None:
+            first_login_seq = record.seq
+        _check_provenance(
+            record, approver_logins or {}, shared_role_may_decide=first_login_seq is None
+        )
+        if record.action == "approval.resolved":
+            if record.subject_id in resolved:
+                raise AuditIntegrityError(
+                    f"record {record.seq} is a second decision on request {record.subject_id}"
+                )
+            resolved.add(record.subject_id)
         if record.action == "approval.resolved" and record.db_role == LAB_APPROVER_ROLE:
             lab_decisions.append(record.seq)
         for anchor in wanted.pop(record.seq, []):

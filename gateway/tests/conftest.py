@@ -5,10 +5,12 @@ import os
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID, uuid4
 
 import psycopg
 import pytest
+from aox_agent_core.storage import open_database
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -16,9 +18,18 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from psycopg_pool import AsyncConnectionPool
+from pydantic import SecretStr
 
 from ai_gateway.auth.tokens import IssuedToken, generate_token
+from ai_gateway.policy import (
+    APPROVER_LOGIN_PREFIX,
+    LAB_APPROVER_ROLE,
+    POLICY_IDLE_IN_TRANSACTION_MS,
+    audit_log_on,
+    policy_url,
+)
 from ai_gateway.policy import SCHEMA as POLICY_SCHEMA
+from ai_gateway.policy.approver_logins import add_approver
 from ai_gateway.policy.setup import PolicyPasswords, setup_policy
 from ai_gateway.registry import MIGRATIONS_PACKAGE
 from ai_gateway.registry.repo import AdminRegistry
@@ -44,7 +55,7 @@ from harborline_setup.handbook_seed import build_dataset as build_handbook_datas
 from harborline_setup.handbook_seed import insert_dataset as insert_handbook_dataset
 from harborline_setup.ticketing import grant_ticketing_access
 from mcp_common.migrate import apply_migrations
-from mcp_common.roles import restrict_database_access
+from mcp_common.roles import ensure_role, restrict_database_access
 from tests.helpers import HANDBOOK_DOCUMENTS, serve_in_thread
 from ticketing_server import CONNECTION_KWARGS as TICKETING_CONNECTION_KWARGS
 from ticketing_server import MIGRATIONS_PACKAGE as TICKETING_MIGRATIONS_PACKAGE
@@ -391,31 +402,78 @@ def policy_gateway_url() -> str:
 
 
 @pytest.fixture
-def policy_approver_url() -> str:
-    return _url("POLICY_APPROVER_TEST_DATABASE_URL")
-
-
-@pytest.fixture
 def policy_auditor_url() -> str:
     return _url("POLICY_AUDITOR_TEST_DATABASE_URL")
 
 
 @pytest.fixture
-async def policy(
-    test_database_url: str,
-    policy_gateway_url: str,
-    policy_approver_url: str,
-    policy_auditor_url: str,
-) -> None:
+async def policy(test_database_url: str, policy_gateway_url: str, policy_auditor_url: str) -> None:
     """A fresh policy schema, set up the way `gateway-admin policy-setup` sets it up. The roles use
-    the passwords the rest of the suite logs in with."""
+    the passwords the rest of the suite logs in with. There are no approvers yet: `make_approver`
+    adds the ones a test needs."""
     async with await psycopg.AsyncConnection.connect(test_database_url, autocommit=True) as conn:
         await conn.execute(f"DROP SCHEMA IF EXISTS {POLICY_SCHEMA} CASCADE".encode())
+        await drop_approver_logins(conn)
     await setup_policy(
         test_database_url,
-        PolicyPasswords(
-            password_of(policy_gateway_url),
-            password_of(policy_approver_url),
-            password_of(policy_auditor_url),
-        ),
+        PolicyPasswords(password_of(policy_gateway_url), password_of(policy_auditor_url)),
     )
+
+
+async def drop_approver_logins(connection: psycopg.AsyncConnection) -> None:
+    """Roles outlive the schema the tests drop, so the logins an earlier test made would stop
+    `approver-add` (which never takes over an existing role) from making them again."""
+    cursor = await connection.execute(
+        "SELECT rolname FROM pg_roles WHERE rolname LIKE %s OR rolname = %s",
+        (APPROVER_LOGIN_PREFIX + "%", LAB_APPROVER_ROLE),
+    )
+    for (role,) in await cursor.fetchall():
+        await connection.execute(
+            sql.SQL(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = {}"
+            ).format(sql.Literal(role))
+        )
+        await connection.execute(sql.SQL("DROP OWNED BY {}").format(sql.Identifier(role)))
+        await connection.execute(sql.SQL("DROP ROLE {}").format(sql.Identifier(role)))
+
+
+APPROVER_TEST_PASSWORD = "ci-only-approver-password"  # noqa: S105 - a test database's password
+
+
+def login_url(url: str, login: str, password: str) -> str:
+    """The URL of the same database as another login."""
+    parts = urlsplit(url)
+    return urlunsplit(parts._replace(netloc=f"{login}:{password}@{parts.hostname}:{parts.port}"))
+
+
+MakeApprover = Callable[..., Awaitable[str]]
+
+
+@pytest.fixture
+async def make_approver(
+    policy: None, test_database_url: str, policy_gateway_url: str
+) -> MakeApprover:
+    """Add an approver the way `gateway-admin approver-add` does (a login of their own, recorded in
+    the audit log), with a password the tests know, and return the URL they sign in with."""
+
+    async def make(approver_id: str, roles: list[str] | None = None) -> str:
+        audit = audit_log_on(open_database(SecretStr(policy_url(policy_gateway_url))))
+        async with await psycopg.AsyncConnection.connect(
+            test_database_url, autocommit=True
+        ) as connection:
+            added = await add_approver(
+                connection, audit, approver_id, approver_id.title(), roles or ["approver"]
+            )
+            await ensure_role(
+                connection, APPROVER_TEST_PASSWORD, added.login, POLICY_IDLE_IN_TRANSACTION_MS
+            )
+        return login_url(test_database_url, added.login, APPROVER_TEST_PASSWORD)
+
+    return make
+
+
+@pytest.fixture
+async def policy_approver_url(make_approver: MakeApprover) -> str:
+    """The sign-in URL of one approver, `aiden`, for the many tests that only need someone who can
+    read and decide the queue."""
+    return await make_approver("aiden")

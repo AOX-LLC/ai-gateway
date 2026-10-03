@@ -301,10 +301,11 @@ async def test_a_record_the_approver_role_wrote_as_if_it_were_the_gateways_fails
     wrote, under a chain that still verifies."""
     auditor = _log(policy_auditor_url)
     await _append(policy_gateway_url, 2)
-    assert (await verify_with_anchors(auditor, [])).seq == 2
+    # The approver's own record (`approver.added`, by the gateway role) is the first.
+    assert (await verify_with_anchors(auditor, [])).seq == 3
 
     await _append(policy_approver_url, 1)  # a gateway.tool_call, appended with the approver's login
 
-    assert (await auditor.verify()).seq == 3, "the hash chain alone cannot see it"
-    with pytest.raises(AuditIntegrityError, match="written by role policy_approver"):
+    assert (await auditor.verify()).seq == 4, "the hash chain alone cannot see it"
+    with pytest.raises(AuditIntegrityError, match="written by role policy_approver_aiden"):
         await verify_with_anchors(auditor, [])
