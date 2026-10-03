@@ -218,7 +218,7 @@ async def test_nothing_is_kept_when_the_audit_log_cannot_take_the_record(
 ) -> None:
     """The auditor role can only read: appending as it fails, as a down audit log would."""
     async with await _owner(test_database_url) as owner:
-        with pytest.raises(ApproverLoginError, match="nothing was kept"):
+        with pytest.raises(ApproverLoginError, match="no login was kept"):
             await add_approver(owner, _audit(policy_auditor_url), "aiden", "Aiden", ["approver"])
         assert await _rows(test_database_url, "SELECT count(*) FROM policy.approvers") == [(0,)]
         assert (
@@ -863,12 +863,11 @@ async def test_rotating_records_first_so_a_log_that_is_down_locks_nobody_out(
             owner, _audit(policy_gateway_url), "aiden", "Aiden", ["approver"]
         )
         url = login_url(test_database_url, added.login, added.password or "")
-        session = await _owner(url)
+        async with await _owner(url) as session:
+            with pytest.raises(Exception):  # noqa: B017, PT011 - the auditor role cannot append
+                await rotate_approver(owner, _audit(policy_auditor_url), "aiden")
 
-        with pytest.raises(Exception):  # noqa: B017, PT011 - the auditor role cannot append
-            await rotate_approver(owner, _audit(policy_auditor_url), "aiden")
-
-        await session.execute("SELECT 1")  # still signed in
+            await session.execute("SELECT 1")  # still signed in
         async with await _owner(url):
             pass  # and the old password still works
 
