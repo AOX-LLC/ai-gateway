@@ -26,6 +26,7 @@ from tests.test_approval_gate import HUMAN, MARKER, _approver, _call, _context, 
 from tests.test_audit_e2e import MakeClient, _records, _wait_for
 
 pytestmark = [pytest.mark.integration, pytest.mark.anyio]
+SHOUT_ROLES = {"echo__shout": "approver"}
 
 
 @pytest.fixture
@@ -58,7 +59,7 @@ def gateway(
 @pytest.fixture
 async def person(test_database_url: str, policy_approver_url: str) -> Approvals:
     await _approver_add(test_database_url, argparse.Namespace(id="aiden", name="Aiden", role=None))
-    return Approvals(policy_approver_url)
+    return Approvals(policy_approver_url, SHOUT_ROLES)
 
 
 async def test_a_write_waits_for_a_person_runs_once_when_approved_and_leaves_no_arguments_behind(

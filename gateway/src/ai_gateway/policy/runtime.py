@@ -1,13 +1,12 @@
 """Build the audit recorder for a running gateway."""
 
-from aox_agent_core.approvals import SQLApprovalQueue
-from aox_agent_core.audit import SQLAuditLog
 from pydantic import SecretStr
 
-from ai_gateway.policy import policy_url
+from ai_gateway.policy import approval_queue_on, audit_log_on, policy_url
 from ai_gateway.policy.approvals import PostgresApprovalGate
 from ai_gateway.policy.audit import AuditRecorder, DisabledAuditRecorder, PostgresAuditRecorder
 from ai_gateway.policy.database import BoundedPostgresDatabase
+from ai_gateway.policy.roles import load_roles_by_action
 from ai_gateway.settings import GatewaySettings
 
 # A request waits for the write-ahead record for 2 s at most (the recorder stops waiting for the
@@ -26,7 +25,7 @@ def build_audit(settings: GatewaySettings) -> AuditRecorder:
     if settings.policy_database_url is None:
         return DisabledAuditRecorder()
     base = settings.policy_database_url.get_secret_value()
-    write_ahead = SQLAuditLog(
+    write_ahead = audit_log_on(
         BoundedPostgresDatabase(
             SecretStr(
                 policy_url(
@@ -40,7 +39,7 @@ def build_audit(settings: GatewaySettings) -> AuditRecorder:
             concurrency=_WRITE_AHEAD_WORKERS,
         )
     )
-    batches = SQLAuditLog(
+    batches = audit_log_on(
         BoundedPostgresDatabase(
             SecretStr(
                 policy_url(
@@ -80,11 +79,12 @@ def build_approvals(
         ),
         concurrency=_APPROVAL_WORKERS,
     )
-    queue = SQLApprovalQueue(database, audit_log=SQLAuditLog(database))
+    queue = approval_queue_on(database)
     gate = PostgresApprovalGate(
         queue,
         ttl_s=settings.approval_ttl_s,
         hold_s=settings.approval_hold_s,
         poll_s=settings.approval_poll_s,
+        roles_by_action=load_roles_by_action(settings.approval_roles_file),
     )
     return gate, database

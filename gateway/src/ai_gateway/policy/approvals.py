@@ -15,7 +15,7 @@ audit log or telemetry.
 import asyncio
 import json
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
@@ -39,8 +39,6 @@ from ai_gateway.text import printable
 
 logger = logging.getLogger(__name__)
 
-APPROVER_ROLE_NAME = "approver"
-"""The role a person must hold to decide a write. 3c can name a role per tool."""
 TTL_S = 30 * 60
 HOLD_S = 45.0
 POLL_S = 1.0
@@ -48,6 +46,7 @@ MAX_HOLDS = 16
 """Calls held at once. Past it a call is answered "pending" at once and the client retries."""
 MAX_ARGUMENT_BYTES = 65_536
 PURGE_EVERY_S = 3600.0
+EXPIRE_EVERY_S = 60.0
 
 
 def _now_text() -> str:
@@ -63,6 +62,7 @@ class PostgresApprovalGate:
         hold_s: float = HOLD_S,
         poll_s: float = POLL_S,
         max_holds: int = MAX_HOLDS,
+        roles_by_action: Mapping[str, str] | None = None,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         self._queue = queue
@@ -73,6 +73,9 @@ class PostgresApprovalGate:
         self._max_holds = max_holds
         self._clock = clock or (lambda: datetime.now(UTC))
         self._holding = 0
+        self._roles_by_action = dict(roles_by_action or {})
+        """The role a person must hold to decide each write. The gateway asks only for a write that
+        is listed, and asks for exactly that role: the approver's side reads the same list."""
 
     async def decide(self, ctx: CallContext, call: ToolCall) -> ApprovalDecision:
         try:
@@ -114,9 +117,14 @@ class PostgresApprovalGate:
             if request.is_expired(self._clock()):
                 return ApprovalDecision(ApprovalOutcome.EXPIRED, approval_id)
             return ApprovalDecision(ApprovalOutcome.PENDING, approval_id)
+        if request.status is ApprovalStatus.EXPIRED:
+            return ApprovalDecision(ApprovalOutcome.EXPIRED, approval_id)
         if request.status is not ApprovalStatus.APPROVED:
             return ApprovalDecision(ApprovalOutcome.UNAVAILABLE, approval_id)
         return await self._use(request, call, requester, arguments)
+
+    async def expire_due(self, principal: Principal) -> int:
+        return await self._queue.expire_due(principal=principal)
 
     async def _hold(self, request: ApprovalRequest) -> ApprovalRequest:
         """Poll until the request is decided or the hold is over. There is no wait/notify."""
@@ -178,12 +186,19 @@ class PostgresApprovalGate:
         if len(text.encode()) > MAX_ARGUMENT_BYTES:
             logger.error("approval for request %s refused: arguments too large", ctx.request_id)
             return None
+        role = self._roles_by_action.get(call.exposed_name)
+        if role is None:
+            logger.error(
+                "no approver role is set for %s: a write nobody may approve", call.exposed_name
+            )
+            return None
+        # No delegates: only this client may use the approval it asked for.
         request = await self._queue.submit(
             action=call.exposed_name,
             summary=printable(f"{call.exposed_name} for client {ctx.client.name}", 500),
             payload=arguments,
             requested_by=requester,
-            required_role=APPROVER_ROLE_NAME,
+            required_role=role,
             ttl_seconds=self._ttl_s,
         )
         # Without its arguments nobody can be shown what to approve, and the approver's tool
@@ -215,4 +230,22 @@ async def purge_arguments_forever(
             raise
         except Exception as error:
             logger.warning("purging approval arguments failed (%s)", type(error).__name__)
+        await anyio.sleep(interval_s)
+
+
+async def expire_due_forever(
+    gate: "PostgresApprovalGate", interval_s: float = EXPIRE_EVERY_S
+) -> None:
+    """Store `expired` on requests past their lifetime, now and then. Reads treat such a request as
+    expired whether or not this has run, so a failure here is only logged."""
+    principal = Principal(id="service:gateway", kind=PrincipalKind.SERVICE)
+    while True:
+        try:
+            count = await gate.expire_due(principal)
+            if count:
+                logger.info("%d approval request(s) expired", count)
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            logger.warning("expiring approval requests failed (%s)", type(error).__name__)
         await anyio.sleep(interval_s)

@@ -18,7 +18,7 @@ from ai_gateway.approver.cli import Approvals, ApproverError, main
 from ai_gateway.approver.display import ApprovalNotShowableError, render
 from ai_gateway.policy import policy_url
 from ai_gateway.seams.approvals import ApprovalOutcome
-from tests.test_approval_gate import _call, _context, _gate
+from tests.test_approval_gate import ROLES, _call, _context, _gate
 
 ACTION = "tickets__change_status"
 ESCAPES = "\x1b[2J\x1b[1;31mAPPROVED BY SECURITY\x1b[0m\x1b]0;owned\x07‮\r"
@@ -125,7 +125,7 @@ class TestAgainstTheDatabase:
         gate, ctx, call = _gate(policy_gateway_url), _context(), _call()
         pending = await gate.decide(ctx, call)
 
-        request = await Approvals(policy_approver_url).decide(
+        request = await Approvals(policy_approver_url, ROLES).decide(
             UUID(pending.approval_id or ""), "aiden", Decision.APPROVE, None
         )
 
@@ -140,7 +140,7 @@ class TestAgainstTheDatabase:
         test_database_url: str,
     ) -> None:
         request_id = await _ask(policy_gateway_url)
-        approvals = Approvals(policy_approver_url)
+        approvals = Approvals(policy_approver_url, ROLES)
         await _approver_deactivate(test_database_url, argparse.Namespace(id="tyler"))
 
         for who in ("stranger", "tyler"):
@@ -161,7 +161,7 @@ class TestAgainstTheDatabase:
         request_id = await _ask(policy_gateway_url)
 
         with pytest.raises(NotAuthorizedToResolveError):
-            await Approvals(policy_approver_url).decide(
+            await Approvals(policy_approver_url, ROLES).decide(
                 request_id, "intern", Decision.APPROVE, None
             )
 
@@ -179,7 +179,7 @@ class TestAgainstTheDatabase:
             json.dumps({"ticket_id": "TKT-999999", "status": "closed"}),
             str(request_id),
         )
-        approvals = Approvals(policy_approver_url)
+        approvals = Approvals(policy_approver_url, ROLES)
 
         with pytest.raises(ApprovalNotShowableError, match="do not match"):
             await approvals.decide(request_id, "aiden", Decision.APPROVE, None)
@@ -198,7 +198,9 @@ class TestAgainstTheDatabase:
         await _owner(test_database_url, "DELETE FROM approval_arguments")
 
         with pytest.raises(ApprovalNotShowableError, match="not stored"):
-            await Approvals(policy_approver_url).decide(request_id, "aiden", Decision.APPROVE, None)
+            await Approvals(policy_approver_url, ROLES).decide(
+                request_id, "aiden", Decision.APPROVE, None
+            )
 
     async def test_the_command_lists_shows_and_approves(
         self,

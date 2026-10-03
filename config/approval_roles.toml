@@ -1,0 +1,13 @@
+# Who may approve each write: the role a person must hold, per tool.
+#
+# Every write tool that can be called needs an entry. A write with no entry here is refused, not
+# approved by anyone: the gateway will not ask, and the approver's tool will not decide it. The
+# approver side reads this file too (the requester cannot choose the role a request needs), so keep
+# it where the gateway cannot change it.
+#
+# Format: tool = "role" (a role name as given to `gateway-admin approver-add --role`).
+[roles_by_action]
+tickets__create_ticket = "approver"
+tickets__add_comment = "approver"
+tickets__change_status = "approver"
+tickets__assign = "approver"

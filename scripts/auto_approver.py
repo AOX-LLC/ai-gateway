@@ -16,11 +16,13 @@ import sys
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from pathlib import Path
 
 import anyio
 from aox_agent_core.approvals import Decision
 
 from ai_gateway.approver.cli import Approvals
+from ai_gateway.policy.roles import load_roles_by_action
 
 POLL_S = 0.2
 
@@ -44,7 +46,8 @@ async def auto_approving(approver_id: str | None) -> AsyncGenerator[AutoApproval
     if not url:
         sys.exit("auto approval needs POLICY_APPROVER_DATABASE_URL")
     print(f"AUTO-APPROVING pending writes as {approver_id} (test tooling, LAB_AUTO_APPROVE=yes)")
-    approvals = Approvals(url)
+    roles_file = Path(os.environ.get("APPROVAL_ROLES_FILE", "config/approval_roles.toml"))
+    approvals = Approvals(url, load_roles_by_action(roles_file))
     principal = await approvals.principal(approver_id)
 
     async def loop() -> None:

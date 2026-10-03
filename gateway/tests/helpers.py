@@ -133,10 +133,13 @@ def run_gateway(
         f"allow_unaudited_writes = {unaudited}\n"
         f"allow_floor_override = {str(approvals is None).lower()}\n"
     )
+    roles_file = workdir / "approval_roles.toml"
+    roles_file.write_text('[roles_by_action]\necho__shout = "approver"\n')
     events = MemoryEventSink()
     settings = GatewaySettings(
         database_url=SecretStr(database_url),
         pipeline_file=pipeline_file,
+        approval_roles_file=roles_file,
         telemetry_database_url=(
             SecretStr(telemetry_database_url) if telemetry_database_url else None
         ),

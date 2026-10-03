@@ -12,22 +12,23 @@ from aox_agent_core.approvals import (
     Decision,
     Principal,
     PrincipalKind,
+    RoleApproverPolicy,
     SQLApprovalQueue,
     approval_payload_hash,
 )
-from aox_agent_core.audit import SQLAuditLog
 from aox_agent_core.storage import open_database
 from psycopg import errors
 from pydantic import SecretStr
 
 from ai_gateway.pipeline.types import CallContext, ClientIdentity, ToolCall
-from ai_gateway.policy import policy_url
+from ai_gateway.policy import approval_queue_on, policy_url
 from ai_gateway.policy.approvals import PostgresApprovalGate
 from ai_gateway.policy.database import BoundedPostgresDatabase
 from ai_gateway.seams.approvals import ApprovalOutcome
 
 pytestmark = [pytest.mark.integration, pytest.mark.anyio]
 
+ROLES = {"tickets__change_status": "approver"}
 MARKER = "dock-7-account-4111-1111-1111-1111"
 HUMAN = Principal(id="human:aiden", kind=PrincipalKind.HUMAN, roles=frozenset({"approver"}))
 
@@ -53,14 +54,14 @@ def _call(**arguments: Any) -> ToolCall:
 
 def _gate(url: str, **options: Any) -> PostgresApprovalGate:
     database = BoundedPostgresDatabase(SecretStr(policy_url(url)), concurrency=4)
-    queue = SQLApprovalQueue(database, audit_log=SQLAuditLog(database))
-    options = {"hold_s": 0.3, "poll_s": 0.05, **options}
+    queue = approval_queue_on(database)
+    options = {"hold_s": 0.3, "poll_s": 0.05, "roles_by_action": ROLES, **options}
     return PostgresApprovalGate(queue, **options)
 
 
 def _approver(url: str) -> SQLApprovalQueue:
     database = open_database(SecretStr(policy_url(url)))
-    return SQLApprovalQueue(database, audit_log=SQLAuditLog(database))
+    return approval_queue_on(database, policy=RoleApproverPolicy(roles_by_action=ROLES))
 
 
 async def _decide_when_asked(approver: SQLApprovalQueue, decision: Decision) -> None:

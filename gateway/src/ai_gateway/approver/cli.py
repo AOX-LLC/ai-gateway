@@ -9,7 +9,8 @@ and the lab approver of later phases authenticate people themselves.
 import argparse
 import os
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from pathlib import Path
 from typing import Any
 from uuid import UUID
 
@@ -19,18 +20,20 @@ from aox_agent_core.approvals import (
     Decision,
     Principal,
     PrincipalKind,
-    SQLApprovalQueue,
+    RoleApproverPolicy,
 )
-from aox_agent_core.audit import SQLAuditLog
 from aox_agent_core.errors import AgentCoreError
 from aox_agent_core.storage import open_database
 from pydantic import SecretStr
 
 from ai_gateway.approver.display import ApprovalNotShowableError, render
-from ai_gateway.policy import policy_url
+from ai_gateway.policy import approval_queue_on, policy_url
+from ai_gateway.policy.roles import ApprovalRolesError, load_roles_by_action
 from ai_gateway.text import printable
 
 _URL_ENV = "POLICY_APPROVER_DATABASE_URL"
+_ROLES_ENV = "APPROVAL_ROLES_FILE"
+_DEFAULT_ROLES_FILE = "config/approval_roles.toml"
 
 
 class ApproverError(Exception):
@@ -40,9 +43,13 @@ class ApproverError(Exception):
 class Approvals:
     """The approver's view of the queue, and the one place that decides."""
 
-    def __init__(self, database_url: str) -> None:
+    def __init__(self, database_url: str, roles_by_action: Mapping[str, str]) -> None:
+        """`roles_by_action` is the role each write needs, from the file the requester cannot
+        change: a request for any other action, or for another role, is refused."""
         self.database = open_database(SecretStr(policy_url(database_url)))
-        self.queue = SQLApprovalQueue(self.database, audit_log=SQLAuditLog(self.database))
+        self.queue = approval_queue_on(
+            self.database, policy=RoleApproverPolicy(roles_by_action=roles_by_action)
+        )
 
     async def principal(self, approver_id: str) -> Principal:
         def read(session: Any) -> list[tuple[Any, ...]]:
@@ -143,8 +150,9 @@ def main(argv: Sequence[str] | None = None) -> None:
     if not url:
         sys.exit(f"gateway-approver: {_URL_ENV} is not set")
     try:
-        anyio.run(args.handler, Approvals(url), args)
-    except (ApproverError, ApprovalNotShowableError, AgentCoreError) as error:
+        roles = load_roles_by_action(Path(os.environ.get(_ROLES_ENV, _DEFAULT_ROLES_FILE)))
+        anyio.run(args.handler, Approvals(url, roles), args)
+    except (ApproverError, ApprovalNotShowableError, ApprovalRolesError, AgentCoreError) as error:
         message = f"{type(error).__name__}: {error}" if isinstance(error, AgentCoreError) else error
         sys.exit(f"gateway-approver: {printable(str(message), 300)}")
 
