@@ -21,6 +21,8 @@ type Props = {
 export const WIDE_WIDTH = 1120;
 export const HALF_WIDTH = 540;
 const M = { left: 48, right: 12, top: 10, bottom: 26 };
+// A capped chart keeps a strip above the plot for its note, so no line runs through the words.
+const NOTE_STRIP = 18;
 
 const epoch = (iso: string): number => Date.parse(iso) / 1000;
 
@@ -28,6 +30,7 @@ const epoch = (iso: string): number => Date.parse(iso) / 1000;
  * series in the chart tokens. The y axis starts at zero. Gaps in a series are gaps in the line. */
 export function TimeLineChart({ times, series, format, description, wide = false, height = 220, whole = false, clipSpikes }: Props) {
   const W = wide ? WIDE_WIDTH : HALF_WIDTH;
+  const top = clipSpikes ? M.top + NOTE_STRIP : M.top;
   const H = height;
   const first = epoch(times[0] ?? "");
   const last = epoch(times.at(-1) ?? "");
@@ -36,13 +39,12 @@ export function TimeLineChart({ times, series, format, description, wide = false
   const ceiling = clipSpikes ? robustCeiling(all) : null;
   const axis = niceAxis(ceiling ?? highest, 4, whole);
   const plotW = W - M.left - M.right;
-  const plotH = H - M.top - M.bottom;
+  const plotH = H - top - M.bottom;
   const toX = (t: number) => M.left + (last > first ? ((t - first) / (last - first)) * plotW : plotW / 2);
-  const toY = (v: number) => M.top + plotH - (Math.min(v, axis.max) / axis.max) * plotH;
+  const toY = (v: number) => top + plotH - (Math.min(v, axis.max) / axis.max) * plotH;
   const ticks = timeTicks(first, last, wide ? 6 : 5);
   const peak = ceiling === null ? null : peakOf(series, times);
   const peakX = peak ? toX(peak.at) : 0;
-  const labelAtEnd = peakX > M.left + plotW / 2;
   return (
     <svg className="pui-chart" viewBox={`0 0 ${W} ${H}`} role="img" aria-label={description}>
       <title>{description}</title>
@@ -65,9 +67,9 @@ export function TimeLineChart({ times, series, format, description, wide = false
       ))}
       {peak && clipSpikes ? (
         <g>
-          <path className="chart-clip-mark" d={`M${peakX - 4} ${M.top + 8}L${peakX + 4} ${M.top + 8}L${peakX} ${M.top}Z`} />
-          <text className={`chart-clip-label ${labelAtEnd ? "pui-anchor-end" : ""}`} x={peakX + (labelAtEnd ? -8 : 8)} y={M.top + 9}>
-            {`Peak ${format(peak.value)} ${clipSpikes.unit}, above this scale`}
+          <path className="chart-clip-mark" d={`M${peakX - 4} ${top + 8}L${peakX + 4} ${top + 8}L${peakX} ${top}Z`} />
+          <text className="chart-clip-label" x={M.left} y={M.top + 8}>
+            {`Peak ${format(peak.value)} ${clipSpikes.unit}, above this scale (arrow marks it)`}
           </text>
         </g>
       ) : null}

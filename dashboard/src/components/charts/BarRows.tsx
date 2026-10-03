@@ -8,7 +8,9 @@ type Props = { rows: BarRow[]; description: string };
 const W = 540;
 const ROW = 30;
 const LABEL = 150;
-const TEXT = 160;
+const MIN_TEXT = 160;
+const MIN_PLOT = 140;
+const CHAR = 7; // mono text at the chart size, so the numbers get the room they need
 
 const shorten = (label: string, max = 22): string => (label.length > max ? `${label.slice(0, max - 1)}…` : label);
 
@@ -16,7 +18,9 @@ const shorten = (label: string, max = 22): string => (label.length > max ? `${la
  * in words, so the bar is a picture of the text and not the only way to read it. */
 export function BarRows({ rows, description }: Props) {
   const max = Math.max(0, ...rows.map((row) => row.segments.reduce((sum, s) => sum + s.value, 0)));
-  const plot = W - LABEL - TEXT;
+  const longest = Math.max(0, ...rows.map((row) => row.text.length));
+  const text = Math.min(W - LABEL - MIN_PLOT, Math.max(MIN_TEXT, longest * CHAR + 12));
+  const plot = W - LABEL - text;
   const height = rows.length * ROW + 4;
   return (
     <svg className="pui-chart" viewBox={`0 0 ${W} ${height}`} role="img" aria-label={description}>
