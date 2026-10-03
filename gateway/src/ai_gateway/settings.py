@@ -23,6 +23,12 @@ class GatewaySettings(ServiceSettings):
     rate_limits_file: Path = Path("config/rate_limits.toml")
     """The role that must approve each write tool. Read at startup with a policy database."""
     session_idle_timeout_s: Annotated[float, Field(gt=0)] = 900.0
+    login_failures_per_id: Annotated[int, Field(ge=1)] = 5
+    """Failed logins for one token id, within the window, before that id is refused."""
+    login_window_s: Annotated[float, Field(gt=0)] = 60.0
+    login_lockout_s: Annotated[float, Field(gt=0)] = 60.0
+    login_global_ceiling: Annotated[int, Field(ge=1)] = 200
+    """Failures of any kind within the window after which only recently working ids are served."""
     max_sessions: Annotated[int, Field(ge=1)] = 1000
     max_sessions_per_client: Annotated[int, Field(ge=1)] = 20
     catalog_refresh_s: Annotated[float, Field(gt=0)] = 60.0

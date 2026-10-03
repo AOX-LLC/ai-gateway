@@ -17,6 +17,7 @@ from starlette.routing import Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from ai_gateway.auth.middleware import BearerAuthMiddleware
+from ai_gateway.auth.throttle import LoginThrottle, ThrottleConfig
 from ai_gateway.auth.verifier import TokenVerifier
 from ai_gateway.pipeline.config import load_pipeline_config
 from ai_gateway.pipeline.layers.allowlist import load_allowlist
@@ -119,6 +120,14 @@ def create_app(settings: GatewaySettings, events: EventSink | None = None) -> Fa
                 ),
                 TokenVerifier(registry),
                 event_sink,
+                throttle=LoginThrottle(
+                    ThrottleConfig(
+                        failures_per_id=settings.login_failures_per_id,
+                        window_s=settings.login_window_s,
+                        lockout_s=settings.login_lockout_s,
+                        global_ceiling=settings.login_global_ceiling,
+                    )
+                ),
             )
 
             span_processor = install_tracing(telemetry.buffer) if telemetry else None
