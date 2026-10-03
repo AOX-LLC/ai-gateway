@@ -232,6 +232,8 @@ jobs:
           # dashboard's role, must match what was sent. The reader's URL is the one secret the
           # simulator needs; the tokens are passed the way the script reads them.
           TELEMETRY_READER_DATABASE_URL=$(sed -n 's/^TELEMETRY_READER_DATABASE_URL=//p' .env)
+          TELEMETRY_READER_DB_PASSWORD=$(sed -n 's/^TELEMETRY_READER_DB_PASSWORD=//p' .env)
+          echo "::add-mask::$TELEMETRY_READER_DB_PASSWORD"
           echo "::add-mask::$TELEMETRY_READER_DATABASE_URL"
           export TELEMETRY_READER_DATABASE_URL SIM_SUPPORT_TOKEN="$SUPPORT" SIM_OPS_TOKEN="$OPS"
           uv run scripts/simulate_traffic.py --calls 200 --verify

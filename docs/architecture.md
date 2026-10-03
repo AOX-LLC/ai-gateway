@@ -415,7 +415,9 @@ to be another one.
 One exception is not a key the gateway forwards but trace context. The gateway's own trace
 context rides along on the upstream call, and it is always a trace the gateway started: a
 client's `traceparent`, `tracestate` and `baggage` are not forwarded (see
-[Fresh trace at the gateway](#fresh-trace-at-the-gateway)). A server may record the name, for example as a ticket's `requested_by`, and
+[Fresh trace at the gateway](#fresh-trace-at-the-gateway)).
+
+A server may record the client name from `_meta`, for example as a ticket's `requested_by`, and
 uses `direct` when the key is absent or not a valid client name. **It is attribution only.**
 Anything that can reach a server directly can write any value there, so a server must never
 use it to decide what a caller may do. Authorization is the gateway's scope check.
