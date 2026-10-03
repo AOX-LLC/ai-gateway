@@ -25,6 +25,10 @@ class GatewaySettings(ServiceSettings):
     telemetry_database_url: SecretStr | None = None
     """Connection string for the telemetry_writer role. Without it nothing is stored: events go
     to the log only and no span is recorded. Secret because it carries a password."""
+    policy_database_url: SecretStr | None = None
+    """Connection string for the policy_gateway role: the audit log (and, from Phase 3b, the
+    approval queue). Without it the audit log is disabled and writes are refused, unless the
+    pipeline configuration allows unaudited writes. Secret because it carries a password."""
     telemetry_buffer_size: Annotated[int, Field(ge=100)] = 10_000
     """Rows held in memory for the writer; when the database is down the oldest are dropped."""
     telemetry_batch_size: Annotated[int, Field(ge=1, le=5_000)] = 200

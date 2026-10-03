@@ -35,6 +35,7 @@ from ai_gateway.pipeline.types import (
     displayable_tool_name,
     tool_unavailable_message,
 )
+from ai_gateway.policy.audit import AuditRecorder, AuditUnavailableError
 from ai_gateway.seams.events import DEFAULT_EMIT_TIMEOUT_S, EventSink, GatewayEvent
 from ai_gateway.telemetry import attributes
 
@@ -125,11 +126,14 @@ class Pipeline:
         config: PipelineConfig,
         events: EventSink,
         emit_timeout_s: float = DEFAULT_EMIT_TIMEOUT_S,
+        audit: AuditRecorder | None = None,
     ) -> None:
         self._layers = [(layer, config.modes[layer.name]) for layer in layers]
         self._config = config
         self._events = events
         self._emit_timeout_s = emit_timeout_s
+        self._audit = audit
+        """The audit trail, or None when this pipeline has none (a unit test's, say)."""
 
     def describe(self) -> list[dict[str, str]]:
         """The layers and their modes, in pipeline order, for the telemetry store."""
@@ -141,8 +145,9 @@ class Pipeline:
         config: PipelineConfig,
         events: EventSink,
         layer_order: Sequence[type[BaseLayer]] = LAYER_ORDER,
+        audit: AuditRecorder | None = None,
     ) -> "Pipeline":
-        return cls([layer_class() for layer_class in layer_order], config, events)
+        return cls([layer_class() for layer_class in layer_order], config, events, audit=audit)
 
     async def list_tools(self, ctx: CallContext, tools: Sequence[CatalogTool]) -> list[CatalogTool]:
         started = time.perf_counter()
@@ -186,6 +191,11 @@ class Pipeline:
                 if block is not None:
                     return await self._finish_blocked(ctx, call, block, decisions, started, details)
 
+            if call.effect == "write":
+                block = await self._write_ahead(ctx, call)
+                if block is not None:
+                    return await self._finish_blocked(ctx, call, block, decisions, started, details)
+
             upstream_started = time.perf_counter()
             with _tracer.start_as_current_span(attributes.SPAN_UPSTREAM_CALL):
                 upstream = await forward(ctx, call)
@@ -208,6 +218,26 @@ class Pipeline:
         details["outcome"] = "forwarded"
         await self._emit("gateway.tool_call", ctx, call.exposed_name, decisions, started, details)
         return Forwarded(upstream.result)
+
+    async def _write_ahead(self, ctx: CallContext, call: ToolCall) -> tuple[str, Deny] | None:
+        """Record that a write is about to be forwarded, and wait for the record to be stored.
+
+        A write whose attempt cannot be recorded is refused (as `audit`, with `audit_unavailable`),
+        unless the configuration allows unaudited writes. Reads are never held up by the audit log;
+        their records are queued after the fact."""
+        if self._audit is None:
+            return None
+        try:
+            await self._audit.before_write(ctx, call)
+        except AuditUnavailableError as error:
+            if self._config.allow_unaudited_writes:
+                logger.warning("write %s goes unaudited: %s", ctx.request_id, error)
+                return None
+            logger.error(
+                "write %s refused: the audit log is unavailable (%s)", ctx.request_id, error
+            )
+            return "audit", Deny(DenyCode.AUDIT_UNAVAILABLE, POLICY_BLOCK_MESSAGE)
+        return None
 
     async def reject_unknown_tool(self, ctx: CallContext, exposed_name: str) -> Deny:
         """Record a call to a tool no upstream offers. The client gets the same answer as
@@ -339,6 +369,10 @@ class Pipeline:
                 subject_id=subject_id,
                 payload=payload,
             )
+            if self._audit is not None and action == "gateway.tool_call":
+                self._audit.record(
+                    event
+                )  # queues; never waits, never raises. Listings are not audited.
             with anyio.fail_after(self._emit_timeout_s):
                 await self._events.emit(event)
         except Exception:

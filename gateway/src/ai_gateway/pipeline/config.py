@@ -5,6 +5,7 @@
 
     [safety]
     allow_floor_override = false
+    allow_unaudited_writes = false   # a write is refused when its audit record cannot be written
 
 Every mistake stops the gateway from starting rather than quietly weakening it: an
 unknown layer name, an unknown mode, an unknown key, or a floor layer weakened without
@@ -26,7 +27,7 @@ from ai_gateway.pipeline.types import BaseLayer, LayerMode
 logger = logging.getLogger(__name__)
 
 _TOP_LEVEL_KEYS = frozenset({"layers", "safety"})
-_SAFETY_KEYS = frozenset({"allow_floor_override"})
+_SAFETY_KEYS = frozenset({"allow_floor_override", "allow_unaudited_writes"})
 
 
 class PipelineConfigError(ValueError):
@@ -40,6 +41,8 @@ class PipelineConfig:
     allow_floor_override: bool
     sha256: str
     """Fingerprint of the effective configuration, stamped on every decision record."""
+    allow_unaudited_writes: bool = False
+    """A write is forwarded even when its audit record cannot be written."""
 
     @property
     def enabled_layers(self) -> list[str]:
@@ -65,6 +68,12 @@ def parse_pipeline_config(
     if not isinstance(allow_floor_override, bool):
         raise PipelineConfigError("[safety] allow_floor_override must be true or false")
 
+    allow_unaudited_writes = safety.get("allow_unaudited_writes", False)
+    if not isinstance(allow_unaudited_writes, bool):
+        raise PipelineConfigError("[safety] allow_unaudited_writes must be true or false")
+    if allow_unaudited_writes:
+        logger.warning("writes are allowed without an audit record (allow_unaudited_writes)")
+
     configured_modes = _table(raw, "layers")
     known_layers = {layer.name: layer for layer in layer_order}
     _reject_unknown_keys(configured_modes.keys(), known_layers.keys(), "[layers]")
@@ -75,7 +84,11 @@ def parse_pipeline_config(
     }
     _check_floor_layers(modes, known_layers, allow_floor_override)
 
-    fingerprint_source = {"layers": modes, "allow_floor_override": allow_floor_override}
+    fingerprint_source = {
+        "layers": modes,
+        "allow_floor_override": allow_floor_override,
+        "allow_unaudited_writes": allow_unaudited_writes,
+    }
     fingerprint = hashlib.sha256(
         json.dumps(fingerprint_source, sort_keys=True).encode()
     ).hexdigest()
@@ -83,6 +96,7 @@ def parse_pipeline_config(
         modes=MappingProxyType(modes),
         allow_floor_override=allow_floor_override,
         sha256=fingerprint,
+        allow_unaudited_writes=allow_unaudited_writes,
     )
 
 
