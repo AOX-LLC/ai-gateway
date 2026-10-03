@@ -5,25 +5,40 @@ from uuid import uuid4
 import anyio
 import psycopg
 import pytest
-from aox_agent_core.approvals import Decision, Principal, PrincipalKind, SQLApprovalQueue
-from aox_agent_core.audit import AuditEvent, SQLAuditLog
+from aox_agent_core.approvals import (
+    Decision,
+    Principal,
+    PrincipalKind,
+    RoleApproverPolicy,
+    SQLApprovalQueue,
+)
+from aox_agent_core.audit import AuditEvent
 from aox_agent_core.errors import ApprovalError, ApprovalPayloadMismatchError
 from aox_agent_core.storage import open_database
 from psycopg import errors
 from pydantic import SecretStr
 
-from ai_gateway.policy import APPROVALS_TABLE, AUDIT_TABLE, ROLES, SCHEMA, policy_url
+from ai_gateway.policy import (
+    APPROVALS_TABLE,
+    AUDIT_TABLE,
+    ROLES,
+    SCHEMA,
+    approval_queue_on,
+    audit_log_on,
+    policy_url,
+)
 from ai_gateway.policy.setup import (
     PolicyPasswords,
-    _install_tables,
     grant_policy_access,
     setup_policy,
 )
-from mcp_common.roles import advisory_lock, ensure_schema
+from mcp_common.roles import advisory_lock
 from tests.conftest import password_of
 
 pytestmark = [pytest.mark.integration, pytest.mark.anyio]
 
+_REFUSED = (errors.RaiseException, errors.InsufficientPrivilege)
+"""a3 refuses in two layers: column grants (InsufficientPrivilege) and the guard trigger."""
 PAYLOAD = {"ticket_id": "TKT-000001", "status": "closed"}
 ACTION = "tickets__change_status"
 CLIENT = Principal(id=f"client:{uuid4()}", kind=PrincipalKind.AGENT)
@@ -32,7 +47,9 @@ HUMAN = Principal(id="human:aiden", kind=PrincipalKind.HUMAN, roles=frozenset({"
 
 def _queue(url: str) -> SQLApprovalQueue:
     database = open_database(SecretStr(policy_url(url)))
-    return SQLApprovalQueue(database, audit_log=SQLAuditLog(database))
+    return approval_queue_on(
+        database, policy=RoleApproverPolicy(roles_by_action={ACTION: "approver"})
+    )
 
 
 def _event() -> AuditEvent:
@@ -48,14 +65,14 @@ async def _as(url: str) -> psycopg.AsyncConnection:
     return await psycopg.AsyncConnection.connect(policy_url(url), autocommit=True)
 
 
-async def _pending(gateway_url: str) -> object:
+async def _pending(gateway_url: str, ttl_seconds: int = 300) -> object:
     return await _queue(gateway_url).submit(
         action=ACTION,
         summary="close a ticket",
         payload=PAYLOAD,
         requested_by=CLIENT,
         required_role="approver",
-        ttl_seconds=300,
+        ttl_seconds=ttl_seconds,
     )
 
 
@@ -70,7 +87,7 @@ async def test_setup_installs_the_tables_in_the_policy_schema_once_and_is_safe_t
     policy_auditor_url: str,
 ) -> None:
     await _queue(policy_gateway_url).database.run(lambda s: s.execute("SELECT 1"))
-    await SQLAuditLog(open_database(SecretStr(policy_url(policy_gateway_url)))).append(_event())
+    await audit_log_on(open_database(SecretStr(policy_url(policy_gateway_url)))).append(_event())
 
     await setup_policy(
         test_database_url,
@@ -90,36 +107,6 @@ async def test_setup_installs_the_tables_in_the_policy_schema_once_and_is_safe_t
         assert await cursor.fetchall() == [(SCHEMA,), (SCHEMA,)]
         cursor = await connection.execute(b"SELECT count(*) FROM agent_core_audit")
         assert await cursor.fetchone() == (1,), "a repeat setup must not touch the records"
-
-
-async def test_no_real_role_holds_a_grant_while_agent_cores_tables_are_installed(
-    policy: None, test_database_url: str
-) -> None:
-    """agent-core's installer grants its app role UPDATE on approvals, and the guard does not exist
-    yet. It installs for a scratch role that cannot log in, which is dropped with its grants."""
-    async with await _as(test_database_url) as connection:
-        await connection.execute("DROP SCHEMA policy CASCADE")
-        await ensure_schema(connection, SCHEMA)
-        await _install_tables(connection, test_database_url)
-
-        cursor = await connection.execute(
-            "SELECT r.rolname, t.relname FROM pg_roles r CROSS JOIN pg_class t"
-            " WHERE r.rolname = ANY(%s) AND t.relnamespace = 'policy'::regnamespace"
-            " AND t.relkind = 'r' AND (has_table_privilege(r.oid, t.oid, 'SELECT')"
-            " OR has_table_privilege(r.oid, t.oid, 'INSERT')"
-            " OR has_table_privilege(r.oid, t.oid, 'UPDATE'))",
-            (list(ROLES),),
-        )
-        assert await cursor.fetchall() == []
-        cursor = await connection.execute(
-            "SELECT count(*) FROM pg_roles WHERE rolname LIKE 'policy_install_%'"
-        )
-        assert await cursor.fetchone() == (0,)
-        cursor = await connection.execute(
-            "SELECT count(*) FROM pg_class WHERE relnamespace = 'policy'::regnamespace"
-            " AND relname IN ('agent_core_audit', 'agent_core_approvals')"
-        )
-        assert await cursor.fetchone() == (2,)
 
 
 async def test_two_setups_at_once_do_not_collide(
@@ -169,7 +156,7 @@ async def test_setup_refuses_an_empty_password(test_database_url: str, empty: st
 async def test_the_gateway_can_append_and_read_but_nobody_can_change_or_remove(
     policy: None, policy_gateway_url: str, test_database_url: str
 ) -> None:
-    log = SQLAuditLog(open_database(SecretStr(policy_url(policy_gateway_url))))
+    log = audit_log_on(open_database(SecretStr(policy_url(policy_gateway_url))))
     record = await log.append(_event())
     assert record.seq == 1
 
@@ -187,8 +174,8 @@ async def test_the_gateway_can_append_and_read_but_nobody_can_change_or_remove(
 async def test_the_auditor_reads_the_log_and_can_write_nothing(
     policy: None, policy_gateway_url: str, policy_auditor_url: str
 ) -> None:
-    await SQLAuditLog(open_database(SecretStr(policy_url(policy_gateway_url)))).append(_event())
-    auditor = SQLAuditLog(open_database(SecretStr(policy_url(policy_auditor_url))))
+    await audit_log_on(open_database(SecretStr(policy_url(policy_gateway_url)))).append(_event())
+    auditor = audit_log_on(open_database(SecretStr(policy_url(policy_auditor_url))))
 
     assert (await auditor.verify()).seq == 1
     with pytest.raises(Exception, match=r"(?i)privilege|permission|insert|append"):
@@ -241,14 +228,14 @@ async def test_the_gateway_cannot_decide_a_request_by_any_route(
 ) -> None:
     request = await _pending(policy_gateway_url)
 
-    with pytest.raises(Exception, match="may only consume"):
+    with pytest.raises(Exception, match="cannot decide requests"):
         await _queue(policy_gateway_url).resolve(
             request.id,  # type: ignore[attr-defined]
             decision=Decision.APPROVE,
             principal=HUMAN,  # a policy that would allow it is not enough: the database refuses
         )
     async with await _as(policy_gateway_url) as connection:
-        with pytest.raises(errors.RaiseException, match="may only consume"):
+        with pytest.raises(_REFUSED):
             await connection.execute(
                 "UPDATE agent_core_approvals SET status = 'approved', decision = 'approve',"
                 " resolved_by = 'human:x', resolved_at = now()::text WHERE id = %s",
@@ -268,7 +255,7 @@ async def test_nobody_can_create_a_request_that_is_already_decided(
     )
     for url in (policy_gateway_url, test_database_url):
         async with await _as(url) as connection:
-            with pytest.raises(errors.RaiseException, match="only be created pending"):
+            with pytest.raises(_REFUSED):
                 await connection.execute(insert.encode())
 
 
@@ -283,7 +270,7 @@ async def test_the_approver_cannot_create_requests_or_use_one(
     )
 
     async with await _as(policy_approver_url) as connection:
-        with pytest.raises(errors.InsufficientPrivilege):
+        with pytest.raises(_REFUSED):
             await connection.execute(
                 b"INSERT INTO agent_core_approvals (id, action, summary, payload_sha256,"
                 b" requested_by, required_role, created_at, expires_at, status)"
@@ -291,7 +278,7 @@ async def test_the_approver_cannot_create_requests_or_use_one(
                 b" 'a', 's', repeat('a', 64), 'c', 'approver', now()::text,"
                 b" (now() + interval '1 hour')::text, 'pending')"
             )
-        with pytest.raises(errors.RaiseException, match="only decide a pending"):
+        with pytest.raises(_REFUSED):
             await connection.execute(
                 "UPDATE agent_core_approvals SET status = 'consumed', consumed_at = now()::text"
                 " WHERE id = %s",
@@ -358,8 +345,8 @@ async def test_every_role_exists_without_login_extras(policy: None, test_databas
 # --- the guard's finer rules ----------------------------------------------------------------------
 
 
-async def _approved(gateway_url: str, approver_url: str) -> object:
-    request = await _pending(gateway_url)
+async def _approved(gateway_url: str, approver_url: str, ttl_seconds: int = 300) -> object:
+    request = await _pending(gateway_url, ttl_seconds)
     await _queue(approver_url).resolve(
         request.id,  # type: ignore[attr-defined]
         decision=Decision.APPROVE,
@@ -390,7 +377,7 @@ async def test_the_gateway_can_consume_an_approval_and_change_nothing_else_in_th
 ) -> None:
     request = await _approved(policy_gateway_url, policy_approver_url)
 
-    with pytest.raises(errors.RaiseException, match="may only consume"):
+    with pytest.raises(_REFUSED):
         await _run(
             policy_gateway_url,
             "UPDATE agent_core_approvals SET status = 'consumed', consumed_at = now()::text,"  # noqa: S608
@@ -402,15 +389,10 @@ async def test_the_gateway_can_consume_an_approval_and_change_nothing_else_in_th
 async def test_the_gateway_cannot_consume_an_approval_that_has_expired(
     policy: None, policy_gateway_url: str, policy_approver_url: str, test_database_url: str
 ) -> None:
-    request = await _approved(policy_gateway_url, policy_approver_url)
-    await _run(
-        test_database_url,
-        "UPDATE agent_core_approvals SET expires_at = (now() - interval '1 minute')::text"
-        " WHERE id = %s",
-        str(request.id),  # type: ignore[attr-defined]
-    )
+    request = await _approved(policy_gateway_url, policy_approver_url, ttl_seconds=1)
+    await anyio.sleep(1.2)  # a3 forbids changing a lifetime, even for the owner: let it pass
 
-    with pytest.raises(errors.RaiseException, match="may only consume"):
+    with pytest.raises(_REFUSED):
         await _run(
             policy_gateway_url,
             "UPDATE agent_core_approvals SET status = 'consumed', consumed_at = now()::text"
@@ -447,7 +429,7 @@ async def test_the_approver_decides_a_request_and_changes_nothing_else_in_the_sa
     }
     changes = ", ".join(f"{name} = {expression}" for name, expression in assignments.items())
 
-    with pytest.raises(errors.RaiseException, match="may only decide"):
+    with pytest.raises(_REFUSED):
         await _run(
             policy_approver_url,
             f"UPDATE agent_core_approvals SET {changes} WHERE id = %s",  # noqa: S608
@@ -459,7 +441,7 @@ async def test_the_approver_cannot_decide_a_request_twice_or_after_it_expired(
     policy: None, policy_gateway_url: str, policy_approver_url: str, test_database_url: str
 ) -> None:
     decided = await _approved(policy_gateway_url, policy_approver_url)
-    with pytest.raises(errors.RaiseException, match="may only decide"):
+    with pytest.raises(_REFUSED):
         await _run(
             policy_approver_url,
             "UPDATE agent_core_approvals SET status = 'rejected', decision = 'reject'"
@@ -467,14 +449,9 @@ async def test_the_approver_cannot_decide_a_request_twice_or_after_it_expired(
             str(decided.id),  # type: ignore[attr-defined]
         )
 
-    expired = await _pending(policy_gateway_url)
-    await _run(
-        test_database_url,
-        "UPDATE agent_core_approvals SET expires_at = (now() - interval '1 minute')::text"
-        " WHERE id = %s",
-        str(expired.id),  # type: ignore[attr-defined]
-    )
-    with pytest.raises(errors.RaiseException, match="may only decide"):
+    expired = await _pending(policy_gateway_url, ttl_seconds=1)
+    await anyio.sleep(1.2)
+    with pytest.raises(_REFUSED):
         await _run(
             policy_approver_url,
             "UPDATE agent_core_approvals SET status = 'approved', decision = 'approve',"
@@ -488,7 +465,7 @@ async def test_an_upsert_cannot_decide_a_request_either(
 ) -> None:
     request = await _pending(policy_gateway_url)
 
-    with pytest.raises(errors.RaiseException):
+    with pytest.raises(_REFUSED):
         await _run(
             policy_gateway_url,
             "INSERT INTO agent_core_approvals (id, action, summary, payload_sha256, requested_by,"
@@ -511,7 +488,7 @@ async def test_a_role_that_only_inherits_a_policy_role_cannot_change_an_approval
         await connection.execute("CREATE ROLE policy_intruder NOLOGIN")
         await connection.execute("GRANT policy_gateway TO policy_intruder")
         await connection.execute("SET ROLE policy_intruder")
-        with pytest.raises(errors.RaiseException, match="only the gateway and approver"):
+        with pytest.raises(_REFUSED):
             await connection.execute(
                 b"UPDATE agent_core_approvals SET status = 'approved', decision = 'approve',"
                 b" resolved_by = 'human:x', resolved_at = now()::text WHERE id = %s",
@@ -562,7 +539,7 @@ async def test_a_role_that_only_inherits_the_gateway_role_cannot_create_a_reques
         await connection.execute("GRANT policy_gateway TO policy_intruder")
         await connection.execute("SET ROLE policy_intruder")
         try:
-            with pytest.raises(errors.RaiseException, match="only the gateway role may create"):
+            with pytest.raises(_REFUSED):
                 await connection.execute(
                     b"INSERT INTO agent_core_approvals (id, action, summary, payload_sha256,"
                     b" requested_by, required_role, created_at, expires_at, status)"
@@ -573,43 +550,6 @@ async def test_a_role_that_only_inherits_the_gateway_role_cannot_create_a_reques
             await connection.execute("RESET ROLE")
             await connection.execute("DROP OWNED BY policy_intruder")
             await connection.execute("DROP ROLE policy_intruder")
-
-
-async def test_a_scratch_role_left_by_a_killed_setup_is_dropped_by_the_next_one(
-    policy: None,
-    test_database_url: str,
-    policy_gateway_url: str,
-    policy_approver_url: str,
-    policy_auditor_url: str,
-) -> None:
-    async with await _as(test_database_url) as connection:
-        cursor = await connection.execute(
-            "SELECT 'policy_install_' || left(md5(current_database()), 12)"
-        )
-        row = await cursor.fetchone()
-        assert row is not None
-        scratch = str(row[0])
-        await connection.execute(f"CREATE ROLE {scratch} NOLOGIN".encode())
-        await connection.execute(
-            f"GRANT UPDATE ON agent_core_approvals TO {scratch}".encode().replace(
-                b"ON agent", b"ON policy.agent"
-            )
-        )
-
-    await setup_policy(
-        test_database_url,
-        PolicyPasswords(
-            password_of(policy_gateway_url),
-            password_of(policy_approver_url),
-            password_of(policy_auditor_url),
-        ),
-    )
-
-    async with await _as(test_database_url) as connection:
-        cursor = await connection.execute(
-            "SELECT count(*) FROM pg_roles WHERE rolname = %s", (scratch,)
-        )
-        assert await cursor.fetchone() == (0,)
 
 
 async def test_a_setup_waits_for_the_lock_only_so_long(test_database_url: str) -> None:

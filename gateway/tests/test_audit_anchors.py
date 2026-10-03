@@ -21,7 +21,7 @@ from aox_agent_core.storage import open_database
 from pydantic import SecretStr
 
 from ai_gateway.admin.cli import _audit_anchor, _audit_verify
-from ai_gateway.policy import policy_url
+from ai_gateway.policy import audit_log_on, policy_url
 from ai_gateway.policy.anchors import (
     Anchor,
     AnchorFileError,
@@ -34,7 +34,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.anyio]
 
 
 def _log(url: str) -> SQLAuditLog:
-    return SQLAuditLog(open_database(SecretStr(policy_url(url))))
+    return audit_log_on(open_database(SecretStr(policy_url(url))))
 
 
 async def _append(url: str, count: int) -> None:

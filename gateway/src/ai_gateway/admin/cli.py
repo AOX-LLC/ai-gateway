@@ -22,7 +22,7 @@ from psycopg.errors import CheckViolation
 from pydantic import SecretStr
 
 from ai_gateway.auth.tokens import IssuedToken, generate_token
-from ai_gateway.policy import policy_url
+from ai_gateway.policy import audit_log_on, policy_url
 from ai_gateway.policy.anchors import (
     AnchorFileError,
     append_anchor,
@@ -288,7 +288,7 @@ async def _policy_setup(database_url: str, _: argparse.Namespace) -> None:
 
 
 def _audit_log(database_url: str) -> SQLAuditLog:
-    return SQLAuditLog(open_database(SecretStr(policy_url(database_url))))
+    return audit_log_on(open_database(SecretStr(policy_url(database_url))))
 
 
 async def _approver_add(database_url: str, args: argparse.Namespace) -> None:

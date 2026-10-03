@@ -11,13 +11,12 @@ import anyio
 import httpx2
 import psycopg
 import pytest
-from aox_agent_core.audit import SQLAuditLog
 from aox_agent_core.storage import open_database
 from mcp.shared.exceptions import MCPError
 from pydantic import SecretStr
 
 from ai_gateway.auth.tokens import IssuedToken
-from ai_gateway.policy import policy_url
+from ai_gateway.policy import audit_log_on, policy_url
 from ai_gateway.registry.repo import AdminRegistry
 from tests.helpers import RunningGateway, connect, run_gateway
 
@@ -124,7 +123,7 @@ async def test_every_call_is_audited_a_write_before_it_runs_and_the_chain_verifi
     assert MARKER.upper() not in json.dumps(records)
     assert "4111-1111" not in json.dumps(records)  # not "4111": a hash or UUID may hold it
 
-    auditor = SQLAuditLog(open_database(SecretStr(policy_url(policy_auditor_url))))
+    auditor = audit_log_on(open_database(SecretStr(policy_url(policy_auditor_url))))
     assert (await auditor.verify()).seq == len(await _records(policy_gateway_url))
 
 
