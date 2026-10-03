@@ -419,13 +419,11 @@ def test_the_seed_contains_no_real_looking_contact_data() -> None:
     assert all(phone.startswith("555-01") for phone in re.findall(r"\b\d{3}-\d{4}\b", text))
 
 
-def test_the_seed_in_the_database_is_the_seed_in_code(
+async def test_the_seed_in_the_database_is_the_seed_in_code(
     ticketing_app_url: str, ticketing_data: Dataset
 ) -> None:
-    import anyio
-
-    rows = anyio.run(
-        _rows, ticketing_app_url, "SELECT id, subject, internal_notes FROM tickets ORDER BY id"
+    rows = await _rows(
+        ticketing_app_url, "SELECT id, subject, internal_notes FROM tickets ORDER BY id"
     )
 
     assert rows == [(t.id, t.subject, t.internal_notes) for t in ticketing_data.tickets]
