@@ -14,9 +14,21 @@ from pathlib import Path
 from uuid import UUID
 
 import anyio
+from aox_agent_core.audit import SQLAuditLog
+from aox_agent_core.errors import AuditIntegrityError
+from aox_agent_core.storage import open_database
 from psycopg import AsyncConnection
+from pydantic import SecretStr
 
 from ai_gateway.auth.tokens import IssuedToken, generate_token
+from ai_gateway.policy import policy_url
+from ai_gateway.policy.anchors import (
+    AnchorFileError,
+    append_anchor,
+    read_anchors,
+    verify_with_anchors,
+)
+from ai_gateway.policy.setup import PolicyPasswords, setup_policy
 from ai_gateway.proxy.naming import split_exposed
 from ai_gateway.registry import MIGRATIONS_PACKAGE
 from ai_gateway.registry.models import CREDENTIAL_ENV_SUFFIX, ClientStatus
@@ -26,6 +38,7 @@ from ai_gateway.telemetry.setup import TelemetryPasswords, setup_telemetry
 from mcp_common.migrate import apply_migrations
 
 _DATABASE_URL_ENV = "GATEWAY_MIGRATE_DATABASE_URL"
+_AUDITOR_URL_ENV = "POLICY_AUDITOR_DATABASE_URL"
 MAX_LIVE_TOKENS_PER_CLIENT = 2
 
 # Fictional demo data for the test profile. Harborline Supply Co. does not exist.
@@ -76,12 +89,14 @@ class AdminError(Exception):
 
 def main(argv: Sequence[str] | None = None) -> None:
     args = _parser().parse_args(argv)
-    database_url = os.environ.get(_DATABASE_URL_ENV)
+    # Most commands run as the database owner; the audit commands run as a role that can only read.
+    database_env = getattr(args, "database_env", _DATABASE_URL_ENV)
+    database_url = os.environ.get(database_env)
     if not database_url:
-        sys.exit(f"gateway-admin: {_DATABASE_URL_ENV} is not set")
+        sys.exit(f"gateway-admin: {database_env} is not set")
     try:
         anyio.run(args.handler, database_url, args)
-    except (AdminError, ClientNotFoundError) as error:
+    except (AdminError, ClientNotFoundError, AnchorFileError, AuditIntegrityError) as error:
         sys.exit(f"gateway-admin: {error}")
 
 
@@ -97,6 +112,25 @@ def _parser() -> argparse.ArgumentParser:
         help="create the telemetry roles and schema, migrate and grant (safe to repeat)",
     )
     telemetry_setup.set_defaults(handler=_telemetry_setup)
+
+    policy_setup = commands.add_parser(
+        "policy-setup",
+        help="create the policy roles and schema, install the audit log and approval queue,"
+        " and grant (safe to repeat)",
+    )
+    policy_setup.set_defaults(handler=_policy_setup)
+
+    anchor = commands.add_parser(
+        "audit-anchor", help="append the audit log's head to an anchor file kept elsewhere"
+    )
+    anchor.add_argument("--file", type=Path, required=True)
+    anchor.set_defaults(handler=_audit_anchor, database_env=_AUDITOR_URL_ENV)
+
+    verify = commands.add_parser(
+        "audit-verify", help="check the audit log's hash chain, and every anchor against it"
+    )
+    verify.add_argument("--anchors", type=Path, help="an anchor file; without one, only the chain")
+    verify.set_defaults(handler=_audit_verify, database_env=_AUDITOR_URL_ENV)
 
     client_add = commands.add_parser("client-add", help="create or update a client")
     client_add.add_argument("name")
@@ -211,6 +245,43 @@ async def _telemetry_setup(database_url: str, _: argparse.Namespace) -> None:
         ),
     )
     print("telemetry schema is set up")
+
+
+async def _policy_setup(database_url: str, _: argparse.Namespace) -> None:
+    variables = (
+        "POLICY_GATEWAY_DB_PASSWORD",
+        "POLICY_APPROVER_DB_PASSWORD",
+        "POLICY_AUDITOR_DB_PASSWORD",
+    )
+    missing = [name for name in variables if not os.environ.get(name)]
+    if missing:
+        raise AdminError(f"{', '.join(missing)} is not set (python3 scripts/init_env.py adds it)")
+    await setup_policy(
+        database_url,
+        PolicyPasswords(
+            gateway=os.environ["POLICY_GATEWAY_DB_PASSWORD"],
+            approver=os.environ["POLICY_APPROVER_DB_PASSWORD"],
+            auditor=os.environ["POLICY_AUDITOR_DB_PASSWORD"],
+        ),
+    )
+    print("policy schema is set up")
+
+
+def _audit_log(database_url: str) -> SQLAuditLog:
+    return SQLAuditLog(open_database(SecretStr(policy_url(database_url))))
+
+
+async def _audit_anchor(database_url: str, args: argparse.Namespace) -> None:
+    head = await _audit_log(database_url).head()
+    anchor = append_anchor(args.file, head)
+    print(f"anchored record {anchor.seq} ({anchor.record_hash[:12]}...) in {args.file}")
+
+
+async def _audit_verify(database_url: str, args: argparse.Namespace) -> None:
+    log = _audit_log(database_url)
+    anchors = read_anchors(args.anchors) if args.anchors else []
+    head = await verify_with_anchors(log, anchors)
+    print(f"ok: {head.seq} records chain correctly and match {len(anchors)} anchors")
 
 
 async def _client_add(database_url: str, args: argparse.Namespace) -> None:
