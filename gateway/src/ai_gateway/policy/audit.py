@@ -15,16 +15,20 @@ dozen a second. A batch of 100 in one transaction takes about 150 ms, so batchin
 every call be audited.
 """
 
+import hashlib
+import json
 import logging
+import re
 import time
 from collections import deque
 from dataclasses import dataclass
 from typing import Any, Protocol
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import anyio
 from aox_agent_core.audit import AuditEvent, SQLAuditLog
 from aox_agent_core.context import RunContext
+from aox_agent_core.errors import AgentCoreError
 
 from ai_gateway.pipeline.types import CallContext, ToolCall
 from ai_gateway.seams.events import GatewayEvent
@@ -35,7 +39,9 @@ SPOOL_SIZE = 5_000
 BATCH_SIZE = 100
 FLUSH_INTERVAL_S = 0.5
 WRITE_AHEAD_TIMEOUT_S = 2.0
-BATCH_TIMEOUT_S = 10.0
+BATCH_TIMEOUT_S = 15.0
+DEDUPE_WINDOW = 2_000
+"""How many of the newest records a retried batch is checked against."""
 _BACKOFF_START_S = 1.0
 _BACKOFF_MAX_S = 30.0
 _LOG_EVERY_S = 60.0
@@ -53,6 +59,7 @@ class AuditStatus:
     dropped_total: int = 0
     rejected_total: int = 0
     written_total: int = 0
+    write_ahead_failed_total: int = 0
 
 
 class AuditRecorder(Protocol):
@@ -83,13 +90,31 @@ class DisabledAuditRecorder:
         return AuditStatus(status="disabled")
 
 
-def call_event(event: GatewayEvent) -> AuditEvent:
+_SUBJECT_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$")
+
+
+def _subject(tool_name: str | None) -> tuple[str | None, dict[str, Any]]:
+    """The audit subject for a tool name, and what to record when the name cannot be one.
+
+    A client chooses the name of a tool that does not exist, and agent-core accepts only plain
+    identifiers as subjects. Such a call is still recorded: with no subject, and the name's hash."""
+    if tool_name is None or _SUBJECT_ID.match(tool_name):
+        return tool_name, {}
+    return None, {
+        "tool_name_valid": False,
+        "tool_name_sha256": hashlib.sha256(tool_name.encode()).hexdigest(),
+    }
+
+
+def call_event(event: GatewayEvent, record_id: str | None = None) -> AuditEvent:
     """The audit event for a `gateway.tool_call` decision record.
 
     Built from named fields only. Durations are integer microseconds (the audit log refuses
     floats), and nothing of the arguments or the result is in it: only their hash."""
     payload = event.payload
+    subject_id, subject_extra = _subject(event.subject_id)
     audit_payload: dict[str, Any] = {
+        "record_id": record_id or str(uuid4()),
         "request_id": payload.get("request_id"),
         "client_name": payload.get("client_name"),
         "namespace": payload.get("namespace"),
@@ -109,11 +134,12 @@ def call_event(event: GatewayEvent) -> AuditEvent:
             {key: layer[key] for key in _LAYER_KEYS if layer.get(key) is not None}
             for layer in _layers(payload.get("layers"))
         ],
+        **subject_extra,
     }
     return AuditEvent(
         action="gateway.tool_call",
         actor_id=event.actor_id,
-        subject_id=event.subject_id,
+        subject_id=subject_id,
         payload={key: value for key, value in audit_payload.items() if value is not None},
         context=_run_context(payload.get("request_id")),
     )
@@ -128,16 +154,19 @@ def _layers(value: object) -> list[dict[str, Any]]:
 
 def write_ahead_event(ctx: CallContext, call: ToolCall) -> AuditEvent:
     """The record that a write is about to be forwarded: who, which tool, and the argument hash."""
+    subject_id, subject_extra = _subject(call.exposed_name)
     return AuditEvent(
         action="gateway.call_started",
         actor_id=ctx.client.actor_id,
-        subject_id=call.exposed_name,
+        subject_id=subject_id,
         payload={
+            "record_id": str(uuid4()),
             "request_id": str(ctx.request_id),
             "client_name": ctx.client.name,
             "namespace": call.namespace,
             "effect": call.effect,
             "args_sha256": call.arguments_sha256,
+            **subject_extra,
         },
         context=_run_context(str(ctx.request_id)),
     )
@@ -156,17 +185,27 @@ def _run_context(request_id: object) -> RunContext | None:
         return None
 
 
+def _reason(error: Exception) -> str:
+    """Why the log failed, for the operator's log: agent-core's own errors say (its messages never
+    echo input), a driver's error is reduced to its class, since a driver can quote a value."""
+    if isinstance(error, AgentCoreError):
+        return f"{type(error).__name__}: {error}"
+    return type(error).__name__
+
+
 class PostgresAuditRecorder:
     def __init__(
         self,
         log: SQLAuditLog,
         *,
+        batch_log: SQLAuditLog | None = None,
         spool_size: int = SPOOL_SIZE,
         batch_size: int = BATCH_SIZE,
         flush_interval_s: float = FLUSH_INTERVAL_S,
         write_ahead_timeout_s: float = WRITE_AHEAD_TIMEOUT_S,
     ) -> None:
         self._log = log
+        self._batch_log = batch_log or log
         self._spool: deque[AuditEvent] = deque(maxlen=spool_size)
         self._spool_size = spool_size
         self._batch_size = batch_size
@@ -177,38 +216,57 @@ class PostgresAuditRecorder:
         self._unreported_drops = 0
         self._rejected_total = 0
         self._written_total = 0
+        self._write_ahead_failed_total = 0
+        self._write_ahead_failing = False
         self._failing = False
-        self._last_logged = 0.0
+        self._maybe_committed = False
+        """The last batch failed after it may have been sent: it may be in the log already."""
+        self._last_seq = 0
+        self._noted: dict[str, float] = {}
 
     def status(self) -> AuditStatus:
         return AuditStatus(
-            status="degraded" if self._failing else "ok",
+            status="degraded" if self._failing or self._write_ahead_failing else "ok",
             queue_depth=len(self._spool) + len(self._pending),
             dropped_total=self._dropped_total,
             rejected_total=self._rejected_total,
             written_total=self._written_total,
+            write_ahead_failed_total=self._write_ahead_failed_total,
         )
 
     async def before_write(self, ctx: CallContext, call: ToolCall) -> None:
+        if getattr(self._log.database, "busy", False):
+            # Every audit worker is taken: a write would queue behind them. Refuse it now.
+            self._write_ahead_failed("busy")
+            raise AuditUnavailableError("the audit workers are busy")
         try:
             event = self._log.checked_event(write_ahead_event(ctx, call))
             with anyio.fail_after(self._write_ahead_timeout_s):
                 await self._log.append(event)
         except Exception as error:
-            # The class only: a driver's message can quote a value.
-            raise AuditUnavailableError(type(error).__name__) from None
+            reason = _reason(error)
+            self._write_ahead_failed(reason)
+            raise AuditUnavailableError(reason) from None
+        self._write_ahead_failing = False
+
+    def _write_ahead_failed(self, reason: str) -> None:
+        self._write_ahead_failing = True
+        self._write_ahead_failed_total += 1
+        self._note("write-ahead", "a write-ahead audit record failed (%s)", reason)
 
     def record(self, event: GatewayEvent) -> None:
         try:
             if event.action != "gateway.tool_call":
                 return
-            if len(self._spool) >= self._spool_size:
-                self._dropped_total += 1
-                self._unreported_drops += 1
-            self._spool.append(self._log.checked_event(call_event(event)))
+            checked = self._log.checked_event(call_event(event))
         except Exception as error:
             self._rejected_total += 1
-            self._note("an audit record could not be built (%s)", type(error).__name__)
+            self._note("rejected", "an audit record could not be built (%s)", _reason(error))
+            return
+        if len(self._spool) >= self._spool_size:
+            self._dropped_total += 1
+            self._unreported_drops += 1
+        self._spool.append(checked)
 
     async def run(
         self, *, task_status: anyio.abc.TaskStatus[None] = anyio.TASK_STATUS_IGNORED
@@ -242,44 +300,82 @@ class PostgresAuditRecorder:
             self._pending = self._take_batch()
         if not self._pending:
             return False
-        batch = self._pending
-        gap = self._gap_event() if self._unreported_drops else None
-        to_write = [gap, *batch] if gap is not None else batch
+        reported = self._unreported_drops
+        gap = self._gap_event(reported) if reported else None
         try:
             with anyio.fail_after(BATCH_TIMEOUT_S):
-                await self._log.database.run(
-                    lambda session: [self._log.append_in(session, event) for event in to_write],
+                to_write = [gap, *self._pending] if gap is not None else list(self._pending)
+                if self._maybe_committed:
+                    to_write = await self._without_those_already_written(to_write)
+                records = await self._batch_log.database.run(
+                    lambda session: [self._batch_log.append_in(session, e) for e in to_write],
                     write=True,
                 )
         except Exception as error:
             self._failing = True
-            self._note("audit writes are failing (%s); %d queued", type(error).__name__, len(self))
+            self._maybe_committed = True
+            self._note(
+                "batch", "audit writes are failing (%s); %d queued", _reason(error), len(self)
+            )
             return False
+        if records:
+            self._last_seq = records[-1].seq
         if gap is not None:
-            self._unreported_drops = 0
-        self._written_total += len(batch)
+            self._unreported_drops -= reported  # drops counted while this batch was in flight stay
+        self._written_total += len(self._pending)
+        full = len(self._pending) >= self._batch_size
         self._pending = []
         self._failing = False
-        return len(batch) >= self._batch_size
+        self._maybe_committed = False
+        return full
+
+    async def _without_those_already_written(self, events: list[AuditEvent]) -> list[AuditEvent]:
+        """After a failure whose outcome is unknown, drop the events that did reach the log.
+
+        A timeout, or a connection lost after COMMIT, leaves it open whether the batch was stored;
+        retrying blindly would store it twice. Each event carries a `record_id`, and the newest
+        records are searched for them."""
+        last_seq = self._last_seq
+
+        def read(session: Any) -> list[tuple[Any, ...]]:
+            rows: list[tuple[Any, ...]] = session.execute(
+                "SELECT payload FROM agent_core_audit WHERE seq > ? ORDER BY seq DESC LIMIT ?",
+                (last_seq, DEDUPE_WINDOW),
+            )
+            return rows
+
+        rows = await self._batch_log.database.run(read)
+        present = set()
+        for (payload,) in rows:
+            try:
+                present.add(json.loads(payload).get("record_id"))
+            except (ValueError, AttributeError):
+                continue
+        return [event for event in events if event.payload.get("record_id") not in present]
 
     def _take_batch(self) -> list[AuditEvent]:
         return [self._spool.popleft() for _ in range(min(self._batch_size, len(self._spool)))]
 
-    def _gap_event(self) -> AuditEvent:
+    def _gap_event(self, dropped: int) -> AuditEvent:
         """Say in the log itself that records were lost, before the ones that follow."""
-        return self._log.checked_event(
+        return self._batch_log.checked_event(
             AuditEvent(
                 action="audit.gap",
                 actor_id="gateway",
-                payload={"dropped": self._unreported_drops, "reason": "audit_queue_full"},
+                payload={
+                    "record_id": str(uuid4()),
+                    "dropped": dropped,
+                    "reason": "audit_queue_full",
+                },
             )
         )
 
     def __len__(self) -> int:
         return len(self._spool) + len(self._pending)
 
-    def _note(self, message: str, *args: object) -> None:
+    def _note(self, key: str, message: str, *args: object) -> None:
+        """Log at most once a minute per kind of message, so one failure cannot hide another."""
         now = time.monotonic()
-        if now - self._last_logged >= _LOG_EVERY_S:
-            self._last_logged = now
+        if now - self._noted.get(key, float("-inf")) >= _LOG_EVERY_S:
+            self._noted[key] = now
             logger.warning(message, *args)

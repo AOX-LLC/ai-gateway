@@ -1,5 +1,6 @@
 """The audit recorder: what a record holds, and what happens when the log cannot be written."""
 
+import json
 import logging
 from types import SimpleNamespace
 from typing import Any
@@ -20,7 +21,8 @@ from ai_gateway.policy.audit import (
 from ai_gateway.seams.events import GatewayEvent
 from tests.test_upstreams import eventually
 
-ARGUMENTS = {"text": "the customer's account number 4111-1111-1111-1111"}
+MARKER = "the customer's account number 4111-1111-1111-1111"
+ARGUMENTS = {"text": MARKER}
 CLIENT_ID = uuid4()
 REQUEST_ID = uuid4()
 
@@ -66,15 +68,52 @@ def _decision(**payload: Any) -> GatewayEvent:
     )
 
 
+class FakeSession:
+    def __init__(self, log: "FakeLog") -> None:
+        self.log = log
+        self.pending: list[AuditEvent] = []
+
+    def execute(self, sql: str, params: tuple[Any, ...]) -> list[tuple[Any, ...]]:
+        """The recorder's one read: the payloads of the newest records after a sequence number."""
+        after_seq, limit = params
+        rows = [
+            (json.dumps(event.payload),)
+            for seq, event in reversed(list(enumerate(self.log.committed, start=1)))
+            if seq > after_seq
+        ]
+        return rows[:limit]
+
+
+class FakeDatabase:
+    def __init__(self, log: "FakeLog") -> None:
+        self.log = log
+        self.busy = False
+
+    async def run(self, work: Any, *, write: bool = False) -> Any:
+        await self.log._maybe_fail()
+        session = FakeSession(self.log)
+        result = work(session)
+        if write:
+            self.log.committed.extend(session.pending)
+            self.log.batches.append(list(session.pending))
+            if self.log.mode == "fail_after_commit":
+                raise ConnectionError("the connection was lost after COMMIT")
+        return result
+
+
 class FakeLog:
     """Stands in for SQLAuditLog: keeps what it is given, and fails or stalls on request."""
 
     def __init__(self) -> None:
-        self.appended: list[AuditEvent] = []
+        self.committed: list[AuditEvent] = []
         self.batches: list[list[AuditEvent]] = []
         self.mode = "ok"
         self.refuse_events = False
-        self.database = SimpleNamespace(run=self._run)
+        self.database = FakeDatabase(self)
+
+    @property
+    def appended(self) -> list[AuditEvent]:
+        return self.committed
 
     def checked_event(self, event: AuditEvent) -> AuditEvent:
         if self.refuse_events:
@@ -83,16 +122,11 @@ class FakeLog:
 
     async def append(self, event: AuditEvent) -> None:
         await self._maybe_fail()
-        self.appended.append(event)
+        self.committed.append(event)
 
-    async def _run(self, work: Any, *, write: bool = False) -> Any:
-        await self._maybe_fail()
-        batch: list[AuditEvent] = []
-        work(SimpleNamespace(append_into=batch))
-        self.batches.append(batch)
-
-    def append_in(self, session: Any, event: AuditEvent) -> None:
-        session.append_into.append(event)
+    def append_in(self, session: FakeSession, event: AuditEvent) -> Any:
+        session.pending.append(event)
+        return SimpleNamespace(seq=len(self.committed) + len(session.pending))
 
     async def _maybe_fail(self) -> None:
         if self.mode == "fail":
@@ -128,7 +162,7 @@ def test_a_call_record_holds_ids_hashes_codes_and_integer_microseconds() -> None
 def test_a_record_has_no_place_for_arguments_or_results() -> None:
     event = call_event(_decision(arguments=ARGUMENTS, result="the result", text="4111"))
 
-    assert "4111" not in event.model_dump_json()
+    assert MARKER not in event.model_dump_json()
     assert "the result" not in event.model_dump_json()
 
 
@@ -149,7 +183,7 @@ def test_the_write_ahead_record_names_the_attempt_by_hash_only() -> None:
 
     assert event.action == "gateway.call_started"
     assert event.payload["args_sha256"] == _call().arguments_sha256
-    assert "4111" not in event.model_dump_json()
+    assert MARKER not in event.model_dump_json()
 
 
 # --- before a write -----------------------------------------------------------------------------
@@ -230,7 +264,9 @@ async def test_queued_records_are_written_in_batches_in_one_transaction_each() -
 
 
 @pytest.mark.anyio
-async def test_a_down_log_keeps_the_batch_and_reports_degraded_then_recovers() -> None:
+async def test_a_down_log_keeps_the_batch_and_reports_degraded_then_recovers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     log = FakeLog()
     log.mode = "fail"
     recorder = _recorder(log)
@@ -262,7 +298,7 @@ async def test_when_the_queue_overflows_the_log_says_how_many_records_were_lost(
     assert recorder.status().dropped_total == 3
     (batch,) = log.batches
     assert batch[0].action == "audit.gap"
-    assert batch[0].payload == {"dropped": 3, "reason": "audit_queue_full"}
+    assert (batch[0].payload["dropped"], batch[0].payload["reason"]) == (3, "audit_queue_full")
     assert [event.action for event in batch[1:]] == ["gateway.tool_call"] * 5
 
 
@@ -279,3 +315,138 @@ async def test_closing_flushes_what_is_left_and_gives_up_on_a_dead_log() -> None
     recorder.record(_decision())
     with anyio.fail_after(5):
         await recorder.close(timeout_s=0.2)
+
+
+# --- review findings -----------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_drops_counted_while_a_batch_is_in_flight_are_reported_by_a_later_gap() -> None:
+    log = FakeLog()
+    recorder = _recorder(log, spool_size=3, batch_size=100)
+    for _ in range(5):
+        recorder.record(_decision(request_id=str(uuid4())))  # 2 dropped
+    real_run = log.database.run
+
+    arrived = False
+
+    async def run_and_drop_meanwhile(work: Any, *, write: bool = False) -> Any:
+        nonlocal arrived
+        if not arrived:
+            arrived = True
+            for _ in range(3):  # new calls arrive while the first batch is being written
+                recorder.record(_decision(request_id=str(uuid4())))
+        return await real_run(work, write=write)
+
+    log.database.run = run_and_drop_meanwhile  # type: ignore[method-assign]
+    await recorder.close()
+    log.database.run = real_run  # type: ignore[method-assign]
+    await recorder.close()
+
+    gaps = [e for e in log.committed if e.action == "audit.gap"]
+    assert recorder.status().dropped_total == sum(g.payload["dropped"] for g in gaps)  # type: ignore[misc]
+
+
+@pytest.mark.anyio
+async def test_a_batch_that_may_have_committed_is_not_written_twice_on_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    log = FakeLog()
+    log.mode = "fail_after_commit"  # stored, then the connection dies before the answer
+    recorder = _recorder(log, batch_size=100)
+    for _ in range(3):
+        recorder.record(_decision(request_id=str(uuid4())))
+    monkeypatch.setattr(audit_module, "_BACKOFF_START_S", 0.01)
+
+    await recorder._write_next_batch()
+    assert recorder.status().status == "degraded"
+    log.mode = "ok"
+    await recorder._write_next_batch()
+
+    assert [e.action for e in log.committed] == ["gateway.tool_call"] * 3, "stored exactly once"
+    assert recorder.status().queue_depth == 0
+
+
+@pytest.mark.parametrize("name", ["foo bar", "_x", "x/y", "ünicode", "__nope", "a b" * 20])
+def test_a_call_to_a_tool_whose_name_cannot_be_a_subject_is_still_recorded(name: str) -> None:
+    event = GatewayEvent(
+        action="gateway.tool_call",
+        actor_id=f"client:{CLIENT_ID}",
+        subject_id=name,
+        payload={"request_id": str(REQUEST_ID), "outcome": "blocked", "blocked_by": "catalog"},
+    )
+
+    audit_event = call_event(event)
+
+    assert audit_event.subject_id is None
+    assert audit_event.payload["tool_name_valid"] is False
+    assert len(audit_event.payload["tool_name_sha256"]) == 64  # type: ignore[arg-type]
+    assert name not in audit_event.model_dump_json(), "the client's text is stored only as a hash"
+
+
+def test_a_drop_is_counted_only_for_a_record_that_is_actually_queued() -> None:
+    log = FakeLog()
+    recorder = _recorder(log, spool_size=1)
+    recorder.record(_decision())
+    log.refuse_events = True
+
+    recorder.record(_decision())  # refused by the log: rejected, not a drop
+
+    assert (recorder.status().dropped_total, recorder.status().rejected_total) == (0, 1)
+    assert recorder.status().queue_depth == 1
+
+
+@pytest.mark.anyio
+async def test_a_failed_write_ahead_record_makes_the_status_degraded_until_one_succeeds() -> None:
+    log = FakeLog()
+    recorder = _recorder(log)
+    log.mode = "fail"
+    with pytest.raises(AuditUnavailableError):
+        await recorder.before_write(_ctx(), _call())
+
+    assert recorder.status().status == "degraded"
+    assert recorder.status().write_ahead_failed_total == 1
+    log.mode = "ok"
+    await recorder.before_write(_ctx(), _call())
+    assert recorder.status().status == "ok"
+
+
+@pytest.mark.anyio
+async def test_a_write_is_refused_at_once_when_every_audit_worker_is_taken() -> None:
+    log = FakeLog()
+    log.database.busy = True
+
+    with anyio.fail_after(0.5), pytest.raises(AuditUnavailableError, match="busy"):
+        await _recorder(log).before_write(_ctx(), _call())
+
+    assert log.committed == []
+
+
+@pytest.mark.anyio
+async def test_the_log_says_why_when_agent_core_does_and_hides_a_drivers_text() -> None:
+    from aox_agent_core.errors import ConfigError
+
+    class RefusingLog(FakeLog):
+        async def append(self, event: AuditEvent) -> None:
+            raise ConfigError("the role can UPDATE the audit table")
+
+    with pytest.raises(AuditUnavailableError) as raised:
+        await _recorder(RefusingLog()).before_write(_ctx(), _call())
+
+    assert str(raised.value) == "ConfigError: the role can UPDATE the audit table"
+
+
+def test_each_kind_of_failure_is_logged_on_its_own_schedule(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    log = FakeLog()
+    log.refuse_events = True
+    recorder = _recorder(log)
+
+    with caplog.at_level(logging.WARNING, logger="ai_gateway.policy.audit"):
+        recorder.record(_decision())
+        recorder.record(_decision())  # same kind within a minute: not logged again
+        recorder._write_ahead_failed("busy")
+
+    assert caplog.text.count("could not be built") == 1
+    assert caplog.text.count("write-ahead audit record failed") == 1
