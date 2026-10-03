@@ -11,6 +11,8 @@ from uuid import UUID
 
 from mcp.types import CallToolResult, Tool
 
+from ai_gateway.text import printable
+
 Effect = Literal["read", "write"]
 """Whether a tool only reads or may change something. Decided by the gateway's reviewed
 policy, never by the upstream's own annotations."""
@@ -54,13 +56,12 @@ _MAX_ECHOED_NAME_LENGTH = 64
 
 
 def displayable_tool_name(requested_name: str) -> str:
-    """A client-supplied tool name, cut to a length that is safe to echo and record.
+    """A client-supplied tool name, cut to a length and cleaned of control characters and escape
+    sequences, so it is safe to echo, record and print.
 
     The SDK accepts names of any length; no real tool name is longer than 64 characters.
     """
-    if len(requested_name) <= _MAX_ECHOED_NAME_LENGTH:
-        return requested_name
-    return requested_name[: _MAX_ECHOED_NAME_LENGTH - 3] + "..."
+    return printable(requested_name, _MAX_ECHOED_NAME_LENGTH)
 
 
 def tool_unavailable_message(exposed_name: str) -> str:

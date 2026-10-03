@@ -15,7 +15,6 @@ dozen a second. A batch of 100 in one transaction takes about 150 ms, so batchin
 every call be audited.
 """
 
-import hashlib
 import json
 import logging
 import re
@@ -32,6 +31,7 @@ from aox_agent_core.errors import AgentCoreError
 
 from ai_gateway.pipeline.types import CallContext, ToolCall
 from ai_gateway.seams.events import GatewayEvent
+from ai_gateway.text import sha256_of_name
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +103,7 @@ def _subject(tool_name: str | None) -> tuple[str | None, dict[str, Any]]:
         return tool_name, {}
     return None, {
         "tool_name_valid": False,
-        "tool_name_sha256": hashlib.sha256(tool_name.encode()).hexdigest(),
+        "tool_name_sha256": sha256_of_name(tool_name),
     }
 
 
@@ -113,7 +113,18 @@ def call_event(event: GatewayEvent, record_id: str | None = None) -> AuditEvent:
     Built from named fields only. Durations are integer microseconds (the audit log refuses
     floats), and nothing of the arguments or the result is in it: only their hash."""
     payload = event.payload
-    subject_id, subject_extra = _subject(event.subject_id)
+    if payload.get("blocked_by") == "catalog":
+        # A tool no upstream offers: the name is the client's, so it is never the subject. Its
+        # hash (of the whole name, as sent) says which name it was.
+        subject_id, subject_extra = (
+            None,
+            {
+                "tool_name_valid": False,
+                "tool_name_sha256": payload.get("tool_name_sha256"),
+            },
+        )
+    else:
+        subject_id, subject_extra = _subject(event.subject_id)
     audit_payload: dict[str, Any] = {
         "record_id": record_id or str(uuid4()),
         "request_id": payload.get("request_id"),

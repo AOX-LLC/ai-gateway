@@ -38,6 +38,7 @@ from ai_gateway.pipeline.types import (
 from ai_gateway.policy.audit import AuditRecorder, AuditUnavailableError
 from ai_gateway.seams.events import DEFAULT_EMIT_TIMEOUT_S, EventSink, GatewayEvent
 from ai_gateway.telemetry import attributes
+from ai_gateway.text import sha256_of_name
 
 logger = logging.getLogger(__name__)
 _tracer = trace.get_tracer("ai_gateway")
@@ -249,7 +250,13 @@ class Pipeline:
             displayable_tool_name(exposed_name),
             decisions=[],
             started=time.perf_counter(),
-            details={"outcome": "blocked", "blocked_by": "catalog", "deny_code": deny.code.value},
+            details={
+                "outcome": "blocked",
+                "blocked_by": "catalog",
+                "deny_code": deny.code.value,
+                # The name is the client's choice: its hash is exact, the subject above is cleaned.
+                "tool_name_sha256": sha256_of_name(exposed_name),
+            },
         )
         return deny
 
