@@ -22,8 +22,8 @@ import anyio
 import psycopg
 from psycopg import AsyncConnection, errors, sql
 
-from ai_gateway.telemetry import SCHEMA
-from ai_gateway.telemetry.buffer import TABLES, Row, TelemetryBuffer
+from ai_gateway.telemetry import SCHEMA, TABLES
+from ai_gateway.telemetry.buffer import Row, TelemetryBuffer
 
 logger = logging.getLogger(__name__)
 

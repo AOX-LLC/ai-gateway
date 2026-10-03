@@ -15,7 +15,6 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Any
 
-TABLES = ("requests", "layer_verdicts", "auth_failures", "spans", "pipeline_configs")
 NOISY_TABLES = frozenset({"auth_failures"})
 """Tables whose rows an outsider can create at will; they are queued apart, and taken last."""
 DEFAULT_NOISY_CAPACITY = 1_000

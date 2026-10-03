@@ -16,8 +16,7 @@ from datetime import UTC, datetime, timedelta
 import anyio
 from psycopg import AsyncConnection, sql
 
-from ai_gateway.telemetry import SCHEMA
-from ai_gateway.telemetry.setup import TABLES
+from ai_gateway.telemetry import PURGEABLE_TABLES, SCHEMA
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +34,7 @@ def cutoffs(now: datetime, span_retention_days: int, retention_days: int) -> dic
     """The time before which each table's rows are deleted."""
     return {
         table: now - timedelta(days=span_retention_days if table == "spans" else retention_days)
-        for table in TABLES
+        for table in PURGEABLE_TABLES
     }
 
 

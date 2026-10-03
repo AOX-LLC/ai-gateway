@@ -13,7 +13,7 @@ from mcp.shared.exceptions import MCPError
 
 from ai_gateway.auth.tokens import IssuedToken
 from ai_gateway.registry.repo import AdminRegistry
-from ai_gateway.telemetry.setup import TELEMETRY_TABLES
+from ai_gateway.telemetry import TABLES
 from tests.helpers import RunningGateway, connect, run_gateway
 
 pytestmark = [pytest.mark.integration, pytest.mark.anyio]
@@ -127,7 +127,7 @@ async def test_requests_layers_spans_and_auth_failures_are_stored_without_a_trac
     assert {row[0] for row in trace_ids} <= stored_traces
 
     # Nothing of the argument, or of the result that echoes it, is in any column of any table.
-    for table in TELEMETRY_TABLES:
+    for table in TABLES:
         dump = await _rows(test_database_url, f"SELECT t::text FROM telemetry.{table} t")  # noqa: S608
         assert MARKER not in repr(dump), table
         assert "4111" not in repr(dump), table

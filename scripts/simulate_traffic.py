@@ -49,12 +49,7 @@ WRITE_SHARE = 0.10
 OPS_ONLY = ["tickets__change_status", "tickets__assign"]
 UNKNOWN_TOOLS = ["crm__delete_account", "tickets__export_all", "handbook__upload_document"]
 AUTH_CASES = ["missing", "malformed", "unknown_token", "wrong_secret"]
-AUTH_REASON = {
-    "missing": "missing",
-    "malformed": "malformed",
-    "unknown_token": "unknown_token",
-    "wrong_secret": "wrong_secret",
-}
+# Each case is stored under a reason of the same name (AuthFailureReason in the gateway).
 
 _SEARCHES = [
     "how many vacation days do I get",
@@ -90,7 +85,7 @@ class Step:
     def expected(self) -> tuple[str, ...]:
         """The telemetry row this step should produce, as a comparable key."""
         if self.kind == "auth_failure":
-            return ("auth_failure", AUTH_REASON[self.auth_case or ""])
+            return ("auth_failure", self.auth_case or "")
         blocked_by = (
             "catalog"
             if self.tool in UNKNOWN_TOOLS

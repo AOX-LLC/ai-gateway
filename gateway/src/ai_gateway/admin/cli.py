@@ -194,11 +194,11 @@ async def _migrate(database_url: str, _: argparse.Namespace) -> None:
 
 
 async def _telemetry_setup(database_url: str, _: argparse.Namespace) -> None:
-    variables = {
-        "TELEMETRY_WRITER_DB_PASSWORD": "",
-        "TELEMETRY_READER_DB_PASSWORD": "",
-        "TELEMETRY_PURGER_DB_PASSWORD": "",
-    }
+    variables = (
+        "TELEMETRY_WRITER_DB_PASSWORD",
+        "TELEMETRY_READER_DB_PASSWORD",
+        "TELEMETRY_PURGER_DB_PASSWORD",
+    )
     missing = [name for name in variables if not os.environ.get(name)]
     if missing:
         raise AdminError(f"{', '.join(missing)} is not set (python3 scripts/init_env.py adds it)")

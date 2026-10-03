@@ -6,15 +6,18 @@ was widened by hand is narrowed again.
 """
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from psycopg import AsyncConnection, sql
 
 from ai_gateway.telemetry import (
     MIGRATIONS_PACKAGE,
+    PURGEABLE_TABLES,
     PURGER_ROLE,
     READER_ROLE,
     SCHEMA,
+    TABLES,
     WRITER_ROLE,
 )
 from mcp_common.migrate import apply_migrations
@@ -27,10 +30,6 @@ from mcp_common.roles import (
 
 logger = logging.getLogger(__name__)
 
-TABLES = ["requests", "layer_verdicts", "auth_failures", "spans"]
-"""The tables whose old rows the purge deletes."""
-APPEND_ONLY_TABLES = [*TABLES, "pipeline_configs"]
-TELEMETRY_TABLES = APPEND_ONLY_TABLES
 DASHBOARD_VIEWS = [
     "dash_requests",
     "dash_layer_verdicts",
@@ -50,19 +49,16 @@ class TelemetryPasswords:
 
 async def setup_telemetry(owner_url: str, passwords: TelemetryPasswords) -> None:
     """Create the roles and the schema, migrate, and grant, in that order."""
-    for name, password in (
+    role_passwords = (
         (WRITER_ROLE, passwords.writer),
         (READER_ROLE, passwords.reader),
         (PURGER_ROLE, passwords.purger),
-    ):
+    )
+    for role, password in role_passwords:
         if not password:
-            raise ValueError(f"the password of {name} is empty")
+            raise ValueError(f"the password of {role} is empty")
     async with await AsyncConnection.connect(owner_url, autocommit=True) as connection:
-        for role, password in (
-            (WRITER_ROLE, passwords.writer),
-            (READER_ROLE, passwords.reader),
-            (PURGER_ROLE, passwords.purger),
-        ):
+        for role, password in role_passwords:
             await ensure_role(connection, password, role)
         await ensure_schema(connection, SCHEMA)
     applied = await apply_migrations(owner_url, MIGRATIONS_PACKAGE, SCHEMA)
@@ -88,13 +84,11 @@ async def grant_telemetry_access(connection: AsyncConnection) -> None:
             sql.SQL("GRANT USAGE ON SCHEMA {} TO {}").format(schema, sql.Identifier(role))
         )
 
-    def tables(names: list[str]) -> sql.Composable:
+    def tables(names: Sequence[str]) -> sql.Composable:
         return sql.SQL(", ").join(sql.Identifier(SCHEMA, name) for name in names)
 
     await connection.execute(
-        sql.SQL("GRANT INSERT ON {} TO {}").format(
-            tables(APPEND_ONLY_TABLES), sql.Identifier(WRITER_ROLE)
-        )
+        sql.SQL("GRANT INSERT ON {} TO {}").format(tables(TABLES), sql.Identifier(WRITER_ROLE))
     )
     await connection.execute(
         sql.SQL("GRANT SELECT ON {} TO {}").format(
@@ -103,7 +97,7 @@ async def grant_telemetry_access(connection: AsyncConnection) -> None:
     )
     await connection.execute(
         sql.SQL("GRANT DELETE, SELECT (ts) ON {} TO {}").format(
-            tables(TABLES), sql.Identifier(PURGER_ROLE)
+            tables(PURGEABLE_TABLES), sql.Identifier(PURGER_ROLE)
         )
     )
     reader = sql.Identifier(READER_ROLE)
