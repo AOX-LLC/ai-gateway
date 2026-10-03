@@ -255,3 +255,23 @@ async def test_every_demo_tool_has_a_reviewed_policy_and_the_new_ones_only_read(
     for name, effect in effects.items():
         if name.startswith(("crm__", "handbook__")):
             assert effect == "read", name
+
+
+async def test_seed_test_classifies_the_echo_tools_as_reads_so_none_needs_an_approver_role(
+    monkeypatch: pytest.MonkeyPatch,
+    test_database_url: str,
+    clean_database: None,
+) -> None:
+    """Unclassified they would be writes (the fail-closed default), and with the approval layer
+    enforcing, a write with no approver role is refused: the acceptance check would never pass."""
+    await _admin(monkeypatch, test_database_url, "seed-test")
+
+    async with await psycopg.AsyncConnection.connect(test_database_url) as connection:
+        cursor = await connection.execute(
+            "SELECT namespace, tool, effect FROM tool_policies WHERE namespace = 'echo'"
+        )
+        assert sorted(await cursor.fetchall()) == [
+            ("echo", "say", "read"),
+            ("echo", "shout", "read"),
+            ("echo", "wait", "read"),
+        ]

@@ -441,6 +441,13 @@ async def _seed_test(database_url: str, args: argparse.Namespace) -> None:
         await registry.upsert_upstream(
             TEST_ECHO_NAMESPACE, args.echo_url, connect_timeout_ms=5000, call_timeout_ms=10000
         )
+        # The echo tools only transform or wait on their input, so they are reads. Unclassified they
+        # would be writes (the fail-closed default), and with the approval layer enforcing, a write
+        # nobody has a role for is refused.
+        await registry.replace_tool_policies(
+            TEST_ECHO_NAMESPACE,
+            [(tool, "read", "test data: no side effects") for tool in ("say", "shout", "wait")],
+        )
         for name, (description, scopes) in TEST_CLIENTS.items():
             client_id = await registry.upsert_client(name, description)
             await registry.set_scopes(client_id, scopes)

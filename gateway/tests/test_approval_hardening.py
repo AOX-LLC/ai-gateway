@@ -3,6 +3,7 @@
 import argparse
 import ast
 import importlib.util
+import re
 import sys
 import tomllib
 from pathlib import Path
@@ -49,7 +50,7 @@ def test_the_gateway_never_names_delegates_so_only_the_asking_client_can_use_an_
     assert _keyword_uses("delegates") == []
 
 
-def test_every_write_tool_has_an_approver_role_and_only_write_tools_have_one() -> None:
+def test_every_write_tool_has_an_approver_role_and_only_write_tools_do() -> None:
     policies = tomllib.loads((ROOT / "config" / "tool_policies.toml").read_text())
     writes = {
         f"{namespace}__{tool}"
@@ -60,8 +61,7 @@ def test_every_write_tool_has_an_approver_role_and_only_write_tools_have_one() -
     roles = load_roles_by_action(ROOT / "config" / "approval_roles.toml")
 
     assert writes
-    assert writes <= set(roles), "every write tool has a role"
-    assert set(roles) - writes == {"echo__shout"}, "and the only extra is the test upstream's write"
+    assert set(roles) == writes
     assert set(roles.values()) == {"approver"}
 
 
@@ -198,7 +198,11 @@ def test_the_gateway_service_holds_no_approver_credential() -> None:
 
 
 def test_the_images_do_not_contain_the_scripts() -> None:
-    for dockerfile in (ROOT / "gateway" / "Dockerfile", ROOT / "servers" / "Dockerfile"):
+    for dockerfile in (
+        ROOT / "gateway" / "Dockerfile",
+        ROOT / "servers" / "Dockerfile",
+        ROOT / "servers" / "echo" / "Dockerfile",
+    ):
         copies = [
             line for line in dockerfile.read_text().splitlines() if line.strip().startswith("COPY")
         ]
@@ -213,28 +217,71 @@ def test_nothing_in_the_gateway_imports_the_test_approver() -> None:
         assert "auto_approver" not in path.read_text(), path
 
 
+def _paths_naming(value: Any, needle: str, path: str = "") -> list[str]:
+    """Every key path in parsed YAML whose key or string value contains `needle`."""
+    found = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            here = f"{path}.{key}" if path else str(key)
+            if needle in str(key):
+                found.append(here)
+            found += _paths_naming(item, needle, here)
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            found += _paths_naming(item, needle, f"{path}[{index}]")
+    elif needle in str(value):
+        found.append(path)
+    return found
+
+
 def test_the_default_environment_and_the_workflow_do_not_switch_it_on_globally() -> None:
+    """The switch appears in one place in everything under .github: the `env` of the one named step
+    that runs the fictional Harborline stack with the test approver. A job-level env, a container's,
+    a `run:` body, a `with:` input, another workflow, or a second step would all add a path."""
     assert "LAB_AUTO_APPROVE" not in (ROOT / ".env.example").read_text()
-    workflow = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())
-    # Not at workflow or job level, and in the `env` of exactly the two named steps that run the
-    # fictional test stack with the test approver: nowhere in a script body either.
-    assert "LAB_AUTO_APPROVE" not in str(workflow.get("env", {}))
-    holders = []
-    for name, job in workflow["jobs"].items():
-        assert "LAB_AUTO_APPROVE" not in str(job.get("env", {})), name
-        for step in job["steps"]:
-            assert "LAB_AUTO_APPROVE" not in str(step.get("run", "")).replace(
-                "needs --approve-as and LAB_AUTO_APPROVE=yes", ""
-            ), step.get("name")
-            if "LAB_AUTO_APPROVE" in str(step.get("env", {})):
-                holders.append((name, step["name"], step["env"]["LAB_AUTO_APPROVE"]))
-    assert holders == [
-        ("e2e", "Acceptance check through the gateway", "yes"),
-        (
-            "e2e",
-            "Harborline scenario through the gateway and directly, then simulated traffic",
-            "yes",
-        ),
+    paths = []
+    for workflow_file in sorted((ROOT / ".github").rglob("*.y*ml")):
+        workflow = yaml.safe_load(workflow_file.read_text())
+        paths += [
+            f"{workflow_file.name}:{path}" for path in _paths_naming(workflow, "LAB_AUTO_APPROVE")
+        ]
+    steps = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())["jobs"]["e2e"][
+        "steps"
+    ]
+    named = [
+        index
+        for index, step in enumerate(steps)
+        if step.get("name")
+        == "Harborline scenario through the gateway and directly, then simulated traffic"
+    ]
+    assert len(named) == 1
+    assert paths == [f"ci.yml:jobs.e2e.steps[{named[0]}].env.LAB_AUTO_APPROVE"]
+    assert steps[named[0]]["env"]["LAB_AUTO_APPROVE"] == "yes"
+
+
+def test_no_script_sets_the_switch_and_nothing_writes_the_workflow_environment() -> None:
+    assignment = re.compile(
+        r"^\s*(export\s+(\w+\s+)*|env\s+)?LAB_AUTO_APPROVE=|export\s[^#]*LAB_AUTO_APPROVE"
+        r"|environ\[[\"']LAB_AUTO_APPROVE[\"']\]\s*="
+    )
+    for path in [*(ROOT / "scripts").rglob("*"), *(ROOT / ".github").rglob("*")]:
+        if not path.is_file() or path.suffix in {".pyc"}:
+            continue
+        text = path.read_text()
+        assert "GITHUB_ENV" not in text, path
+        for line in text.splitlines():
+            code = line.split("#", 1)[0]
+            if path.name == "auto_approver.py":
+                continue  # it reads the switch and says so in its messages; it never sets it
+            assert not assignment.search(code), (path, line)
+
+
+def test_direct_check_mounts_only_the_test_client_and_its_scenarios() -> None:
+    volumes = [str(v) for v in _compose()["services"]["direct-check"]["volumes"]]
+
+    assert volumes == [
+        "./scripts/test_client.py:/scripts/test_client.py:ro",
+        "./scripts/scenarios:/scripts/scenarios:ro",
     ]
 
 

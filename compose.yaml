@@ -345,7 +345,9 @@ services:
       CRM_SERVICE_TOKEN: ${CRM_SERVICE_TOKEN:?set it in .env}
       HANDBOOK_SERVICE_TOKEN: ${HANDBOOK_SERVICE_TOKEN:?set it in .env}
     volumes:
-      - ./scripts:/scripts:ro
+      # Only the client and its scenarios: not the rest of scripts/ (the test approver among them).
+      - ./scripts/test_client.py:/scripts/test_client.py:ro
+      - ./scripts/scenarios:/scripts/scenarios:ro
     depends_on:
       ticketing:
         condition: service_healthy
