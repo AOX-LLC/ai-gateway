@@ -25,7 +25,14 @@ from ai_gateway.pipeline.runner import (
     UpstreamOutcome,
     UpstreamStatus,
 )
-from ai_gateway.pipeline.types import CallContext, ClientIdentity, Deny, DenyCode, ToolCall
+from ai_gateway.pipeline.types import (
+    CallContext,
+    ClientIdentity,
+    Deny,
+    DenyCode,
+    Disposition,
+    ToolCall,
+)
 from ai_gateway.proxy.catalog import Catalog
 from ai_gateway.proxy.sessions import UpstreamCallError, UpstreamSessionPool
 
@@ -120,6 +127,8 @@ class GatewayServer:
 
         outcome = await self._pipeline.call_tool(call_ctx, call, forward)
         if isinstance(outcome, Blocked):
+            if outcome.deny.disposition is Disposition.PENDING:
+                return _pending_result(outcome.deny)
             raise _deny_error(outcome.deny, call_ctx.request_id)
         return outcome.result
 
@@ -143,6 +152,20 @@ def _call_context(ctx: ServerRequestContext[Any, Any]) -> CallContext:
         ),
         session_id=session_id,
         protocol_version=ctx.protocol_version,
+    )
+
+
+def _pending_result(deny: Deny) -> CallToolResult:
+    """The answer to a write that is waiting for a person: an error result the client must not
+    mistake for success, with the approval's id to retry against."""
+    return CallToolResult(
+        content=[TextContent(type="text", text=deny.public_message)],
+        structured_content={
+            "status": "approval_pending",
+            "approval_id": deny.approval_id,
+            "retry": "the same tool with the same arguments",
+        },
+        is_error=True,
     )
 
 

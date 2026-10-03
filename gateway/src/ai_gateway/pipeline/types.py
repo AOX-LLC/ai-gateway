@@ -34,11 +34,26 @@ class DenyCode(StrEnum):
     TOOL_UNAVAILABLE = "tool_unavailable"
     LAYER_ERROR = "layer_error"
     AUDIT_UNAVAILABLE = "audit_unavailable"
+    APPROVAL_PENDING = "approval_pending"
+    APPROVAL_REJECTED = "approval_rejected"
+    APPROVAL_EXPIRED = "approval_expired"
+    APPROVAL_UNAVAILABLE = "approval_unavailable"
+
+
+class Disposition(StrEnum):
+    """What the client is told when a layer says no."""
+
+    BLOCK = "block"
+    """The call is refused: an error."""
+    PENDING = "pending"
+    """The call is not refused for good: a person has been asked, and the client retries the same
+    call later. Nothing was forwarded, and it is recorded as a block."""
 
 
 @dataclass(frozen=True)
 class Allow:
-    pass
+    approval_id: str | None = None
+    """The approval this call used, for the record."""
 
 
 @dataclass(frozen=True)
@@ -46,6 +61,9 @@ class Deny:
     code: DenyCode
     public_message: str
     """Safe to show the client. Never names the layer or echoes tool arguments."""
+    disposition: Disposition = Disposition.BLOCK
+    approval_id: str | None = None
+    """The approval request behind this verdict, when there is one: it is the client's receipt."""
 
 
 Verdict = Allow | Deny
