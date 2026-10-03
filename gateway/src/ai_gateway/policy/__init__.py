@@ -22,6 +22,8 @@ ARGUMENTS_TABLE = "approval_arguments"
 """The full arguments of a write that awaits approval, for the approver only: the one place the
 gateway keeps arguments, and the one exception to "never store arguments"."""
 APPROVERS_TABLE = "approvers"
+DASHBOARD_VIEW = "dash_approvals"
+"""The approval requests as the dashboard may see them: no arguments, no reasons."""
 ARGUMENTS_PURGE_FUNCTION = "purge_approval_arguments"
 ARGUMENTS_RETENTION_DAYS = 7
 

@@ -24,11 +24,13 @@ from ai_gateway.policy import (
     ARGUMENTS_TABLE,
     AUDIT_TABLE,
     AUDITOR_ROLE,
+    DASHBOARD_VIEW,
     GATEWAY_ROLE,
     ROLES,
     SCHEMA,
     policy_url,
 )
+from ai_gateway.telemetry import READER_ROLE
 from mcp_common.roles import (
     advisory_lock,
     ensure_role,
@@ -241,6 +243,25 @@ END $$
 """  # noqa: S608 - fixed names and no input: a trigger body, not a query
 
 
+_DASHBOARD_VIEW = f"""
+CREATE OR REPLACE VIEW {DASHBOARD_VIEW} AS
+SELECT id, action, requested_by AS client_actor, status, decision, resolved_by,
+       created_at::timestamptz AS created_at, expires_at::timestamptz AS expires_at,
+       resolved_at::timestamptz AS resolved_at, consumed_at::timestamptz AS consumed_at
+FROM {APPROVALS_TABLE}
+"""  # noqa: S608 - fixed names and no input
+
+_DASHBOARD_GRANT = f"""
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{READER_ROLE}') THEN
+        REVOKE ALL ON ALL TABLES IN SCHEMA {SCHEMA} FROM {READER_ROLE};
+        GRANT USAGE ON SCHEMA {SCHEMA} TO {READER_ROLE};
+        GRANT SELECT ON {SCHEMA}.{DASHBOARD_VIEW} TO {READER_ROLE};
+    END IF;
+END $$
+"""  # noqa: S608 - fixed names and no input
+
+
 async def _ensure_approval_tables(connection: AsyncConnection) -> None:
     """The tables this gateway adds to agent-core's: arguments for the approver, and approvers."""
     async with connection.transaction():
@@ -249,6 +270,10 @@ async def _ensure_approval_tables(connection: AsyncConnection) -> None:
         )
         await connection.execute(_APPROVAL_TABLES.encode())
         await connection.execute(_PURGE_FUNCTION.encode())
+        await connection.execute(_DASHBOARD_VIEW.encode())
+        # The dashboard's reader sees the view and nothing else in this schema. If its role does
+        # not exist yet (telemetry-setup runs first in Compose), there is nothing to grant.
+        await connection.execute(_DASHBOARD_GRANT.encode())
 
 
 async def grant_policy_access(connection: AsyncConnection) -> None:

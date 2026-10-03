@@ -112,6 +112,9 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      # After the telemetry roles exist: the dashboard's reader is granted the approvals view.
+      telemetry-setup:
+        condition: service_completed_successfully
     restart: "no"
 
   # Deletes telemetry past its retention (spans 7 days, everything else 30 by default), hourly,

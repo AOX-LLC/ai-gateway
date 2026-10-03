@@ -324,3 +324,28 @@ async def test_the_purge_removes_arguments_older_than_a_week_and_only_the_gatewa
     async with await psycopg.AsyncConnection.connect(policy_url(policy_approver_url)) as connection:
         cursor = await connection.execute("SELECT request_id FROM approval_arguments")
         assert await cursor.fetchall() == [(fresh.approval_id,)]
+
+
+async def test_the_dashboard_reader_sees_requests_without_arguments_and_nothing_else_in_policy(
+    telemetry: None, policy: None, policy_gateway_url: str, reader_url: str
+) -> None:
+    """`telemetry` first: the view's grant goes to the reader role if it exists at setup."""
+    pending = await _gate(policy_gateway_url).decide(_context(), _call())
+
+    async with await psycopg.AsyncConnection.connect(policy_url(reader_url)) as connection:
+        cursor = await connection.execute("SELECT * FROM dash_approvals")
+        assert cursor.description is not None
+        columns = [column.name for column in cursor.description]
+        rows = await cursor.fetchall()
+        assert [row[0] for row in rows] == [pending.approval_id]
+        assert {"id", "action", "status", "client_actor", "created_at"} <= set(columns)
+        assert not {"summary", "payload_sha256", "reason", "run_context"} & set(columns)
+        for table in (
+            "agent_core_approvals",
+            "approval_arguments",
+            "agent_core_audit",
+            "approvers",
+        ):
+            await connection.rollback()
+            with pytest.raises(errors.InsufficientPrivilege):
+                await connection.execute(f"SELECT * FROM {table}".encode())  # noqa: S608 - fixed names
