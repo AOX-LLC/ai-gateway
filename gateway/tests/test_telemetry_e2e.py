@@ -137,7 +137,7 @@ async def test_requests_layers_spans_and_auth_failures_are_stored_without_a_trac
         cursor = await connection.execute("SELECT count(*) FROM telemetry.dash_requests")
         assert await cursor.fetchone() == (4,)
         cursor = await connection.execute("SELECT layer FROM telemetry.dash_pipeline_layers")
-        assert await cursor.fetchall() == [("scope",)]
+        assert await cursor.fetchall() == [("scope",), ("approval",)]
 
 
 async def test_health_reports_the_telemetry_writer(

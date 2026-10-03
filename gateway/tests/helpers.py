@@ -114,6 +114,7 @@ def run_gateway(
     telemetry_database_url: str | None = None,
     policy_database_url: str | None = None,
     unaudited_writes: bool | None = None,
+    approvals: dict[str, float] | None = None,
 ) -> Iterator[RunningGateway]:
     """The whole gateway on a free port, with only the scope layer, recording its events (and,
     given a telemetry database, storing them there too).
@@ -124,8 +125,13 @@ def run_gateway(
     if unaudited_writes is None:
         unaudited_writes = policy_database_url is None
     unaudited = "true" if unaudited_writes else "false"
+    # A test that is not about approvals switches the layer off, which a floor layer allows only
+    # with the override flag; one that is gets the shipped behaviour and a short hold.
+    approval_mode = "enforce" if approvals is not None else "off"
     pipeline_file.write_text(
-        f'[layers]\nscope = "enforce"\n\n[safety]\nallow_unaudited_writes = {unaudited}\n'
+        f'[layers]\nscope = "enforce"\napproval = "{approval_mode}"\n\n[safety]\n'
+        f"allow_unaudited_writes = {unaudited}\n"
+        f"allow_floor_override = {str(approvals is None).lower()}\n"
     )
     events = MemoryEventSink()
     settings = GatewaySettings(
@@ -136,6 +142,7 @@ def run_gateway(
         ),
         policy_database_url=SecretStr(policy_database_url) if policy_database_url else None,
         telemetry_flush_interval_s=0.05,
+        **{f"approval_{key}": value for key, value in (approvals or {}).items()},  # type: ignore[arg-type]
     )
     with serve_in_thread(create_app(settings, events)) as base_url:
         yield RunningGateway(f"{base_url}/mcp", events)

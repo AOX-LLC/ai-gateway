@@ -122,7 +122,7 @@ async def test_every_call_is_audited_a_write_before_it_runs_and_the_chain_verifi
     # Hashes and codes, never the argument, never the result that echoes it.
     assert MARKER not in json.dumps(records)
     assert MARKER.upper() not in json.dumps(records)
-    assert "4111" not in json.dumps(records)
+    assert "4111-1111" not in json.dumps(records)  # not "4111": a hash or UUID may hold it
 
     auditor = SQLAuditLog(open_database(SecretStr(policy_url(policy_auditor_url))))
     assert (await auditor.verify()).seq == len(await _records(policy_gateway_url))

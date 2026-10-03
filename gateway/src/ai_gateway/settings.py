@@ -25,6 +25,11 @@ class GatewaySettings(ServiceSettings):
     telemetry_database_url: SecretStr | None = None
     """Connection string for the telemetry_writer role. Without it nothing is stored: events go
     to the log only and no span is recorded. Secret because it carries a password."""
+    approval_hold_s: Annotated[float, Field(ge=0, le=120)] = 45.0
+    """How long a write waits for a person's decision before the client is told to retry."""
+    approval_poll_s: Annotated[float, Field(gt=0, le=10)] = 1.0
+    approval_ttl_s: Annotated[int, Field(ge=1, le=7 * 24 * 3600)] = 30 * 60
+    """How long a request stays open. After it, the call has to be asked for again."""
     policy_database_url: SecretStr | None = None
     """Connection string for the policy_gateway role: the audit log (and, from Phase 3b, the
     approval queue). Without it the audit log is disabled and writes are refused, unless the

@@ -1,9 +1,11 @@
 """Build the audit recorder for a running gateway."""
 
+from aox_agent_core.approvals import SQLApprovalQueue
 from aox_agent_core.audit import SQLAuditLog
 from pydantic import SecretStr
 
 from ai_gateway.policy import policy_url
+from ai_gateway.policy.approvals import PostgresApprovalGate
 from ai_gateway.policy.audit import AuditRecorder, DisabledAuditRecorder, PostgresAuditRecorder
 from ai_gateway.policy.database import BoundedPostgresDatabase
 from ai_gateway.settings import GatewaySettings
@@ -53,3 +55,36 @@ def build_audit(settings: GatewaySettings) -> AuditRecorder:
         )
     )
     return PostgresAuditRecorder(write_ahead, batch_log=batches)
+
+
+_APPROVAL_LOCK_MS, _APPROVAL_STATEMENT_MS, _APPROVAL_TRANSACTION_MS = 3000, 5000, 8000
+_APPROVAL_WORKERS = 4
+
+
+def build_approvals(
+    settings: GatewaySettings,
+) -> tuple[PostgresApprovalGate, BoundedPostgresDatabase] | None:
+    """The approval gate on the policy database, and the database it uses, or None when no
+    policy database is configured (the approval layer then refuses writes)."""
+    if settings.policy_database_url is None:
+        return None
+    database = BoundedPostgresDatabase(
+        SecretStr(
+            policy_url(
+                settings.policy_database_url.get_secret_value(),
+                lock_timeout_ms=_APPROVAL_LOCK_MS,
+                statement_timeout_ms=_APPROVAL_STATEMENT_MS,
+                transaction_timeout_ms=_APPROVAL_TRANSACTION_MS,
+                connect_timeout_s=_CONNECT_TIMEOUT_S,
+            )
+        ),
+        concurrency=_APPROVAL_WORKERS,
+    )
+    queue = SQLApprovalQueue(database, audit_log=SQLAuditLog(database))
+    gate = PostgresApprovalGate(
+        queue,
+        ttl_s=settings.approval_ttl_s,
+        hold_s=settings.approval_hold_s,
+        poll_s=settings.approval_poll_s,
+    )
+    return gate, database
