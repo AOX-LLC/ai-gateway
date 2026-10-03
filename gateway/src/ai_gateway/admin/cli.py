@@ -272,8 +272,12 @@ def _audit_log(database_url: str) -> SQLAuditLog:
 
 
 async def _audit_anchor(database_url: str, args: argparse.Namespace) -> None:
-    head = await _audit_log(database_url).head()
-    anchor = append_anchor(args.file, head)
+    log = _audit_log(database_url)
+    # Never anchor a log that fails what was anchored before: the anchor would make a rewrite look
+    # like the truth. (With no anchor file yet, only the chain is checked.)
+    existing = read_anchors(args.file) if args.file.exists() else []
+    await verify_with_anchors(log, existing)
+    anchor = append_anchor(args.file, await log.head())
     print(f"anchored record {anchor.seq} ({anchor.record_hash[:12]}...) in {args.file}")
 
 

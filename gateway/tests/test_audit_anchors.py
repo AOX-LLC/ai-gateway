@@ -11,6 +11,7 @@ import psycopg
 import pytest
 from aox_agent_core.audit import (
     AuditEvent,
+    AuditHead,
     SQLAuditLog,
     UnsealedAuditRecord,
     compute_record_hash,
@@ -95,8 +96,6 @@ async def _rewrite_and_rebuild_the_chain(owner_url: str, from_seq: int) -> None:
 
 @pytest.mark.anyio
 async def test_an_anchor_is_appended_to_a_private_file_and_read_back(tmp_path: Path) -> None:
-    from aox_agent_core.audit import AuditHead
-
     path = tmp_path / "anchors.jsonl"
     first = append_anchor(path, AuditHead(seq=3, record_hash="a" * 64))
     second = append_anchor(path, AuditHead(seq=9, record_hash="b" * 64))
@@ -107,8 +106,6 @@ async def test_an_anchor_is_appended_to_a_private_file_and_read_back(tmp_path: P
 
 
 def test_an_anchor_file_that_is_a_symlink_is_refused(tmp_path: Path) -> None:
-    from aox_agent_core.audit import AuditHead
-
     target = tmp_path / "elsewhere"
     target.write_text("")
     link = tmp_path / "anchors.jsonl"
@@ -188,6 +185,57 @@ async def test_a_log_cut_short_fails_the_anchor_that_remembers_more(
     assert (await auditor.verify()).seq == 4, "a shorter chain is still a valid chain"
     with pytest.raises(AuditIntegrityError):
         await verify_with_anchors(auditor, read_anchors(anchors_file))
+
+
+async def test_two_anchors_that_name_the_same_record_differently_fail_verification(
+    policy: None, policy_gateway_url: str, policy_auditor_url: str, tmp_path: Path
+) -> None:
+    """A later anchor must not hide an earlier one: re-anchoring after a rewrite would otherwise
+    replace the evidence of the rewrite with the rewritten log's own hash."""
+    anchors_file = tmp_path / "anchors.jsonl"
+    auditor = _log(policy_auditor_url)
+    await _append(policy_gateway_url, 4)
+    head = await auditor.head()
+    append_anchor(anchors_file, head)
+    append_anchor(anchors_file, AuditHead(seq=head.seq, record_hash="f" * 64))
+
+    with pytest.raises(AuditIntegrityError, match="disagree"):
+        await verify_with_anchors(auditor, read_anchors(anchors_file))
+
+
+async def test_a_log_that_fails_its_anchors_is_not_anchored_again(
+    policy: None,
+    policy_gateway_url: str,
+    policy_auditor_url: str,
+    test_database_url: str,
+    tmp_path: Path,
+) -> None:
+    anchors_file = tmp_path / "anchors.jsonl"
+    await _append(policy_gateway_url, 6)
+    await _audit_anchor(policy_auditor_url, argparse.Namespace(file=anchors_file))
+    await _rewrite_and_rebuild_the_chain(test_database_url, from_seq=3)
+    before = anchors_file.read_text()
+
+    with pytest.raises(AuditIntegrityError):
+        await _audit_anchor(policy_auditor_url, argparse.Namespace(file=anchors_file))
+
+    assert anchors_file.read_text() == before, "the rewritten head must not become an anchor"
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        '{"seq": -1, "record_hash": "' + "a" * 64 + '", "at": "now"}',
+        '{"seq": 1, "record_hash": "not a hash", "at": "now"}',
+        '{"seq": "1", "record_hash": "' + "a" * 64 + '", "at": "now"}',
+    ],
+)
+def test_an_anchor_with_an_impossible_value_is_refused(tmp_path: Path, line: str) -> None:
+    path = tmp_path / "anchors.jsonl"
+    path.write_text(line + "\n")
+
+    with pytest.raises(AnchorFileError, match="line 1"):
+        read_anchors(path)
 
 
 async def test_an_empty_log_and_no_anchors_verify(policy: None, policy_auditor_url: str) -> None:

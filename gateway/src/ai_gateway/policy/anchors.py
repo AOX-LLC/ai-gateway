@@ -11,12 +11,16 @@ anchor on a schedule (cron is enough). An anchor only protects what came before 
 
 import json
 import os
+import re
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 from aox_agent_core.audit import AuditHead, SQLAuditLog
 from aox_agent_core.errors import AuditIntegrityError
+
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
 class AnchorFileError(ValueError):
@@ -54,7 +58,17 @@ def read_anchors(path: Path) -> list[Anchor]:
     for number, line in enumerate(lines, start=1):
         try:
             raw = json.loads(line)
-            anchors.append(Anchor(int(raw["seq"]), str(raw["record_hash"]), str(raw["at"])))
+            seq, record_hash, taken_at = raw["seq"], raw["record_hash"], raw["at"]
+            if (
+                not isinstance(seq, int)
+                or isinstance(seq, bool)
+                or seq < 0
+                or not isinstance(record_hash, str)
+                or _SHA256.match(record_hash) is None
+                or not isinstance(taken_at, str)
+            ):
+                raise ValueError("not an anchor")
+            anchors.append(Anchor(seq, record_hash, taken_at))
         except (ValueError, KeyError, TypeError) as error:
             raise AnchorFileError(f"{path} line {number} is not an anchor") from error
     return anchors
@@ -67,15 +81,22 @@ async def verify_with_anchors(log: SQLAuditLog, anchors: list[Anchor]) -> AuditH
     anchor says, or if the record at an anchor's sequence number is not the one that was
     anchored."""
     taken = [anchor for anchor in anchors if anchor.seq > 0]
+    wanted: dict[int, list[Anchor]] = defaultdict(list)
+    for anchor in taken:
+        wanted[anchor.seq].append(anchor)
+    for seq, same_record in wanted.items():
+        # Every anchor is checked below; two that name one record differently are already proof
+        # that the log changed between them, whatever it holds now.
+        if len({anchor.record_hash for anchor in same_record}) > 1:
+            raise AuditIntegrityError(f"anchors disagree about record {seq}: the log was rewritten")
     newest = max(taken, key=lambda anchor: anchor.seq, default=None)
     head = await log.verify(expected_head=newest.head if newest else None)
-    wanted = {anchor.seq: anchor for anchor in taken}
     async for record in log.iter_records():
-        anchor = wanted.pop(record.seq, None)
-        if anchor is not None and record.record_hash != anchor.record_hash:
-            raise AuditIntegrityError(
-                f"record {record.seq} is not the one anchored at {anchor.taken_at}"
-            )
+        for anchor in wanted.pop(record.seq, []):
+            if record.record_hash != anchor.record_hash:
+                raise AuditIntegrityError(
+                    f"record {record.seq} is not the one anchored at {anchor.taken_at}"
+                )
     if wanted:
         raise AuditIntegrityError(
             f"the log has no record {min(wanted)} that an anchor names: it was cut short"
