@@ -19,6 +19,7 @@ from ai_gateway.text import printable, sha256_of_name
         ("a\x00b\x7fc\x85d", "a?b?c?d"),
         ("a‮b​c", "a?b?c"),  # bidirectional override, zero-width space
         ("a\ud800b", "a?b"),  # a lone surrogate
+        ("a\u2028b\u2029c", "a?b?c"),  # line and paragraph separators
         ("x" * 100, "x" * 37 + "..."),
     ],
 )

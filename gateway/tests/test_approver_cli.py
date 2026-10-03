@@ -83,7 +83,10 @@ def test_free_text_from_outside_is_cleaned_of_escape_sequences() -> None:
         ('{"status": "closed"}', "do not match"),
         ("not json", "not JSON"),
         ("[1, 2]", "not an object"),
+        ('{"ticket_id": "TKT-000001", "status": NaN}', "cannot be shown"),
+        ('{"a": ' + "[" * 5000 + "]" * 5000 + "}", "not JSON|cannot be shown"),
     ],
+    ids=["not-stored", "other-ticket", "fewer-keys", "not-json", "a-list", "nan", "deep-nesting"],
 )
 def test_a_request_whose_arguments_are_missing_or_different_is_never_shown_as_approvable(
     stored: str | None, why: str

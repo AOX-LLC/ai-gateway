@@ -15,7 +15,7 @@ SCHEMA = "policy"
 GATEWAY_ROLE = "policy_gateway"
 """The gateway: appends audit records, asks for approvals and consumes approved ones."""
 APPROVER_ROLE = "policy_approver"
-"""A person's tool (gateway-admin approvals, Phase 6's lab approver): decides pending requests."""
+"""A person's tool (`gateway-approver`; Phase 6's lab approver): decides pending requests."""
 AUDITOR_ROLE = "policy_auditor"
 """Reads the audit log, to verify it and to take anchors."""
 ROLES = (GATEWAY_ROLE, APPROVER_ROLE, AUDITOR_ROLE)

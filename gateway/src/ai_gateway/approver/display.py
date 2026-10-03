@@ -15,8 +15,6 @@ from aox_agent_core.approvals import ApprovalRequest, approval_payload_hash
 
 from ai_gateway.text import printable
 
-MAX_LINE = 200
-
 
 class ApprovalNotShowableError(Exception):
     """The request cannot be shown as it was asked for: nobody should approve it."""
@@ -47,14 +45,18 @@ def render(request: ApprovalRequest, arguments_json: str | None) -> Rendered:
         )
     try:
         arguments = json.loads(arguments_json)
-    except ValueError:
+    except (ValueError, RecursionError):
         raise ApprovalNotShowableError("the stored arguments are not JSON: refusing") from None
     if not isinstance(arguments, dict):
         raise ApprovalNotShowableError("the stored arguments are not an object: refusing")
 
-    shown = json.dumps(arguments, indent=2, sort_keys=True, ensure_ascii=True)
-    # The text on screen, read back, must be what was asked for.
-    if approval_payload_hash(request.action, json.loads(shown)) != request.payload_sha256:
+    try:
+        shown = json.dumps(arguments, indent=2, sort_keys=True, ensure_ascii=True, allow_nan=False)
+        # The text on screen, read back, must be what was asked for.
+        shown_hash = approval_payload_hash(request.action, json.loads(shown))
+    except (ValueError, RecursionError):
+        raise ApprovalNotShowableError("the stored arguments cannot be shown: refusing") from None
+    if shown_hash != request.payload_sha256:
         raise ApprovalNotShowableError(
             "the stored arguments do not match the request's hash: refusing"
         )

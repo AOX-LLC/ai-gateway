@@ -556,11 +556,13 @@ allows only these changes, using the database's own clock and role membership:
 Everything else is refused, including any change to what a request authorises, DELETE, TRUNCATE and
 a superuser or the owner (they are members of every role, so they are neither side). The gateway
 cannot decide an approval by any route, whatever its code does. This replaces the guard 3a wrote.
-3a's guard tests ran unchanged against a3's guard: every attack was refused. The differences,
-as gaps in what 3a enforced, are these, and none is a way to approve:
-- a role that is a *member* of `policy_gateway` counts as the requester side (3a refused it). It can
-  do only what the requester can, and `policy-setup` revokes every membership in the policy roles
-  on each run;
+3a's guard tests were run against a3's guard (after the tests' own raw SQL was made valid for a3,
+with a positive control, so a refusal comes from the clause under test), and every attack was
+refused. The differences, as gaps in what 3a enforced, are these, and none lets the gateway approve:
+- a role that is a *member* of `policy_gateway` counts as the requester side, and a member of
+  `policy_approver` as the approver side (3a refused both by name). A member has exactly that
+  role's powers, and `policy-setup` revokes every membership in the policy roles on each run: that
+  is a point-in-time control, not a continuous one;
 - 3a refused the owner and a superuser outside the two roles by name; a3 refuses them as neither
   side, which is stricter (the tests no longer rewrite a request's lifetime as the owner).
 
@@ -588,8 +590,8 @@ that is forwarded; a read never asks.
    no wait/notify) for a decision. At most 16 calls are held at once; past that a call is answered
    "pending" at once.
 3. **Approved:** the approval is consumed, once, and the call goes on to the audit write-ahead and
-   the upstream. agent-core's consume checks the tool and the arguments but not who asks, so the
-   gateway first checks that the request was made by *this* client. One approval authorises one run.
+   the upstream. The gateway first checks that the request was made by *this* client, and agent-core
+   a3's consume checks the tool, the arguments and the requester again. One approval authorises one run.
 4. **No decision yet:** the client gets the pending result and retries the same call; the retry
    finds the same request and holds again. **Rejected:** the rejection stands until the request
    expires, so a retry does not ask again. **Expired:** the next call asks afresh.
@@ -610,8 +612,8 @@ it is refused.
 
 **The arguments are kept, once.** So that a person approves what the call really says, the full
 arguments of a write awaiting approval are stored in `policy.approval_arguments`. It is the one
-exception to "never store arguments". The gateway role can insert them and cannot read them; the
-approver role reads them; the auditor and the dashboard's reader cannot. They are never in an audit
+exception to "never store arguments". The gateway role can insert them (only `request_id` and `arguments_json`, so it cannot set when they
+are purged) and cannot read them; the approver role reads them; the auditor and the dashboard's reader cannot. They are never in an audit
 record or in telemetry, and `policy.purge_approval_arguments()` (run hourly by the gateway; only the
 gateway role may call it) deletes them 7 days after they were stored.
 
@@ -630,7 +632,15 @@ characters and ANSI sequences removed, so nothing in a call can redraw the appro
 times) with no arguments and no free text; the dashboard's reader role is granted that view and
 nothing else in the schema.
 
-What is *not* here: a person's identity is not authenticated by the CLI (above), and the approval
+Audit records carry the database role that wrote them (set by a trigger), and `audit-verify`
+fails a `gateway.*` record, an `audit.gap`, an `approval.requested` or an `approval.consumed` that
+the gateway role did not write, or an `approval.resolved` that the approver role did not: the
+approver role may append to the audit log, and without this a holder of its credential could add
+records the gateway never wrote under a chain that still verifies.
+
+What is *not* here: a person's identity is not authenticated by the CLI (above) — anyone holding
+the approver database credential can decide a request as any `human:<id>`, registered or not, so
+treat that credential as the approver's, and keep it out of the `.env` of anyone who is not one; and the approval
 is consumed before the audit write-ahead, so a write refused because the audit log is down has used
 up its approval (the client asks again). `scripts/auto_approver.py` approves for the scenario and
 the simulator; it is test tooling, outside the gateway, and needs `--approve-as` and

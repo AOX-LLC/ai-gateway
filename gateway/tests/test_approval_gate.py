@@ -24,7 +24,9 @@ from ai_gateway.pipeline.types import CallContext, ClientIdentity, ToolCall
 from ai_gateway.policy import approval_queue_on, policy_url
 from ai_gateway.policy.approvals import PostgresApprovalGate
 from ai_gateway.policy.database import BoundedPostgresDatabase
+from ai_gateway.policy.setup import PolicyPasswords, setup_policy
 from ai_gateway.seams.approvals import ApprovalOutcome
+from tests.conftest import password_of
 
 pytestmark = [pytest.mark.integration, pytest.mark.anyio]
 
@@ -169,7 +171,7 @@ async def test_another_clients_approval_is_not_usable_by_a_client_with_the_same_
 async def test_consume_refuses_a_request_somebody_else_asked_for(
     policy: None, policy_gateway_url: str, policy_approver_url: str
 ) -> None:
-    """agent-core's consume does not check who asks; the gate does, before it consumes."""
+    """The gate checks whose request it is before it consumes (agent-core a3 checks it again)."""
     gate, owner, thief = _gate(policy_gateway_url), _context(), _context(name="other-bot")
     call = _call()
     pending = await gate.decide(owner, call)
@@ -350,3 +352,80 @@ async def test_the_dashboard_reader_sees_requests_without_arguments_and_nothing_
             await connection.rollback()
             with pytest.raises(errors.InsufficientPrivilege):
                 await connection.execute(f"SELECT * FROM {table}".encode())  # noqa: S608 - fixed names
+
+
+async def test_an_approved_request_is_found_before_a_newer_pending_one_for_the_same_call(
+    policy: None, policy_gateway_url: str, policy_approver_url: str
+) -> None:
+    """Two identical first calls at once can each submit a request. If only the older is approved,
+    the retry must use it, or the approval is stranded until it expires."""
+    gate, ctx, call = _gate(policy_gateway_url, hold_s=0), _context(), _call()
+    older = await gate.decide(ctx, call)
+    await gate._submit(
+        ctx, call, Principal(id=ctx.client.actor_id, kind=PrincipalKind.SERVICE), call.arguments
+    )
+    await _approver(policy_approver_url).resolve(
+        UUID(older.approval_id or ""), decision=Decision.APPROVE, principal=HUMAN
+    )
+
+    retried = await gate.decide(ctx, call)
+
+    assert retried.outcome is ApprovalOutcome.APPROVED
+    assert retried.approval_id == older.approval_id
+
+
+async def test_the_gateway_inserts_only_the_arguments_and_cannot_choose_their_retention(
+    policy: None, policy_gateway_url: str
+) -> None:
+    pending = await _gate(policy_gateway_url, hold_s=0).decide(_context(), _call())
+
+    async with await psycopg.AsyncConnection.connect(
+        policy_url(policy_gateway_url), autocommit=True
+    ) as connection:
+        for statement in (
+            "INSERT INTO approval_arguments (request_id, arguments_json, created_at)"
+            " VALUES (%s, '{}', '9999-01-01')",
+            "UPDATE approval_arguments SET arguments_json = '{}'",
+            "DELETE FROM approval_arguments",
+            "SELECT arguments_json FROM approval_arguments",
+        ):
+            with pytest.raises(errors.InsufficientPrivilege):
+                await connection.execute(
+                    statement.encode(), (pending.approval_id,) if "%s" in statement else None
+                )
+
+
+async def test_a_hand_given_create_on_the_schema_does_not_survive_setup(
+    policy: None,
+    test_database_url: str,
+    policy_gateway_url: str,
+    policy_approver_url: str,
+    policy_auditor_url: str,
+) -> None:
+    async with await psycopg.AsyncConnection.connect(
+        test_database_url, autocommit=True
+    ) as connection:
+        await connection.execute("GRANT CREATE ON SCHEMA policy TO policy_approver, policy_gateway")
+    await setup_policy(
+        test_database_url,
+        PolicyPasswords(
+            password_of(policy_gateway_url),
+            password_of(policy_approver_url),
+            password_of(policy_auditor_url),
+        ),
+    )
+
+    async with await psycopg.AsyncConnection.connect(
+        test_database_url, autocommit=True
+    ) as connection:
+        cursor = await connection.execute(
+            "SELECT r, has_schema_privilege(r, 'policy', 'CREATE'),"
+            " has_schema_privilege(r, 'policy', 'USAGE')"
+            " FROM unnest(ARRAY['policy_gateway', 'policy_approver', 'policy_auditor']) AS r"
+            " ORDER BY 1"
+        )
+        assert await cursor.fetchall() == [
+            ("policy_approver", False, True),
+            ("policy_auditor", False, True),
+            ("policy_gateway", False, True),
+        ]

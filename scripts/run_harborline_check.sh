@@ -3,7 +3,8 @@
 # audit log anchored and verified. Run from the repository root with the stack up. Prints no secret.
 set -euo pipefail
 . "$(dirname "$0")/mask.sh"
-trap 'rm -f demo.json' EXIT
+# The demo approver is registered below for this run only; it is deactivated when the run ends.
+trap 'rm -f demo.json; docker compose run --rm -T admin approver-deactivate harborline-approver >/dev/null 2>&1 || true' EXIT
 docker compose run --rm -T admin seed-demo > demo.json
 SUPPORT=$(python3 -c 'import json; print(json.load(open("demo.json"))["harborline-support-bot"])')
 mask "$SUPPORT"

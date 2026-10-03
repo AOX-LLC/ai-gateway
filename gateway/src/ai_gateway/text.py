@@ -13,12 +13,13 @@ _ANSI = re.compile(
 
 def printable(value: str, limit: int | None = None) -> str:
     """The text with escape sequences removed and every other control, format, surrogate,
-    unassigned or private-use character (and line break) replaced by `?`.
+    unassigned or private-use character, and every line or paragraph separator, replaced by `?`.
 
     The result can be printed to a terminal or kept in a log without changing what the reader
     sees. A long value is cut and ends with `...`."""
     cleaned = "".join(
-        "?" if unicodedata.category(char).startswith("C") else char for char in _ANSI.sub("", value)
+        "?" if unicodedata.category(char).startswith("C") or char in "\u2028\u2029" else char
+        for char in _ANSI.sub("", value)
     )
     if limit is not None and len(cleaned) > limit:
         return cleaned[: limit - 3] + "..."

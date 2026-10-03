@@ -291,3 +291,20 @@ async def test_the_commands_anchor_the_log_and_verify_it(
     output = capsys.readouterr().out
     assert "anchored record 3" in output
     assert "ok: 3 records chain correctly and match 1 anchors" in output
+
+
+async def test_a_record_the_approver_role_wrote_as_if_it_were_the_gateways_fails_verification(
+    policy: None, policy_gateway_url: str, policy_approver_url: str, policy_auditor_url: str
+) -> None:
+    """The approver role may append to the audit log (it writes its own decisions). Without a check
+    of who wrote what, a holder of its credential could add a gateway.tool_call that no gateway
+    wrote, under a chain that still verifies."""
+    auditor = _log(policy_auditor_url)
+    await _append(policy_gateway_url, 2)
+    assert (await verify_with_anchors(auditor, [])).seq == 2
+
+    await _append(policy_approver_url, 1)  # a gateway.tool_call, appended with the approver's login
+
+    assert (await auditor.verify()).seq == 3, "the hash chain alone cannot see it"
+    with pytest.raises(AuditIntegrityError, match="written by role policy_approver"):
+        await verify_with_anchors(auditor, [])

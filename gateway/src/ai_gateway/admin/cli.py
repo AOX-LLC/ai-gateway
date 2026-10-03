@@ -7,6 +7,7 @@ container. A new token is printed once, to stdout, and is not stored anywhere.
 import argparse
 import json
 import os
+import re
 import sys
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
@@ -293,6 +294,9 @@ def _audit_log(database_url: str) -> SQLAuditLog:
 
 async def _approver_add(database_url: str, args: argparse.Namespace) -> None:
     roles = args.role or ["approver"]
+    for role in roles:
+        if not re.fullmatch(r"[a-z][a-z0-9_.-]{0,63}", role):
+            raise AdminError(f"{role!r} is not a role name (lowercase letters, digits, . _ -)")
     async with await AsyncConnection.connect(policy_url(database_url), autocommit=True) as db:
         try:
             await db.execute(

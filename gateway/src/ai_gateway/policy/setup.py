@@ -72,6 +72,14 @@ async def setup_policy(owner_url: str, passwords: PolicyPasswords) -> None:
             await ensure_role(connection, password, role)
             await reset_role(connection, role)
         await ensure_schema(connection, SCHEMA)
+        # A role may not create objects in the schema (they could shadow what the owner's setup
+        # then runs). USAGE is left: a setup that stops must not leave the roles unable to work.
+        for role in ROLES:
+            await connection.execute(
+                sql.SQL("REVOKE CREATE ON SCHEMA {} FROM {}").format(
+                    sql.Identifier(SCHEMA), sql.Identifier(role)
+                )
+            )
         # The installer refuses roles that are members of each other.
         await _revoke_memberships(connection)
         # Install first: it checks what it needs (the roles, the audit evidence of approvals) and
@@ -114,7 +122,9 @@ async def _install(owner_url: str) -> None:
 # What this gateway grants, on its own tables and the audit log for the auditor. The gateway's and
 # the approver's rights on agent-core's tables are the installer's layout.
 _GRANTS = {
-    GATEWAY_ROLE: ((ARGUMENTS_TABLE, "INSERT"),),  # it stores the arguments, never reads them back
+    # It stores the arguments and can never read them back, nor choose when they are purged
+    # (`created_at` is the database's): only these two columns.
+    GATEWAY_ROLE: ((ARGUMENTS_TABLE, "INSERT (request_id, arguments_json)"),),
     APPROVER_ROLE: ((ARGUMENTS_TABLE, "SELECT"), (APPROVERS_TABLE, "SELECT")),
     AUDITOR_ROLE: ((AUDIT_TABLE, "SELECT"),),  # arguments are never in the audit trail
 }
@@ -135,6 +145,11 @@ CREATE TABLE IF NOT EXISTS {APPROVERS_TABLE} (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 """
+
+_FIND_INDEX = f"""
+CREATE INDEX IF NOT EXISTS policy_approvals_find
+ON {APPROVALS_TABLE} (requested_by, payload_sha256, created_at DESC)
+"""  # the gate looks a request up by client and argument hash on every write
 
 _PURGE_FUNCTION = f"""
 CREATE OR REPLACE FUNCTION {ARGUMENTS_PURGE_FUNCTION}() RETURNS bigint
@@ -173,6 +188,11 @@ async def _ensure_approval_tables(connection: AsyncConnection) -> None:
         )
         await connection.execute(_APPROVAL_TABLES.encode())
         await connection.execute(_PURGE_FUNCTION.encode())
+        # Created and closed to PUBLIC in the one transaction: it runs with its owner's rights.
+        await connection.execute(
+            f"REVOKE ALL ON FUNCTION {ARGUMENTS_PURGE_FUNCTION}() FROM PUBLIC".encode()
+        )
+        await connection.execute(_FIND_INDEX.encode())
         await connection.execute(_DASHBOARD_VIEW.encode())
         # The dashboard's reader sees the view and nothing else in this schema. If its role does
         # not exist yet (telemetry-setup runs first in Compose), there is nothing to grant.

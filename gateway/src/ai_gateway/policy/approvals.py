@@ -4,7 +4,8 @@ For a write the gateway finds this client's request for exactly this tool and th
 submits one; holds for a decision for 45 s; and answers "pending" if there is none yet, so the
 client retries the same call. When a person has approved, the approval is consumed, once, right
 before the call is forwarded, after the gateway has checked that this client is the one who asked
-(agent-core's consume checks the action and arguments but not who asks).
+(agent-core a3's consume checks it too; the gate's own check is a second one, and fails the call
+with a log line of its own).
 
 The full arguments are stored for the approver in `policy.approval_arguments` (the gateway can
 insert them and never read them back) so that a person approves what the call really says. That
@@ -144,7 +145,8 @@ class PostgresApprovalGate:
         arguments: dict[str, Any],
     ) -> ApprovalDecision:
         approval_id = str(request.id)
-        # The queue checks the tool and the arguments; whose request it was is checked here.
+        # The queue checks the tool, the arguments and the requester; checking whose request it was
+        # here as well costs nothing and says which client tried.
         if request.requested_by != requester.id:
             logger.error("approval %s was asked for by another client; refused", approval_id)
             return ApprovalDecision(ApprovalOutcome.UNAVAILABLE, approval_id)
@@ -170,7 +172,7 @@ class PostgresApprovalGate:
                 "SELECT id FROM policy.agent_core_approvals"
                 " WHERE requested_by = ? AND payload_sha256 = ?"
                 " AND status IN ('pending', 'approved', 'rejected') AND expires_at > ?"
-                " ORDER BY created_at DESC LIMIT 1",
+                " ORDER BY (status = 'approved') DESC, created_at DESC LIMIT 1",
                 (requested_by, payload_hash, _now_text()),
             )
             return rows
