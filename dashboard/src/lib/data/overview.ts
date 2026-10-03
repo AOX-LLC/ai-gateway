@@ -24,6 +24,7 @@ export async function getOverview(session: AuthedSession, range: Range): Promise
   const [at, kpis, charts, decisions, approvals] = await Promise.all([
     getClock(session).catch((error: unknown) => {
       if (error instanceof AuthError) throw error;
+      console.error(`dashboard: the clock could not be read: ${error instanceof Error ? error.name : "error"}`);
       return new Date().toISOString();
     }),
     settle("kpis", () => getKpis(session, range)),
