@@ -112,6 +112,9 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      # After the telemetry roles exist: the dashboard's reader is granted the approvals view.
+      telemetry-setup:
+        condition: service_completed_successfully
     restart: "no"
 
   # Deletes telemetry past its retention (spans 7 days, everything else 30 by default), hourly,
@@ -142,6 +145,7 @@ services:
       GATEWAY_PORT: "4401"
       GATEWAY_DATABASE_URL: postgresql://gateway_app:${GATEWAY_APP_DB_PASSWORD}@postgres:5432/${POSTGRES_DB}
       GATEWAY_PIPELINE_FILE: ${GATEWAY_PIPELINE_FILE_IN_CONTAINER:-/app/config/pipeline.toml}
+      GATEWAY_APPROVAL_ROLES_FILE: /app/config/approval_roles.toml
       GATEWAY_ALLOWED_HOSTS: ${GATEWAY_ALLOWED_HOSTS:-127.0.0.1:*,localhost:*}
       GATEWAY_LOG_LEVEL: ${GATEWAY_LOG_LEVEL:-INFO}
       # Spans and decision records are stored through this append-only role. If the database
@@ -307,6 +311,25 @@ services:
       postgres:
         condition: service_healthy
 
+  # A person's tool for writes that wait for approval: `docker compose run --rm approver --as
+  # <approver id> list`. It runs as the approver role, which can decide requests and read the
+  # arguments, and can do nothing else. Register approvers with `admin approver-add`.
+  approver:
+    profiles: [tools]
+    build: *gateway-build
+    image: ai-gateway-gateway
+    entrypoint: ["gateway-approver"]
+    <<: *hardening
+    networks: [backend]
+    mem_limit: 128m
+    environment:
+      POLICY_APPROVER_DATABASE_URL: postgresql://policy_approver:${POLICY_APPROVER_DB_PASSWORD:?set it in .env}@postgres:5432/${POSTGRES_DB}
+      APPROVAL_ROLES_FILE: /app/config/approval_roles.toml
+    stdin_open: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   # Runs scripts/test_client.py in the servers' own network. The servers publish no port, so
   # the host cannot call them directly; scripts/direct_check.sh runs this once per server.
   direct-check:
@@ -322,7 +345,9 @@ services:
       CRM_SERVICE_TOKEN: ${CRM_SERVICE_TOKEN:?set it in .env}
       HANDBOOK_SERVICE_TOKEN: ${HANDBOOK_SERVICE_TOKEN:?set it in .env}
     volumes:
-      - ./scripts:/scripts:ro
+      # Only the client and its scenarios: not the rest of scripts/ (the test approver among them).
+      - ./scripts/test_client.py:/scripts/test_client.py:ro
+      - ./scripts/scenarios:/scripts/scenarios:ro
     depends_on:
       ticketing:
         condition: service_healthy

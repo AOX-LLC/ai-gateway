@@ -14,6 +14,7 @@ SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "simulate_traffic.py"
 
 @pytest.fixture(scope="module")
 def sim():  # type: ignore[no-untyped-def]  # the module is loaded from a script path
+    sys.path.insert(0, str(SCRIPT.parent))  # the script imports its neighbour, auto_approver
     spec = importlib.util.spec_from_file_location("simulate_traffic", SCRIPT)
     assert spec is not None
     assert spec.loader is not None
@@ -96,7 +97,7 @@ def test_the_expected_counts_add_up_to_the_plan_plus_one_listing_per_bot(sim) ->
     )
 
 
-def test_the_audit_log_is_expected_to_hold_every_call_and_every_forwarded_write(sim) -> None:  # type: ignore[no-untyped-def]
+def test_the_audit_log_is_expected_to_hold_every_call_every_write_and_its_approval(sim) -> None:  # type: ignore[no-untyped-def]
     plan = sim.build_plan(sim.DEFAULT_SEED, 600)
 
     expected = sim.expected_audit(plan)
@@ -107,7 +108,15 @@ def test_the_audit_log_is_expected_to_hold_every_call_and_every_forwarded_write(
     ]
     assert expected["gateway.tool_call"] == len(calls)
     assert expected["gateway.call_started"] == len(forwarded_writes) > 0
-    assert set(expected) == {"gateway.tool_call", "gateway.call_started"}
+    for action in ("approval.requested", "approval.resolved", "approval.consumed"):
+        assert expected[action] == len(forwarded_writes), "one approval of each kind per write"
+    assert set(expected) == {
+        "gateway.tool_call",
+        "gateway.call_started",
+        "approval.requested",
+        "approval.resolved",
+        "approval.consumed",
+    }
 
 
 def test_a_write_the_scope_layer_refuses_has_no_record_of_an_attempt_to_run(sim) -> None:  # type: ignore[no-untyped-def]

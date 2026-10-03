@@ -26,6 +26,7 @@ dependencies = [
 [project.scripts]
 ai-gateway = "ai_gateway.__main__:main"
 gateway-admin = "ai_gateway.admin.cli:main"
+gateway-approver = "ai_gateway.approver.cli:main"
 telemetry-purge = "ai_gateway.telemetry.purge:main"
 
 [tool.hatch.build.targets.wheel]
@@ -34,4 +35,4 @@ packages = ["src/ai_gateway"]
 [tool.uv.sources]
 mcp-common = { workspace = true }
 # Pinned by tag, not a1: a2 has the recording format and audit schema this gateway uses.
-aox-agent-core = { git = "https://github.com/AOX-LLC/agent-core", tag = "v0.1.0a2" }
+aox-agent-core = { git = "https://github.com/AOX-LLC/agent-core", tag = "v0.1.0a3" }

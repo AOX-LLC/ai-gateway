@@ -7,7 +7,8 @@ Later phases slot their layers in here:
 Approval stays last before forwarding, so a human approves exactly the call that runs.
 """
 
+from ai_gateway.pipeline.layers.approval import ApprovalLayer
 from ai_gateway.pipeline.layers.scope import ScopeLayer
 from ai_gateway.pipeline.types import BaseLayer
 
-LAYER_ORDER: tuple[type[BaseLayer], ...] = (ScopeLayer,)
+LAYER_ORDER: tuple[type[BaseLayer], ...] = (ScopeLayer, ApprovalLayer)

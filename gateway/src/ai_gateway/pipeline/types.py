@@ -11,6 +11,8 @@ from uuid import UUID
 
 from mcp.types import CallToolResult, Tool
 
+from ai_gateway.text import printable
+
 Effect = Literal["read", "write"]
 """Whether a tool only reads or may change something. Decided by the gateway's reviewed
 policy, never by the upstream's own annotations."""
@@ -32,11 +34,26 @@ class DenyCode(StrEnum):
     TOOL_UNAVAILABLE = "tool_unavailable"
     LAYER_ERROR = "layer_error"
     AUDIT_UNAVAILABLE = "audit_unavailable"
+    APPROVAL_PENDING = "approval_pending"
+    APPROVAL_REJECTED = "approval_rejected"
+    APPROVAL_EXPIRED = "approval_expired"
+    APPROVAL_UNAVAILABLE = "approval_unavailable"
+
+
+class Disposition(StrEnum):
+    """What the client is told when a layer says no."""
+
+    BLOCK = "block"
+    """The call is refused: an error."""
+    PENDING = "pending"
+    """The call is not refused for good: a person has been asked, and the client retries the same
+    call later. Nothing was forwarded, and it is recorded as a block."""
 
 
 @dataclass(frozen=True)
 class Allow:
-    pass
+    approval_id: str | None = None
+    """The approval this call used, for the record."""
 
 
 @dataclass(frozen=True)
@@ -44,6 +61,9 @@ class Deny:
     code: DenyCode
     public_message: str
     """Safe to show the client. Never names the layer or echoes tool arguments."""
+    disposition: Disposition = Disposition.BLOCK
+    approval_id: str | None = None
+    """The approval request behind this verdict, when there is one: it is the client's receipt."""
 
 
 Verdict = Allow | Deny
@@ -54,13 +74,12 @@ _MAX_ECHOED_NAME_LENGTH = 64
 
 
 def displayable_tool_name(requested_name: str) -> str:
-    """A client-supplied tool name, cut to a length that is safe to echo and record.
+    """A client-supplied tool name, cut to a length and cleaned of control characters and escape
+    sequences, so it is safe to echo, record and print.
 
     The SDK accepts names of any length; no real tool name is longer than 64 characters.
     """
-    if len(requested_name) <= _MAX_ECHOED_NAME_LENGTH:
-        return requested_name
-    return requested_name[: _MAX_ECHOED_NAME_LENGTH - 3] + "..."
+    return printable(requested_name, _MAX_ECHOED_NAME_LENGTH)
 
 
 def tool_unavailable_message(exposed_name: str) -> str:

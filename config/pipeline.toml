@@ -1,6 +1,7 @@
 # Pipeline layer modes: enforce | monitor | off. See docs/architecture.md.
 [layers]
 scope = "enforce"
+approval = "enforce"
 
 [safety]
 allow_floor_override = false

@@ -22,6 +22,7 @@ from opentelemetry.trace import Span
 from pydantic import JsonValue
 
 from ai_gateway.pipeline.config import PipelineConfig
+from ai_gateway.pipeline.layers.approval import ApprovalLayer
 from ai_gateway.pipeline.registry import LAYER_ORDER
 from ai_gateway.pipeline.types import (
     BaseLayer,
@@ -36,8 +37,10 @@ from ai_gateway.pipeline.types import (
     tool_unavailable_message,
 )
 from ai_gateway.policy.audit import AuditRecorder, AuditUnavailableError
+from ai_gateway.seams.approvals import ApprovalGate
 from ai_gateway.seams.events import DEFAULT_EMIT_TIMEOUT_S, EventSink, GatewayEvent
 from ai_gateway.telemetry import attributes
+from ai_gateway.text import sha256_of_name
 
 logger = logging.getLogger(__name__)
 _tracer = trace.get_tracer("ai_gateway")
@@ -129,6 +132,9 @@ class Pipeline:
         audit: AuditRecorder | None = None,
     ) -> None:
         self._layers = [(layer, config.modes[layer.name]) for layer in layers]
+        for layer, mode in self._layers:
+            if isinstance(layer, ApprovalLayer):
+                layer.observe_only = mode is LayerMode.MONITOR
         self._config = config
         self._events = events
         self._emit_timeout_s = emit_timeout_s
@@ -146,8 +152,13 @@ class Pipeline:
         events: EventSink,
         layer_order: Sequence[type[BaseLayer]] = LAYER_ORDER,
         audit: AuditRecorder | None = None,
+        approvals: ApprovalGate | None = None,
     ) -> "Pipeline":
-        return cls([layer_class() for layer_class in layer_order], config, events, audit=audit)
+        layers = [
+            layer_class(approvals) if issubclass(layer_class, ApprovalLayer) else layer_class()
+            for layer_class in layer_order
+        ]
+        return cls(layers, config, events, audit=audit)
 
     async def list_tools(self, ctx: CallContext, tools: Sequence[CatalogTool]) -> list[CatalogTool]:
         started = time.perf_counter()
@@ -186,7 +197,12 @@ class Pipeline:
 
             for layer, mode in self._layers:
                 block = await self._check_with(
-                    layer, mode, decisions, "before_call", partial(layer.before_call, ctx, call)
+                    layer,
+                    mode,
+                    decisions,
+                    "before_call",
+                    partial(layer.before_call, ctx, call),
+                    details,
                 )
                 if block is not None:
                     return await self._finish_blocked(ctx, call, block, decisions, started, details)
@@ -249,7 +265,13 @@ class Pipeline:
             displayable_tool_name(exposed_name),
             decisions=[],
             started=time.perf_counter(),
-            details={"outcome": "blocked", "blocked_by": "catalog", "deny_code": deny.code.value},
+            details={
+                "outcome": "blocked",
+                "blocked_by": "catalog",
+                "deny_code": deny.code.value,
+                # The name is the client's choice: its hash is exact, the subject above is cleaned.
+                "tool_name_sha256": sha256_of_name(exposed_name),
+            },
         )
         return deny
 
@@ -289,6 +311,7 @@ class Pipeline:
         decisions: list[LayerDecision],
         hook: Hook,
         run_hook: Callable[[], Awaitable[Verdict]],
+        details: dict[str, JsonValue] | None = None,
     ) -> tuple[str, Deny] | None:
         """Run one layer hook, record its verdict, and return (layer, deny) if it blocks."""
         if mode is LayerMode.OFF:
@@ -309,6 +332,8 @@ class Pipeline:
                     return None
                 return layer.name, Deny(code, POLICY_BLOCK_MESSAGE)
         elapsed_ms = (time.perf_counter() - started) * 1000
+        if details is not None and verdict.approval_id is not None:
+            details["approval_id"] = verdict.approval_id
 
         if not isinstance(verdict, Deny):
             decisions.append(LayerDecision(layer.name, hook, mode, "allow", duration_ms=elapsed_ms))

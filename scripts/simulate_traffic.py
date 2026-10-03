@@ -40,6 +40,8 @@ from mcp.client import Client
 from mcp.client.streamable_http import streamable_http_client
 from mcp.shared.exceptions import MCPError
 
+from auto_approver import auto_approving
+
 DEFAULT_SEED = 20261002
 SUPPORT, OPS = "harborline-support-bot", "harborline-ops-bot"
 MIX = {"normal": 0.80, "out_of_scope": 0.12, "auth_failure": 0.08}
@@ -92,7 +94,8 @@ class Step:
 
     @property
     def expected(self) -> tuple[str, ...]:
-        """The telemetry row this step should produce, as a comparable key."""
+        """The telemetry row this step should produce, as a comparable key. A write is held for
+        approval and, with the auto approver running, approved during the hold: one row."""
         if self.kind == "auth_failure":
             return ("auth_failure", self.auth_case or "")
         blocked_by = (
@@ -186,7 +189,8 @@ def expected_counts(plan: Sequence[Step]) -> Counter[tuple[str, ...]]:
 
 def expected_audit(plan: Sequence[Step]) -> Counter[str]:
     """What the audit log should hold for the plan, by action: a record for every call (failed
-    logins are not audited), and a record before every write that was forwarded."""
+    logins are not audited), a record before every write that was forwarded, and the approval
+    queue's three records (requested, resolved, consumed) for each of those writes."""
     counts: Counter[str] = Counter()
     for step in plan:
         if step.kind == "auth_failure":
@@ -194,6 +198,8 @@ def expected_audit(plan: Sequence[Step]) -> Counter[str]:
         counts["gateway.tool_call"] += 1
         if step.kind == "normal" and step.tool in WRITE_TOOLS:
             counts["gateway.call_started"] += 1
+            for action in ("approval.requested", "approval.resolved", "approval.consumed"):
+                counts[action] += 1
     return counts
 
 
@@ -230,6 +236,11 @@ async def _run(args: argparse.Namespace, plan: list[Step], tokens: dict[str, str
                 print(f"  {number}/{len(plan)} sent")
             if delay:
                 await anyio.sleep(delay * rng.uniform(0.5, 1.5))
+
+
+async def _run_approved(args: argparse.Namespace, plan: list[Step], tokens: dict[str, str]) -> None:
+    async with auto_approving(args.approve_as):
+        await _run(args, plan, tokens)
 
 
 class _Session:
@@ -377,6 +388,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--calls", type=int, default=300, help="requests to send (default 300)")
     parser.add_argument("--duration", type=float, default=0, help="spread the run over N seconds")
     parser.add_argument("--no-writes", action="store_true", help="read-only normal calls")
+    parser.add_argument(
+        "--approve-as",
+        metavar="APPROVER",
+        help="approve the writes as this registered approver (test tooling; needs"
+        " LAB_AUTO_APPROVE=yes and POLICY_APPROVER_DATABASE_URL). Without it, run with --no-writes",
+    )
     parser.add_argument("--verify", action="store_true", help="check the stored telemetry")
     return parser
 
@@ -385,12 +402,14 @@ def main(argv: Sequence[str] | None = None) -> None:
     args = _parser().parse_args(argv)
     if args.calls < 1:
         sys.exit("simulate_traffic: --calls must be at least 1")
+    if not args.no_writes and not args.approve_as:
+        sys.exit("simulate_traffic: writes wait for a person; use --approve-as or --no-writes")
     plan = build_plan(args.seed, args.calls, writes=not args.no_writes)
     tokens = _tokens(args)
     mix = Counter(step.kind for step in plan)
     print(f"seed {args.seed}: {args.calls} requests {dict(mix)}")
     started = datetime.now(UTC) - timedelta(seconds=2)
-    anyio.run(_run, args, plan, tokens)
+    anyio.run(_run_approved, args, plan, tokens)
     print(f"sent {len(plan)} requests")
     if args.verify and not anyio.run(_verify, plan, started):
         sys.exit(1)

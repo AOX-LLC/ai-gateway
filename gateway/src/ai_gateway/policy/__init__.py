@@ -7,17 +7,29 @@ schema and three roles, and adapts them to the gateway's needs.
 
 from urllib.parse import quote, unquote, urlencode, urlsplit, urlunsplit
 
+from aox_agent_core.approvals import ApproverPolicy, SQLApprovalQueue
+from aox_agent_core.audit import SQLAuditLog
+from aox_agent_core.storage import Database
+
 SCHEMA = "policy"
 GATEWAY_ROLE = "policy_gateway"
 """The gateway: appends audit records, asks for approvals and consumes approved ones."""
 APPROVER_ROLE = "policy_approver"
-"""A person's tool (gateway-admin approvals, Phase 6's lab approver): decides pending requests."""
+"""A person's tool (`gateway-approver`; Phase 6's lab approver): decides pending requests."""
 AUDITOR_ROLE = "policy_auditor"
 """Reads the audit log, to verify it and to take anchors."""
 ROLES = (GATEWAY_ROLE, APPROVER_ROLE, AUDITOR_ROLE)
 
 AUDIT_TABLE = "agent_core_audit"
 APPROVALS_TABLE = "agent_core_approvals"
+ARGUMENTS_TABLE = "approval_arguments"
+"""The full arguments of a write that awaits approval, for the approver only: the one place the
+gateway keeps arguments, and the one exception to "never store arguments"."""
+APPROVERS_TABLE = "approvers"
+DASHBOARD_VIEW = "dash_approvals"
+"""The approval requests as the dashboard may see them: no arguments, no reasons."""
+ARGUMENTS_PURGE_FUNCTION = "purge_approval_arguments"
+ARGUMENTS_RETENTION_DAYS = 7
 
 
 def policy_url(
@@ -56,3 +68,18 @@ def policy_url(
     query.append(("options", " ".join(options)))
     # libpq decodes %20, not +, in the query of a URL.
     return urlunsplit(parts._replace(query=urlencode(query, quote_via=quote)))
+
+
+def audit_log_on(database: Database) -> SQLAuditLog:
+    """The audit log in the policy schema. agent-core checks the roles of the connection against the
+    schema it is told, which is `public` unless it is named."""
+    return SQLAuditLog(database, schema=SCHEMA)
+
+
+def approval_queue_on(
+    database: Database, *, policy: ApproverPolicy | None = None
+) -> SQLApprovalQueue:
+    """The approval queue in the policy schema, with its audit events in the same database."""
+    return SQLApprovalQueue(
+        database, audit_log=audit_log_on(database), policy=policy, schema=SCHEMA
+    )

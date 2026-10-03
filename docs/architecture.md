@@ -80,7 +80,9 @@ upstream call, so no layer can skip the layers after it or call a tool twice.
 - **One decision record per request.** It holds each layer's mode, verdict, code and
   timing, the outcome, the upstream status, the argument hash, the tool's `effect` and
   `effect_source`, the negotiated protocol version and a fingerprint of the pipeline
-  configuration. It never holds arguments, results or credentials. The scorecard is
+  configuration, and the approval's id when a person approved the call. It never holds arguments,
+  results or credentials (the one place arguments are kept is the approver's copy, see
+  [Approvals](#approvals-phase-3b)). The scorecard is
   computed from these records, not from the errors clients see.
 - **Recording is best effort.** It never changes what the client gets. A record that cannot
   be built, a sink that raises and a sink that does not answer within 2 seconds are logged
@@ -99,6 +101,7 @@ The configuration lives in `config/pipeline.toml`, whose path is set by
 ```toml
 [layers]
 scope = "enforce"        # enforce | monitor | off
+approval = "enforce"     # last before forwarding; a write needs a person's approval
 
 [safety]
 allow_floor_override = false
@@ -106,8 +109,9 @@ allow_floor_override = false
 
 - **Mistakes stop startup.** An unknown layer, mode or key stops the gateway from starting.
 - **Fail safe.** A layer the file does not mention runs in `enforce`.
-- **Floor layers are guarded.** `scope` is a floor layer: setting it to monitor or off
-  needs `allow_floor_override = true` and logs a warning.
+- **Floor layers are guarded.** `scope` and `approval` are floor layers: setting either to
+  monitor or off needs `allow_floor_override = true` and logs a warning. In `monitor` the
+  approval layer reports that a write would have needed approval, asks nobody, and lets it go on.
 
 To produce the scorecard, the red-team harness writes one file per column and restarts the
 gateway between runs. There is no runtime or per-request switch for an attacker to flip.
@@ -118,6 +122,12 @@ gateway between runs. There is no runtime or per-request switch for an attacker 
   client.` It is the same text in both cases, so it cannot be used to discover tools.
 - **Blocked by any other layer:** `-32010`, `Request blocked by gateway policy.`, with a
   request id. The layer name appears only in the decision record.
+- **A write waiting for approval:** a tool result with `isError: true` and structured content
+  `{"status": "approval_pending", "approval_id": ...}`: nothing was forwarded, a person has been
+  asked, and the client retries the same tool with the same arguments. It is recorded as a block
+  (`blocked_by: approval`, `deny_code: approval_pending`).
+- **A write an approver rejected or that expired:** `-32010` with `An approver rejected this
+  call.` or `The approval for this call expired.`
 - **Upstream failure:** a tool result with `isError: true`, naming the service and the
   request id, so the model can react.
 - **Unexpected exceptions:** caught at the handler and returned as a generic internal error
@@ -432,7 +442,7 @@ it or copy its code.
 | Seam | Phase 1 | Later |
 | --- | --- | --- |
 | `EventSink` (`seams/events.py`) | Writes JSON lines to the log and, with a telemetry database, queues rows for it. Events already follow the audit log's record shape: dotted action, actor id `client:<uuid>`, subject, a small payload with no secret-named keys. | The audit log is not an `EventSink`: it is a seam of its own on the pipeline, because it can refuse a write ([Audit](#audit-phase-3)). |
-| `ApprovalGate` (`seams/approvals.py`) | Protocol only | Phase 3's `approval` layer submits the call, waits for a person, and checks the approval matches the exact argument hash. |
+| `ApprovalGate` (`seams/approvals.py`) | Protocol only | Filled in Phase 3b by `policy/approvals.py`: see [Approvals](#approvals-phase-3b). |
 | Tracing | The OpenTelemetry SDK, configured when a telemetry database is set: the gateway's spans are queued and stored in Postgres (see [Telemetry](#telemetry-phase-5)). Span names are in `telemetry/attributes.py`. | Another processor, such as an OTLP exporter, can be added without changing the gateway. |
 
 ## Telemetry (Phase 5)
@@ -448,7 +458,7 @@ gateway and finds it in no column of any table.
 ### Audit (Phase 3)
 
 Every tool call is recorded in agent-core's append-only, hash-chained audit log, in the `policy`
-schema. agent-core is pinned by tag (`v0.1.0a2`, in `gateway/pyproject.toml`); the log and, from
+schema. agent-core is pinned by tag (`v0.1.0a3`, in `gateway/pyproject.toml`); the log and, from
 Phase 3b, the approval queue are its. This is not telemetry. Telemetry is best effort and tells the
 dashboard what happened; the audit log is the record of what the gateway did, and a write is not
 made without it.
@@ -522,28 +532,119 @@ record is built once, so a retry does not store either twice.
 | Role | Can |
 | --- | --- |
 | `policy_gateway` (the gateway) | read and append the audit log; create approval requests (pending only) and consume an approved one |
-| `policy_approver` (a person's tool; Phase 3b) | read and append the audit log (it writes the audit event of a decision); decide a pending request |
-| `policy_auditor` | read the audit log, and nothing else |
+| `policy_approver` (a person's tool, `gateway-approver`) | read and append the audit log (it writes the audit event of a decision); decide a pending request; read the approvers and the stored arguments |
+| `policy_auditor` | read the audit log, and nothing else (never the arguments) |
 
-agent-core's installer gives one app role `UPDATE` on approvals, and the rule that only a human
-resolves one lives in library code. That role could therefore approve its own requests with plain
-SQL (confirmed). A guard trigger closes that:
-- the gateway role may only move an *approved*, unexpired request to *consumed*, and change nothing
-  else about it;
-- the approver may only decide a *pending*, unexpired request, with a decision that matches its
-  status and with who and when filled in, and change nothing about what it authorises, who asked or
-  when it expires;
-- nobody may create a request that is already decided;
-- any other role, including one that merely inherits a policy role's privileges (the guard keys on
-  the member's own name), is refused, and setup removes every membership in the policy roles. The gateway cannot decide an approval by any route,
-whatever its code does. `gateway-admin policy-setup` installs agent-core's tables once, for a
-scratch role that cannot log in (so no real role holds a grant before its guard exists), applies the
-grants and the guard in one transaction, guard first, and is safe to repeat and to run twice at
-once, within one database (the scratch role is named per database, and any left by a killed setup is
-dropped by the next run). The audit table's own protections are agent-core's: triggers that refuse
-`UPDATE`, `DELETE` and `TRUNCATE`, and a check that the connecting role cannot do any of them. The
+The gateway can insert a request's arguments (`approval_arguments`) and never read them back; only
+the approver reads them.
+
+agent-core v0.1.0a3 ships the two roles and the guard itself. Its installer (`gateway-admin
+policy-setup` runs it every time: it is idempotent and upgrades an a2 schema in place, keeping every
+row) creates the tables in the `policy` schema for a *requester* role (`policy_gateway`) and an
+*approver* role (`policy_approver`), grants each only its layout (the requester may update `status`,
+`consumed_at` and `closed_at`; the approver the decision columns), and installs a guard trigger that
+allows only these changes, using the database's own clock and role membership:
+
+| From | To | Role |
+| --- | --- | --- |
+| (insert) | pending | requester |
+| pending | approved or rejected | approver, not the requester |
+| pending | cancelled | requester |
+| pending | expired | requester or approver, once past its lifetime |
+| approved | consumed | requester |
+
+Everything else is refused, including any change to what a request authorises, DELETE, TRUNCATE and
+a superuser or the owner (they are members of every role, so they are neither side). The gateway
+cannot decide an approval by any route, whatever its code does. This replaces the guard 3a wrote.
+3a's guard tests were run against a3's guard (after the tests' own raw SQL was made valid for a3,
+with a positive control, so a refusal comes from the clause under test), and every attack was
+refused. The differences, as gaps in what 3a enforced, are these, and none lets the gateway approve:
+- a role that is a *member* of `policy_gateway` counts as the requester side, and a member of
+  `policy_approver` as the approver side (3a refused both by name). A member has exactly that
+  role's powers, and `policy-setup` revokes every membership in the policy roles on each run: that
+  is a point-in-time control, not a continuous one;
+- 3a refused the owner and a superuser outside the two roles by name; a3 refuses them as neither
+  side, which is stricter (the tests no longer rewrite a request's lifetime as the owner).
+
+`policy_auditor`, the arguments table, the approvers, the purge function and the dashboard's view
+are this gateway's own, and `policy-setup` takes back anything the gateway or approver role holds
+beyond a3's layout. An approved request that no approver's decision approves (plain SQL could make
+one under a2) is cancelled by the upgrade and logged. The a3 database layer ignores `search_path`,
+so every query here is schema-qualified. The audit table's own protections are agent-core's:
+triggers that refuse `UPDATE`, `DELETE` and `TRUNCATE`, and a check that the connecting role cannot
+do any of them. Audit rows carry the database role that wrote them (`db_role`, audit schema 3). The
 database owner can disable the triggers, which is what the anchor test does; the chain and an
 anchor are what show it.
+
+### Approvals (Phase 3b)
+
+A write waits for a person. The `approval` layer runs last, so a person approves exactly the call
+that is forwarded; a read never asks.
+
+1. The gateway looks for this client's newest unexpired request for this tool and these arguments
+   (the hash of `{tool, arguments}`). If there is none it submits one (30 minutes to live,
+   `settings.approval_ttl_s`), asking for the role that `config/approval_roles.toml` lists for that
+   tool, with no delegates, and stores the arguments for the approver. A write with no listed role
+   is refused: nobody may approve it.
+2. It **holds** the call for up to 45 s (`approval_hold_s`, polling once a second: agent-core has
+   no wait/notify) for a decision. At most 16 calls are held at once; past that a call is answered
+   "pending" at once.
+3. **Approved:** the approval is consumed, once, and the call goes on to the audit write-ahead and
+   the upstream. The gateway first checks that the request was made by *this* client, and agent-core
+   a3's consume checks the tool, the arguments and the requester again. One approval authorises one run.
+4. **No decision yet:** the client gets the pending result and retries the same call; the retry
+   finds the same request and holds again. **Rejected:** the rejection stands until the request
+   expires, so a retry does not ask again. **Expired:** the next call asks afresh.
+5. **The queue cannot be used** (no policy database, a dead database, arguments over 64 KiB):
+   the write is refused. The layer fails closed.
+
+`expire_due()` runs once a minute and stores `expired` on requests past their lifetime; reads treat
+such a request as expired whether or not it has run.
+
+Who may decide is not the requester's choice: the approver's tool builds agent-core's
+`RoleApproverPolicy` from the same `roles_by_action` file, so a request for an unlisted action, or
+with another role than the file names, is refused. `trust_requester_role` is never used, and a test
+fails if it appears outside the tests.
+
+An approval is for exactly one tool with exactly those arguments for the client that asked: other
+arguments are a new request; another client's request is never found, and a direct attempt to use
+it is refused.
+
+**The arguments are kept, once.** So that a person approves what the call really says, the full
+arguments of a write awaiting approval are stored in `policy.approval_arguments`. It is the one
+exception to "never store arguments". The gateway role can insert them (only `request_id` and `arguments_json`, so it cannot set when they
+are purged) and cannot read them; the approver role reads them; the auditor and the dashboard's reader cannot. They are never in an audit
+record or in telemetry, and `policy.purge_approval_arguments()` (run hourly by the gateway; only the
+gateway role may call it) deletes them 7 days after they were stored.
+
+**`gateway-approver`** runs as the approver role (`docker compose run --rm approver --as <id>
+list | show | approve | reject`). `--as` names a person registered with `gateway-admin
+approver-add`, who must be active and hold the request's role (`approver`). The database role is
+shared, so `--as` records who decided; it does not prove it. The dashboard and the lab approver of
+later phases authenticate people themselves. Before it shows a request as approvable, the tool
+parses the arguments back from the text it is about to display and hashes them with the tool name:
+the hash must be the one stored when the gateway asked, or it refuses (a request whose arguments
+were changed, or purged, can only be rejected). The arguments are shown as JSON with every
+non-ASCII and control character escaped, and anything from outside (names, summaries) has control
+characters and ANSI sequences removed, so nothing in a call can redraw the approver's screen.
+
+`policy.dash_approvals` is the dashboard's view of the requests (tool, client, status, who decided,
+times) with no arguments and no free text; the dashboard's reader role is granted that view and
+nothing else in the schema.
+
+Audit records carry the database role that wrote them (set by a trigger), and `audit-verify`
+fails a `gateway.*` record, an `audit.gap`, an `approval.requested` or an `approval.consumed` that
+the gateway role did not write, or an `approval.resolved` that the approver role did not: the
+approver role may append to the audit log, and without this a holder of its credential could add
+records the gateway never wrote under a chain that still verifies.
+
+What is *not* here: a person's identity is not authenticated by the CLI (above) — anyone holding
+the approver database credential can decide a request as any `human:<id>`, registered or not, so
+treat that credential as the approver's, and keep it out of the `.env` of anyone who is not one; and the approval
+is consumed before the audit write-ahead, so a write refused because the audit log is down has used
+up its approval (the client asks again). `scripts/auto_approver.py` approves for the scenario and
+the simulator; it is test tooling, outside the gateway, and needs `--approve-as` and
+`LAB_AUTO_APPROVE=yes`.
 
 ### Tamper evidence
 

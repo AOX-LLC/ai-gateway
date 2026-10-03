@@ -10,7 +10,9 @@ from ai_gateway.pipeline.config import PipelineConfigError, parse_pipeline_confi
 from ai_gateway.pipeline.runner import Blocked, Forwarded, Pipeline, UpstreamOutcome, UpstreamStatus
 from ai_gateway.pipeline.types import CallContext, DenyCode, ToolCall
 from ai_gateway.policy.audit import AuditStatus, AuditUnavailableError
+from ai_gateway.policy.audit import call_event as audit_call_event
 from ai_gateway.seams.events import GatewayEvent, MemoryEventSink
+from ai_gateway.text import sha256_of_name
 from tests.test_pipeline import ORDER, FirstLayer, SecondLayer, _context
 
 POLICY_BLOCK = "Request blocked by gateway policy."
@@ -153,6 +155,23 @@ async def test_every_outcome_is_recorded_for_the_audit_log() -> None:
     outcomes = [(e.payload["outcome"], e.payload.get("blocked_by")) for e in audit.records]
     assert outcomes == [("forwarded", None), ("blocked", "first"), ("blocked", "catalog")]
     assert all(e.action == "gateway.tool_call" for e in audit.records)
+
+
+@pytest.mark.anyio
+async def test_an_unknown_tool_name_is_hashed_whole_and_recorded_cleaned_and_cut() -> None:
+    order: list[str] = []
+    audit = FakeAudit(order)
+    pipeline, _ = _pipeline(order, audit)
+    name = "echo__\x1b[2J" + "x" * 300
+
+    await pipeline.reject_unknown_tool(_context({"echo__say"}), name)
+
+    [record] = audit.records
+    assert record.subject_id is not None
+    assert "\x1b" not in record.subject_id
+    assert len(record.subject_id) == 64
+    assert record.payload["tool_name_sha256"] == sha256_of_name(name), "all of it, as sent"
+    assert audit_call_event(record).subject_id is None, "the client's text is never a subject"
 
 
 @pytest.mark.anyio

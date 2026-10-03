@@ -20,6 +20,8 @@ from pathlib import Path
 from aox_agent_core.audit import GENESIS_HASH, AuditHead, SQLAuditLog
 from aox_agent_core.errors import AuditIntegrityError
 
+from ai_gateway.policy import APPROVER_ROLE, GATEWAY_ROLE
+
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 
 
@@ -84,6 +86,26 @@ def read_anchors(path: Path) -> list[Anchor]:
     return anchors
 
 
+_WRITTEN_BY = {
+    "audit.gap": GATEWAY_ROLE,
+    "approval.requested": GATEWAY_ROLE,
+    "approval.consumed": GATEWAY_ROLE,
+    "approval.resolved": APPROVER_ROLE,
+}
+"""Which database role writes each kind of record. The approver role may append to the audit log
+(it writes its own decisions), so without this a holder of its credential could add a
+`gateway.tool_call` that no gateway wrote, and the hash chain would still verify. `db_role` is set
+by a trigger, whoever the writer claims to be. Records from before audit schema 3 have none."""
+
+
+def _check_provenance(seq: int, action: str, db_role: str | None) -> None:
+    expected = GATEWAY_ROLE if action.startswith("gateway.") else _WRITTEN_BY.get(action)
+    if expected is not None and db_role is not None and db_role != expected:
+        raise AuditIntegrityError(
+            f"record {seq} ({action}) was written by role {db_role}, not {expected}"
+        )
+
+
 async def verify_with_anchors(log: SQLAuditLog, anchors: list[Anchor]) -> AuditHead:
     """Walk the whole chain, then check every anchor against it. Returns the chain's head.
 
@@ -105,6 +127,7 @@ async def verify_with_anchors(log: SQLAuditLog, anchors: list[Anchor]) -> AuditH
     newest = max(taken, key=lambda anchor: anchor.seq, default=None)
     head = await log.verify(expected_head=newest.head if newest else None)
     async for record in log.iter_records():
+        _check_provenance(record.seq, record.action, record.db_role)
         for anchor in wanted.pop(record.seq, []):
             if record.record_hash != anchor.record_hash:
                 raise AuditIntegrityError(

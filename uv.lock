@@ -40,7 +40,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aox-agent-core", extras = ["postgres"], git = "https://github.com/AOX-LLC/agent-core?tag=v0.1.0a2" },
+    { name = "aox-agent-core", extras = ["postgres"], git = "https://github.com/AOX-LLC/agent-core?tag=v0.1.0a3" },
     { name = "fastapi", specifier = ">=0.142,<1" },
     { name = "httpx2", specifier = ">=2.13,<3" },
     { name = "mcp", specifier = "==2.2.0" },
@@ -148,8 +148,8 @@ wheels = [
 
 [[package]]
 name = "aox-agent-core"
-version = "0.1.0a2"
-source = { git = "https://github.com/AOX-LLC/agent-core?tag=v0.1.0a2#37944bef3ae1f571e8fffca8969c8d4a56d422b3" }
+version = "0.1.0a3"
+source = { git = "https://github.com/AOX-LLC/agent-core?tag=v0.1.0a3#e5368dc6bc25ad927fb341ccd616454859406d84" }
 dependencies = [
     { name = "anthropic" },
     { name = "opentelemetry-api" },

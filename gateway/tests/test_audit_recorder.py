@@ -19,6 +19,7 @@ from ai_gateway.policy.audit import (
     write_ahead_event,
 )
 from ai_gateway.seams.events import GatewayEvent
+from ai_gateway.text import sha256_of_name
 from tests.test_upstreams import eventually
 
 MARKER = "the customer's account number 4111-1111-1111-1111"
@@ -397,14 +398,19 @@ def test_a_call_to_a_tool_whose_name_cannot_be_a_subject_is_still_recorded(name:
         action="gateway.tool_call",
         actor_id=f"client:{CLIENT_ID}",
         subject_id=name,
-        payload={"request_id": str(REQUEST_ID), "outcome": "blocked", "blocked_by": "catalog"},
+        payload={
+            "request_id": str(REQUEST_ID),
+            "outcome": "blocked",
+            "blocked_by": "catalog",
+            "tool_name_sha256": sha256_of_name(name),
+        },
     )
 
     audit_event = call_event(event)
 
     assert audit_event.subject_id is None
     assert audit_event.payload["tool_name_valid"] is False
-    assert len(audit_event.payload["tool_name_sha256"]) == 64  # type: ignore[arg-type]
+    assert audit_event.payload["tool_name_sha256"] == sha256_of_name(name)
     assert name not in audit_event.model_dump_json(), "the client's text is stored only as a hash"
 
 
