@@ -1,0 +1,14 @@
+# Per-client rules on the values of a tool's arguments. See the header of
+# gateway/src/ai_gateway/pipeline/layers/allowlist.py for the format.
+#
+# These cover what a person's approval does not: an ops bot's write needs a person, but a support
+# bot must never open an urgent ticket at all, and no one needs to be asked about that.
+#
+# Harborline Supply Co. is fictional; so is every client and value here.
+
+[[rule]]
+name = "support-bot-no-urgent-tickets"
+client = "harborline-support-bot"
+tool = "tickets__create_ticket"
+argument = "priority"
+one_of = ["low", "normal", "high"]
