@@ -315,12 +315,17 @@ async def scratch_database(test_database_url: str) -> AsyncIterator[tuple[str, s
 
 @pytest.fixture(scope="session")
 def _recording_tracer() -> InMemorySpanExporter:
-    """Install a real tracer provider once for the test run (OpenTelemetry allows it once),
-    exporting every finished span to memory."""
+    """Record every finished span in memory.
+
+    OpenTelemetry lets the process's tracer provider be set once, and a test that starts a gateway
+    with telemetry installs one first. So this uses the SDK provider if there is one, and sets its
+    own if there is not: a recorder added to the provider that is current, either way."""
     exporter = InMemorySpanExporter()
-    provider = TracerProvider()
+    provider = trace.get_tracer_provider()
+    if not isinstance(provider, TracerProvider):
+        provider = TracerProvider()
+        trace.set_tracer_provider(provider)
     provider.add_span_processor(SimpleSpanProcessor(exporter))
-    trace.set_tracer_provider(provider)
     return exporter
 
 
