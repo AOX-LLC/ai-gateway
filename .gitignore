@@ -74,3 +74,6 @@ Desktop.ini
 # Written by `next dev`; not ours (its CLAUDE.md imports instructions from a package)
 dashboard/AGENTS.md
 dashboard/CLAUDE.md
+
+# The demo stack's throwaway state (a demo-only password); removed by `run_dashboard_demo.sh down`
+.demo/
