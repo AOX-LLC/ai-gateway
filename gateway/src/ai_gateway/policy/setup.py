@@ -18,6 +18,10 @@ from psycopg import AsyncConnection, sql
 from ai_gateway.policy import (
     APPROVALS_TABLE,
     APPROVER_ROLE,
+    APPROVERS_TABLE,
+    ARGUMENTS_PURGE_FUNCTION,
+    ARGUMENTS_RETENTION_DAYS,
+    ARGUMENTS_TABLE,
     AUDIT_TABLE,
     AUDITOR_ROLE,
     GATEWAY_ROLE,
@@ -72,6 +76,7 @@ async def setup_policy(owner_url: str, passwords: PolicyPasswords) -> None:
             logger.info("agent-core's audit and approval tables are already installed")
         else:
             await _install_tables(connection, owner_url)
+        await _ensure_approval_tables(connection)
         await grant_policy_access(connection)
         await restrict_database_access(connection, list(ROLES))
 
@@ -133,13 +138,42 @@ _GRANTS = {
     GATEWAY_ROLE: (
         (AUDIT_TABLE, "SELECT, INSERT"),
         (APPROVALS_TABLE, "SELECT, INSERT, UPDATE"),
+        (ARGUMENTS_TABLE, "INSERT"),  # it stores the arguments and can never read them back
     ),
     APPROVER_ROLE: (
         (AUDIT_TABLE, "SELECT, INSERT"),
         (APPROVALS_TABLE, "SELECT, UPDATE"),
+        (ARGUMENTS_TABLE, "SELECT"),
+        (APPROVERS_TABLE, "SELECT"),
     ),
-    AUDITOR_ROLE: ((AUDIT_TABLE, "SELECT"),),
+    AUDITOR_ROLE: ((AUDIT_TABLE, "SELECT"),),  # arguments are never in the audit trail
 }
+
+_APPROVAL_TABLES = f"""
+CREATE TABLE IF NOT EXISTS {ARGUMENTS_TABLE} (
+    request_id TEXT PRIMARY KEY REFERENCES {APPROVALS_TABLE} (id),
+    arguments_json TEXT NOT NULL CHECK (length(arguments_json) <= 65536),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS {ARGUMENTS_TABLE}_created ON {ARGUMENTS_TABLE} (created_at);
+CREATE TABLE IF NOT EXISTS {APPROVERS_TABLE} (
+    id TEXT PRIMARY KEY CHECK (id ~ '^[a-z][a-z0-9._-]{{0,62}}$'),
+    display_name TEXT NOT NULL CHECK (length(display_name) BETWEEN 1 AND 100),
+    roles TEXT[] NOT NULL CHECK (cardinality(roles) > 0),
+    active BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+"""
+
+_PURGE_FUNCTION = f"""
+CREATE OR REPLACE FUNCTION {ARGUMENTS_PURGE_FUNCTION}() RETURNS bigint
+LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
+    WITH purged AS (
+        DELETE FROM {SCHEMA}.{ARGUMENTS_TABLE}
+        WHERE created_at < now() - interval '{ARGUMENTS_RETENTION_DAYS} days' RETURNING 1
+    ) SELECT count(*) FROM purged
+$$
+"""  # noqa: S608 - fixed names and no input: a function body, not a query
 
 _NOW_TEXT = "to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')"
 """agent-core stores times as UTC text of this shape, so they compare as text."""
@@ -207,6 +241,16 @@ END $$
 """  # noqa: S608 - fixed names and no input: a trigger body, not a query
 
 
+async def _ensure_approval_tables(connection: AsyncConnection) -> None:
+    """The tables this gateway adds to agent-core's: arguments for the approver, and approvers."""
+    async with connection.transaction():
+        await connection.execute(
+            sql.SQL("SET LOCAL search_path TO {}").format(sql.Identifier(SCHEMA))
+        )
+        await connection.execute(_APPROVAL_TABLES.encode())
+        await connection.execute(_PURGE_FUNCTION.encode())
+
+
 async def grant_policy_access(connection: AsyncConnection) -> None:
     """Make the three roles' grants exactly these, and (re)install the approval guard.
 
@@ -242,6 +286,16 @@ async def grant_policy_access(connection: AsyncConnection) -> None:
                         sql.SQL(privileges), schema, sql.Identifier(table), sql.Identifier(role)
                     )
                 )
+        # The purge runs with its owner's rights, so who may call it is the whole control.
+        purge = sql.SQL("{}.{}()").format(schema, sql.Identifier(ARGUMENTS_PURGE_FUNCTION))
+        await connection.execute(sql.SQL("REVOKE ALL ON FUNCTION {} FROM PUBLIC").format(purge))
+        for role in ROLES:
+            verb = (
+                "GRANT EXECUTE ON FUNCTION {} TO {}"
+                if role == GATEWAY_ROLE
+                else ("REVOKE ALL ON FUNCTION {} FROM {}")
+            )
+            await connection.execute(sql.SQL(verb).format(purge, sql.Identifier(role)))
 
 
 _MEMBERSHIPS = (

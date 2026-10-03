@@ -18,6 +18,12 @@ ROLES = (GATEWAY_ROLE, APPROVER_ROLE, AUDITOR_ROLE)
 
 AUDIT_TABLE = "agent_core_audit"
 APPROVALS_TABLE = "agent_core_approvals"
+ARGUMENTS_TABLE = "approval_arguments"
+"""The full arguments of a write that awaits approval, for the approver only: the one place the
+gateway keeps arguments, and the one exception to "never store arguments"."""
+APPROVERS_TABLE = "approvers"
+ARGUMENTS_PURGE_FUNCTION = "purge_approval_arguments"
+ARGUMENTS_RETENTION_DAYS = 7
 
 
 def policy_url(
