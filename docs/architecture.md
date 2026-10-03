@@ -692,6 +692,17 @@ tool limit that the traffic simulator uses to show the layer working.
 
 Both layers switch `enforce`, `monitor` and `off` like any other (they are not floor layers).
 
+### Idle transactions (Phase 3c)
+
+Any role that can connect can take agent-core's one audit append lock, and a write that cannot be
+audited is refused, so one session sitting idle inside a transaction while holding that lock could
+stop every write. Every role the setups create has `idle_in_transaction_session_timeout` set on it:
+5 s for the policy roles (and the lab approver), 30 s for the rest (the gateway's, the telemetry
+roles and each server's: `ensure_role` carries the default, a migration and `db/init` cover
+`gateway_app`). The server ends such a session; a test takes the lock from each policy role, shows a
+write blocked, the session ended within the limit, and a write then succeeding. The database
+owner, used only by setup and administration, has no such limit.
+
 ### Failed logins (Phase 3c)
 
 `auth/throttle.py` sits in the bearer-auth middleware, before the token is looked at:

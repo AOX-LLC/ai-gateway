@@ -28,12 +28,15 @@ x-servers-build: &servers-build
 # prompt-injected or compromised server has nowhere to send what it read. The gateway and
 # Postgres are on both, so the host can reach them and they can reach the servers. Postgres
 # can itself open outbound connections for a superuser (see docs/architecture.md, Networks).
-# Memory limits (mem_limit on every service) are sized for a shared 4-core, 7 GB machine, from
-# measured use (docker stats after 300 simulated requests): gateway 75 MiB, handbook 150 MiB,
-# ticketing and CRM 63 MiB each, Postgres 53 MiB, echo 52 MiB, telemetry-purge 27 MiB. Each limit
-# is two to three times that. servers-setup loads the embedding model to seed a fresh volume and
-# was seen to finish within 256 MiB, so it has 384. All limits together are 2.6 GiB, and
-# gateway/tests/test_compose.py keeps the total under a budget.
+# Memory limits (mem_limit on every service) are sized for a shared 4-core, 7 GB machine, at about
+# 1.5 times each service's peak, sampled once a second while the acceptance check, the Harborline
+# scenarios and a 200-call traffic simulation ran (Phase 3c): gateway 107 MiB, handbook 159,
+# ticketing and CRM 63 each, echo 53, Postgres 93, telemetry-purge 27, the setup and admin
+# containers 40 to 91. Floors: 64 MiB for a small service, 256 for Postgres, 96 for one-shots.
+# servers-setup embeds the handbook with a local model, but only on a fresh volume, so its peak
+# was not seen: it keeps 384. The lab approver, the approver and direct-check were not run in
+# that sample and keep generous limits. All limits together are 2.1 GiB (they were 2.9 GiB), which
+# leaves room for the dashboard; gateway/tests/test_compose.py keeps the total under 3072 MiB.
 x-hardening: &hardening
   read_only: true
   tmpfs:
