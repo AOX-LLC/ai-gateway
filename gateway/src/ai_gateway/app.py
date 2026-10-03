@@ -90,7 +90,11 @@ def create_app(settings: GatewaySettings, events: EventSink | None = None) -> Fa
             await db_pool.open(wait=True, timeout=30)
             registry = GatewayRegistry(db_pool)
             endpoint.schema_versions = SchemaVersionCache(registry)
-            catalog = Catalog(registry, refresh_interval_s=settings.catalog_refresh_s)
+            catalog = Catalog(
+                registry,
+                refresh_interval_s=settings.catalog_refresh_s,
+                registry_poll_s=settings.catalog_registry_poll_s,
+            )
             sessions = UpstreamSessionPool(idle_timeout_s=settings.session_idle_timeout_s)
             session_manager = StreamableHTTPSessionManager(
                 GatewayServer(catalog, sessions, pipeline).build(),

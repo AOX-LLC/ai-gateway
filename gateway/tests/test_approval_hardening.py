@@ -27,13 +27,17 @@ ROOT = Path(__file__).resolve().parents[2]
 SOURCES = [*(ROOT / "gateway" / "src").rglob("*.py"), *(ROOT / "scripts").rglob("*.py")]
 
 
-def _keyword_uses(name: str) -> list[str]:
+def _keyword_uses(name: str, *, attributes: bool = True) -> list[str]:
     found = []
     for path in SOURCES:
         for node in ast.walk(ast.parse(path.read_text())):
             if isinstance(node, ast.keyword) and node.arg == name:
                 found.append(f"{path.relative_to(ROOT)}:{node.value.lineno}")
-            if isinstance(node, ast.Name | ast.Attribute) and getattr(node, "attr", "") == name:
+            if (
+                attributes
+                and isinstance(node, ast.Name | ast.Attribute)
+                and getattr(node, "attr", "") == name
+            ):
                 found.append(f"{path.relative_to(ROOT)}:{node.lineno}")
     return found
 
@@ -47,7 +51,8 @@ def test_trust_requester_role_is_never_set_outside_tests() -> None:
 
 
 def test_the_gateway_never_names_delegates_so_only_the_asking_client_can_use_an_approval() -> None:
-    assert _keyword_uses("delegates") == []
+    # Passed to nothing: reading `request.delegates` (to refuse a request that has some) is fine.
+    assert _keyword_uses("delegates", attributes=False) == []
 
 
 def test_every_write_tool_has_an_approver_role_and_only_write_tools_do() -> None:

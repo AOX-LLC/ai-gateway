@@ -18,11 +18,12 @@ from aox_agent_core.approvals import (
 )
 from aox_agent_core.storage import open_database
 from psycopg import errors
+from psycopg.errors import UniqueViolation
 from pydantic import SecretStr
 
 from ai_gateway.pipeline.types import CallContext, ClientIdentity, ToolCall
 from ai_gateway.policy import approval_queue_on, policy_url
-from ai_gateway.policy.approvals import PostgresApprovalGate
+from ai_gateway.policy.approvals import PostgresApprovalGate, _payload
 from ai_gateway.policy.database import BoundedPostgresDatabase
 from ai_gateway.policy.setup import PolicyPasswords, setup_policy
 from ai_gateway.seams.approvals import ApprovalOutcome
@@ -44,13 +45,14 @@ def _context(client_id: UUID | None = None, name: str = "harborline-ops-bot") ->
     )
 
 
-def _call(**arguments: Any) -> ToolCall:
+def _call(upstream_identity: str = "", **arguments: Any) -> ToolCall:
     return ToolCall.create(
         "tickets__change_status",
         "tickets",
         "change_status",
         arguments or {"ticket_id": "TKT-000001", "status": "closed", "note": MARKER},
         "write",
+        upstream_identity=upstream_identity,
     )
 
 
@@ -184,7 +186,7 @@ async def test_consume_refuses_a_request_somebody_else_asked_for(
         request,
         call,
         Principal(id=thief.client.actor_id, kind=PrincipalKind.SERVICE),
-        call.arguments,
+        _payload(call),
     )
 
     assert stolen.outcome is ApprovalOutcome.UNAVAILABLE
@@ -220,7 +222,7 @@ async def test_the_arguments_are_kept_for_the_approver_and_hash_to_the_request(
         row = await cursor.fetchone()
 
     assert row is not None
-    assert json.loads(row[0]) == call.arguments
+    assert json.loads(row[0]) == {"arguments": call.arguments, "upstream": call.upstream_identity}
     assert approval_payload_hash("tickets__change_status", json.loads(row[0])) == row[1]
 
 
@@ -354,24 +356,134 @@ async def test_the_dashboard_reader_sees_requests_without_arguments_and_nothing_
                 await connection.execute(f"SELECT * FROM {table}".encode())  # noqa: S608 - fixed names
 
 
-async def test_an_approved_request_is_found_before_a_newer_pending_one_for_the_same_call(
+async def test_the_database_refuses_a_second_open_request_for_the_same_intent(
     policy: None, policy_gateway_url: str, policy_approver_url: str
 ) -> None:
-    """Two identical first calls at once can each submit a request. If only the older is approved,
-    the retry must use it, or the approval is stranded until it expires."""
+    """The sharing of one request between identical calls is the database's, not a check followed
+    by an insert: a second submission for the same client, tool and payload fails while the first
+    is pending or approved, and works again once it is consumed. (Replace with agent-core a5's.)"""
     gate, ctx, call = _gate(policy_gateway_url, hold_s=0), _context(), _call()
-    older = await gate.decide(ctx, call)
-    await gate._submit(
-        ctx, call, Principal(id=ctx.client.actor_id, kind=PrincipalKind.SERVICE), call.arguments
-    )
+    requester = Principal(id=ctx.client.actor_id, kind=PrincipalKind.SERVICE)
+    first = await gate.decide(ctx, call)
+
+    with pytest.raises(UniqueViolation):
+        await gate._submit(ctx, call, requester, _payload(call))
     await _approver(policy_approver_url).resolve(
-        UUID(older.approval_id or ""), decision=Decision.APPROVE, principal=HUMAN
+        UUID(first.approval_id or ""), decision=Decision.APPROVE, principal=HUMAN
     )
+    with pytest.raises(UniqueViolation):  # approved but not yet used is still open
+        await gate._submit(ctx, call, requester, _payload(call))
+    assert (await gate.decide(ctx, call)).outcome is ApprovalOutcome.APPROVED  # now consumed
 
-    retried = await gate.decide(ctx, call)
+    again = await gate._submit(ctx, call, requester, _payload(call))
+    assert again is not None, "a used approval is closed: a new intent may ask"
 
-    assert retried.outcome is ApprovalOutcome.APPROVED
-    assert retried.approval_id == older.approval_id
+
+async def test_simultaneous_identical_calls_share_one_pending_request(
+    policy: None, policy_gateway_url: str, policy_approver_url: str
+) -> None:
+    gate, ctx, call = _gate(policy_gateway_url, hold_s=0), _context(), _call()
+    ids: list[str | None] = []
+
+    async def ask() -> None:
+        ids.append((await gate.decide(ctx, call)).approval_id)
+
+    async with anyio.create_task_group() as tasks:
+        for _ in range(6):
+            tasks.start_soon(ask)
+
+    assert len(set(ids)) == 1, "one request, not six"
+    assert None not in ids
+    assert len(await _approver(policy_approver_url).list_pending(HUMAN)) == 1
+
+
+async def test_an_approver_cannot_get_two_runs_from_one_intent(
+    policy: None, policy_gateway_url: str, policy_approver_url: str
+) -> None:
+    """Six identical calls, then one approval: exactly one of them runs, and the next identical call
+    is a new intent that asks again."""
+    gate, ctx, call = _gate(policy_gateway_url, hold_s=0), _context(), _call()
+    first = await gate.decide(ctx, call)
+    await _approver(policy_approver_url).resolve(
+        UUID(first.approval_id or ""), decision=Decision.APPROVE, principal=HUMAN
+    )
+    outcomes = []
+
+    async def retry() -> None:
+        outcomes.append((await gate.decide(ctx, call)).outcome)
+
+    async with anyio.create_task_group() as tasks:
+        for _ in range(6):
+            tasks.start_soon(retry)
+
+    assert outcomes.count(ApprovalOutcome.APPROVED) == 1
+    after = await gate.decide(ctx, call)
+    assert after.outcome is ApprovalOutcome.PENDING
+    assert after.approval_id != first.approval_id
+
+
+async def test_a_repeat_that_differs_in_role_or_delegates_is_a_conflict_not_a_reuse(
+    policy: None, policy_gateway_url: str, policy_approver_url: str
+) -> None:
+    ctx, call = _context(), _call()
+    first = await _gate(policy_gateway_url, hold_s=0).decide(ctx, call)
+    assert first.outcome is ApprovalOutcome.PENDING
+
+    other_role = _gate(
+        policy_gateway_url, hold_s=0, roles_by_action={"tickets__change_status": "senior"}
+    )
+    other_lifetime = _gate(policy_gateway_url, hold_s=0, ttl_s=60)
+
+    for gate in (other_role, other_lifetime):
+        decision = await gate.decide(ctx, call)
+        assert decision.outcome is ApprovalOutcome.UNAVAILABLE, "refused, and nothing reused"
+    stored = await _approver(policy_approver_url).get(UUID(first.approval_id or ""))
+    assert stored.status.value == "pending"
+
+    # A request with delegates, made by something other than the gateway (it never passes any).
+    database = BoundedPostgresDatabase(SecretStr(policy_url(policy_gateway_url)), concurrency=2)
+    queue = approval_queue_on(database)
+    requester = Principal(id=_context().client.actor_id, kind=PrincipalKind.SERVICE)
+    second_ctx = _context()
+    payload = _payload(call)
+    await queue.submit(
+        action=call.exposed_name,
+        summary="s",
+        payload=payload,
+        requested_by=Principal(id=second_ctx.client.actor_id, kind=PrincipalKind.SERVICE),
+        required_role="approver",
+        ttl_seconds=1800,
+        delegates=["client:someone-else"],
+    )
+    assert requester.id != second_ctx.client.actor_id
+    decision = await _gate(policy_gateway_url, hold_s=0).decide(second_ctx, call)
+    assert decision.outcome is ApprovalOutcome.UNAVAILABLE
+
+
+async def test_one_client_cannot_fill_every_wait_slot(
+    policy: None, policy_gateway_url: str, policy_approver_url: str
+) -> None:
+    gate = _gate(policy_gateway_url, hold_s=2, poll_s=0.1, max_holds=6, max_holds_per_client=2)
+    greedy = _context(name="greedy-bot")
+    polite = _context(name="polite-bot")
+    results: dict[str, tuple[ApprovalOutcome, float]] = {}
+
+    async def ask(label: str, ctx: CallContext, n: int) -> None:
+        started = anyio.current_time()
+        decision = await gate.decide(ctx, _call(ticket_id=f"TKT-{label}-{n}", status="closed"))
+        results[f"{label}{n}"] = (decision.outcome, anyio.current_time() - started)
+
+    async with anyio.create_task_group() as tasks:
+        for n in range(4):  # four different writes at once from one client: two may wait
+            tasks.start_soon(ask, "g", greedy, n)
+        await anyio.sleep(0.3)
+        tasks.start_soon(ask, "p", polite, 0)  # another client still gets a slot
+
+    waited = sorted(label for label, (_, seconds) in results.items() if seconds >= 1.5)
+    quick = sorted(label for label, (_, seconds) in results.items() if seconds < 1.5)
+    assert len([label for label in waited if label.startswith("g")]) == 2
+    assert "p0" in waited, "the other client waited like any other: it was not locked out"
+    assert len([label for label in quick if label.startswith("g")]) == 2
 
 
 async def test_the_gateway_inserts_only_the_arguments_and_cannot_choose_their_retention(
@@ -473,3 +585,25 @@ async def test_an_approval_that_expired_before_the_retry_is_not_used(
         ApprovalOutcome.EXPIRED,
         ApprovalOutcome.UNAVAILABLE,
     }
+
+
+async def test_an_approval_does_not_carry_over_to_another_upstream(
+    policy: None, policy_gateway_url: str, policy_approver_url: str
+) -> None:
+    """The payload a person approves names the upstream the arguments go to. The same arguments
+    sent to a repointed upstream are a different request, asked afresh, never approved by this."""
+    gate, ctx = _gate(policy_gateway_url, hold_s=0), _context()
+    before = _call(upstream_identity="aaaa")
+    after = _call(upstream_identity="bbbb")
+    pending = await gate.decide(ctx, before)
+    await _approver(policy_approver_url).resolve(
+        UUID(pending.approval_id or ""), decision=Decision.APPROVE, principal=HUMAN
+    )
+
+    moved = await gate.decide(ctx, after)
+
+    assert moved.outcome is ApprovalOutcome.PENDING, "a new request for the new upstream"
+    assert moved.approval_id != pending.approval_id
+    assert (await gate.decide(ctx, before)).outcome is ApprovalOutcome.APPROVED, (
+        "the old one is intact"
+    )

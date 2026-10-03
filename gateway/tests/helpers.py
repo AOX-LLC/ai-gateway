@@ -145,6 +145,8 @@ def run_gateway(
         ),
         policy_database_url=SecretStr(policy_database_url) if policy_database_url else None,
         telemetry_flush_interval_s=0.05,
+        catalog_refresh_s=0.3,
+        catalog_registry_poll_s=0.3,
         **{f"approval_{key}": value for key, value in (approvals or {}).items()},  # type: ignore[arg-type]
     )
     with serve_in_thread(create_app(settings, events)) as base_url:

@@ -69,11 +69,12 @@ async def _as(url: str) -> psycopg.AsyncConnection:
     return await psycopg.AsyncConnection.connect(policy_url(url), autocommit=True)
 
 
-async def _pending(gateway_url: str, ttl_seconds: int = 300) -> object:
+async def _pending(gateway_url: str, ttl_seconds: int = 300, *, other: bool = False) -> object:
     return await _queue(gateway_url).submit(
         action=ACTION,
         summary="close a ticket",
-        payload=PAYLOAD,
+        # `other`: a request of its own, since there is one open request per client, tool and payload
+        payload={**PAYLOAD, "n": str(uuid4())} if other else PAYLOAD,
         requested_by=CLIENT,
         required_role="approver",
         ttl_seconds=ttl_seconds,
@@ -479,7 +480,7 @@ async def test_the_approver_cannot_decide_a_request_twice_or_after_it_expired(
             str(decided.id),  # type: ignore[attr-defined]
         )
 
-    expired = await _pending(policy_gateway_url, ttl_seconds=1)
+    expired = await _pending(policy_gateway_url, ttl_seconds=1, other=True)
     await anyio.sleep(1.2)
     with pytest.raises(_REFUSED):
         await _run(

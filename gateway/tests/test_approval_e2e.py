@@ -243,3 +243,33 @@ async def test_nothing_waits_in_a_gateway_that_was_never_asked(
     async with connect(gateway.url, ops_token.plaintext) as ops:
         with anyio.fail_after(5):
             await ops.call_tool("echo__say", {"text": "read"})
+
+
+async def test_a_registry_change_after_approval_invalidates_it(
+    gateway: RunningGateway,
+    ops_token: IssuedToken,
+    person: Approvals,
+    admin_registry: AdminRegistry,
+    echo_url: str,
+) -> None:
+    """Approve, repoint the namespace at another address, retry the same call: the approval
+    was for the old upstream, so the call is asked for afresh and nothing is forwarded."""
+    async with connect(gateway.url, ops_token.plaintext) as ops:
+        waiting = await ops.call_tool("echo__shout", {"text": "move the namespace"})
+        assert waiting.structured_content is not None
+        first_id = waiting.structured_content["approval_id"]
+        await person.decide(UUID(first_id), "aiden", Decision.APPROVE, None)
+
+        # The same server at another address (a query string the server ignores): still
+        # reachable, but not the upstream that was approved.
+        await admin_registry.upsert_upstream("echo", f"{echo_url}?moved=1", 2000, 5000)
+        await anyio.sleep(1.5)  # the gateway looks for a changed upstream every 0.3 s here
+        for _ in range(50):  # and for it to be back: it is refreshed before it is offered again
+            if "echo__shout" in [tool.name for tool in (await ops.list_tools()).tools]:
+                break
+            await anyio.sleep(0.2)
+        retried = await ops.call_tool("echo__shout", {"text": "move the namespace"})
+
+    assert retried.is_error is True, "the old approval did not cover the repointed upstream"
+    assert retried.structured_content is not None
+    assert retried.structured_content["approval_id"] != first_id

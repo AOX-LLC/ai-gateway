@@ -49,11 +49,22 @@ def render(request: ApprovalRequest, arguments_json: str | None) -> Rendered:
         raise ApprovalNotShowableError("the stored arguments are not JSON: refusing") from None
     if not isinstance(arguments, dict):
         raise ApprovalNotShowableError("the stored arguments are not an object: refusing")
+    if (
+        set(arguments) != {"arguments", "upstream"}
+        or not isinstance(arguments["arguments"], dict)
+        or not isinstance(arguments["upstream"], str)
+    ):
+        raise ApprovalNotShowableError("the stored payload is not arguments and upstream: refusing")
 
     try:
-        shown = json.dumps(arguments, indent=2, sort_keys=True, ensure_ascii=True, allow_nan=False)
-        # The text on screen, read back, must be what was asked for.
-        shown_hash = approval_payload_hash(request.action, json.loads(shown))
+        shown = json.dumps(
+            arguments["arguments"], indent=2, sort_keys=True, ensure_ascii=True, allow_nan=False
+        )
+        # What is on screen (the arguments, and the upstream line below), read back, must be
+        # exactly what was asked for: the hash covers both.
+        shown_hash = approval_payload_hash(
+            request.action, {"arguments": json.loads(shown), "upstream": arguments["upstream"]}
+        )
     except (ValueError, RecursionError):
         raise ApprovalNotShowableError("the stored arguments cannot be shown: refusing") from None
     if shown_hash != request.payload_sha256:
@@ -61,7 +72,9 @@ def render(request: ApprovalRequest, arguments_json: str | None) -> Rendered:
             "the stored arguments do not match the request's hash: refusing"
         )
     suspicious = [
-        path for path, text in _strings(arguments) if printable(text) != text or not text.isascii()
+        path
+        for path, text in _strings(arguments["arguments"])
+        if printable(text) != text or not text.isascii()
     ]
     lines = [
         f"request    {request.id}",
@@ -70,7 +83,8 @@ def render(request: ApprovalRequest, arguments_json: str | None) -> Rendered:
         f"summary    {printable(request.summary, 300)}",
         f"asked at   {request.created_at.isoformat()}",
         f"expires    {request.expires_at.isoformat()}",
-        f"hash       {request.payload_sha256[:16]}... verified against the arguments below",
+        f"upstream   {printable(arguments['upstream'], 64)}",
+        f"hash       {request.payload_sha256[:16]}... verified against the upstream and arguments",
         "arguments",
         *(f"  {line}" for line in shown.splitlines()),
     ]

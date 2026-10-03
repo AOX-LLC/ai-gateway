@@ -151,6 +151,12 @@ CREATE INDEX IF NOT EXISTS policy_approvals_find
 ON {APPROVALS_TABLE} (requested_by, payload_sha256, created_at DESC)
 """  # the gate looks a request up by client and argument hash on every write
 
+_ONE_OPEN_REQUEST = f"""
+CREATE UNIQUE INDEX IF NOT EXISTS policy_approvals_one_open
+ON {APPROVALS_TABLE} (requested_by, action, payload_sha256)
+WHERE status IN ('pending', 'approved')
+"""  # at most one open request per client, tool and payload: REPLACE WITH AGENT-CORE A5'S INDEX
+
 _PURGE_FUNCTION = f"""
 CREATE OR REPLACE FUNCTION {ARGUMENTS_PURGE_FUNCTION}() RETURNS bigint
 LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
@@ -193,6 +199,7 @@ async def _ensure_approval_tables(connection: AsyncConnection) -> None:
             f"REVOKE ALL ON FUNCTION {ARGUMENTS_PURGE_FUNCTION}() FROM PUBLIC".encode()
         )
         await connection.execute(_FIND_INDEX.encode())
+        await connection.execute(_ONE_OPEN_REQUEST.encode())
         await connection.execute(_DASHBOARD_VIEW.encode())
         # The dashboard's reader sees the view and nothing else in this schema. If its role does
         # not exist yet (telemetry-setup runs first in Compose), there is nothing to grant.

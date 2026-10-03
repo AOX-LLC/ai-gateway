@@ -31,6 +31,7 @@ from aox_agent_core.approvals import (
     approval_payload_hash,
 )
 from aox_agent_core.errors import AgentCoreError, ApprovalExpiredError
+from psycopg.errors import UniqueViolation
 
 from ai_gateway.pipeline.types import CallContext, ToolCall
 from ai_gateway.policy import ARGUMENTS_PURGE_FUNCTION, SCHEMA
@@ -45,6 +46,8 @@ HOLD_S = 45.0
 POLL_S = 1.0
 MAX_HOLDS = 16
 """Calls held at once. Past it a call is answered "pending" at once and the client retries."""
+MAX_HOLDS_PER_CLIENT = 4
+"""Of those, how many one client may hold: one client cannot fill every wait slot."""
 MAX_ARGUMENT_BYTES = 65_536
 PURGE_EVERY_S = 3600.0
 EXPIRE_EVERY_S = 60.0
@@ -52,6 +55,16 @@ EXPIRE_EVERY_S = 60.0
 
 def _now_text() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+class ApprovalConflictError(Exception):
+    """An open request matches this call's requester, tool and payload but not its role, lifetime
+    or delegates: it is not reused, and nothing is approved."""
+
+
+def _payload(call: ToolCall) -> dict[str, Any]:
+    """What a person approves, and what is hashed: the arguments and which upstream they go to."""
+    return {"arguments": call.arguments, "upstream": call.upstream_identity}
 
 
 class PostgresApprovalGate:
@@ -63,6 +76,7 @@ class PostgresApprovalGate:
         hold_s: float = HOLD_S,
         poll_s: float = POLL_S,
         max_holds: int = MAX_HOLDS,
+        max_holds_per_client: int = MAX_HOLDS_PER_CLIENT,
         roles_by_action: Mapping[str, str] | None = None,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
@@ -72,8 +86,9 @@ class PostgresApprovalGate:
         self._hold_s = hold_s
         self._poll_s = poll_s
         self._max_holds = max_holds
+        self._max_holds_per_client = max_holds_per_client
         self._clock = clock or (lambda: datetime.now(UTC))
-        self._holding = 0
+        self._holding: dict[str, int] = {}
         self._roles_by_action = dict(roles_by_action or {})
         """The role a person must hold to decide each write. The gateway asks only for a write that
         is listed, and asks for exactly that role: the approver's side reads the same list."""
@@ -92,25 +107,28 @@ class PostgresApprovalGate:
 
     async def _decide(self, ctx: CallContext, call: ToolCall) -> ApprovalDecision:
         requester = Principal(id=ctx.client.actor_id, kind=PrincipalKind.SERVICE)
-        arguments = call.arguments
-        payload_hash = approval_payload_hash(call.exposed_name, arguments)
-        request = await self._find(requester.id, payload_hash)
+        payload = _payload(call)
+        payload_hash = approval_payload_hash(call.exposed_name, payload)
+        request = await self._find_or_submit(ctx, call, requester, payload, payload_hash)
         if request is None:
-            request = await self._submit(ctx, call, requester, arguments)
-            if request is None:
-                return ApprovalDecision(ApprovalOutcome.UNAVAILABLE)
+            return ApprovalDecision(ApprovalOutcome.UNAVAILABLE)
         approval_id = str(request.id)
 
-        holding = False
-        if request.status is ApprovalStatus.PENDING and self._holding < self._max_holds:
-            self._holding += 1
-            holding = True
+        holding = (
+            request.status is ApprovalStatus.PENDING
+            and sum(self._holding.values()) < self._max_holds
+            and self._holding.get(requester.id, 0) < self._max_holds_per_client
+        )
+        if holding:
+            self._holding[requester.id] = self._holding.get(requester.id, 0) + 1
         try:
             if holding:
                 request = await self._hold(request)
         finally:
             if holding:
-                self._holding -= 1
+                self._holding[requester.id] -= 1
+                if not self._holding[requester.id]:
+                    del self._holding[requester.id]
 
         if request.status is ApprovalStatus.REJECTED:
             return ApprovalDecision(ApprovalOutcome.REJECTED, approval_id)
@@ -122,7 +140,7 @@ class PostgresApprovalGate:
             return ApprovalDecision(ApprovalOutcome.EXPIRED, approval_id)
         if request.status is not ApprovalStatus.APPROVED:
             return ApprovalDecision(ApprovalOutcome.UNAVAILABLE, approval_id)
-        return await self._use(request, call, requester, arguments)
+        return await self._use(request, call, requester, payload)
 
     async def expire_due(self, principal: Principal) -> int:
         return await self._queue.expire_due(principal=principal)
@@ -142,7 +160,7 @@ class PostgresApprovalGate:
         request: ApprovalRequest,
         call: ToolCall,
         requester: Principal,
-        arguments: dict[str, Any],
+        payload: dict[str, Any],
     ) -> ApprovalDecision:
         approval_id = str(request.id)
         # The queue checks the tool, the arguments and the requester; checking whose request it was
@@ -152,7 +170,7 @@ class PostgresApprovalGate:
             return ApprovalDecision(ApprovalOutcome.UNAVAILABLE, approval_id)
         try:
             await self._queue.consume(
-                request.id, action=call.exposed_name, payload=arguments, principal=requester
+                request.id, action=call.exposed_name, payload=payload, principal=requester
             )
         except ApprovalExpiredError:
             return ApprovalDecision(ApprovalOutcome.EXPIRED, approval_id)
@@ -161,6 +179,47 @@ class PostgresApprovalGate:
             logger.warning("approval %s not used: %s", approval_id, type(error).__name__)
             return ApprovalDecision(ApprovalOutcome.UNAVAILABLE, approval_id)
         return ApprovalDecision(ApprovalOutcome.APPROVED, approval_id)
+
+    async def _find_or_submit(
+        self,
+        ctx: CallContext,
+        call: ToolCall,
+        requester: Principal,
+        payload: dict[str, Any],
+        payload_hash: str,
+    ) -> ApprovalRequest | None:
+        """This call's open request, or a new one; identical concurrent calls share one.
+
+        The sharing is the database's, not a check followed by an insert: a partial unique index on
+        (requester, action, payload hash) over pending and approved requests (`setup.py`) makes the
+        second of two simultaneous submissions fail, and it then finds the first's request.
+        REPLACE WITH AGENT-CORE A5'S INDEX, which enforces the same rule in the library.
+
+        A repeat that matches the requester, tool and payload but differs in role, lifetime or
+        delegates is a conflict, not a reuse (ApprovalConflictError)."""
+        for _ in range(3):
+            request = await self._find(requester.id, payload_hash)
+            if request is not None:
+                self._same_intent(call, request)
+                return request
+            try:
+                return await self._submit(ctx, call, requester, payload)
+            except UniqueViolation:
+                # An open request for this intent exists: the next find returns it. If it is only
+                # past its lifetime (stored as pending until the sweep), store that and try again.
+                await self.expire_due(Principal(id="service:gateway", kind=PrincipalKind.SERVICE))
+        raise ApprovalConflictError("an open request for this call could be neither found nor made")
+
+    def _same_intent(self, call: ToolCall, request: ApprovalRequest) -> None:
+        lifetime = (request.expires_at - request.created_at).total_seconds()
+        if (
+            request.required_role != self._roles_by_action.get(call.exposed_name)
+            or request.delegates
+            or lifetime != self._ttl_s
+        ):
+            raise ApprovalConflictError(
+                f"request {request.id} is for this call but differs in role, lifetime or delegates"
+            )
 
     async def _find(self, requested_by: str, payload_hash: str) -> ApprovalRequest | None:
         """This client's newest unexpired request for this tool and these arguments that is still
@@ -183,9 +242,9 @@ class PostgresApprovalGate:
         return await self._queue.get(UUID(str(rows[0][0])))
 
     async def _submit(
-        self, ctx: CallContext, call: ToolCall, requester: Principal, arguments: dict[str, Any]
+        self, ctx: CallContext, call: ToolCall, requester: Principal, payload: dict[str, Any]
     ) -> ApprovalRequest | None:
-        text = json.dumps(arguments, sort_keys=True, separators=(",", ":"))
+        text = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         if len(text.encode()) > MAX_ARGUMENT_BYTES:
             logger.error("approval for request %s refused: arguments too large", ctx.request_id)
             return None
@@ -199,7 +258,7 @@ class PostgresApprovalGate:
         request = await self._queue.submit(
             action=call.exposed_name,
             summary=printable(f"{call.exposed_name} for client {ctx.client.name}", 500),
-            payload=arguments,
+            payload=payload,
             requested_by=requester,
             required_role=role,
             ttl_seconds=self._ttl_s,

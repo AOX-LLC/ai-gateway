@@ -26,13 +26,23 @@ ACTION = "tickets__change_status"
 ESCAPES = "\x1b[2J\x1b[1;31mAPPROVED BY SECURITY\x1b[0m\x1b]0;owned\x07‮\r"
 
 
+UPSTREAM = "0123456789abcdef0123456789abcdef"
+
+
+def _stored(arguments: Mapping[str, Any], upstream: str = UPSTREAM) -> str:
+    """What the gateway stores for the approver: the arguments and the upstream they go to."""
+    return json.dumps({"arguments": arguments, "upstream": upstream})
+
+
 def _request(arguments: Mapping[str, Any], **changes: object) -> ApprovalRequest:
     now = datetime.now(UTC)
     values: dict[str, object] = {
         "id": uuid4(),
         "action": ACTION,
         "summary": "tickets__change_status for client harborline-ops-bot",
-        "payload_sha256": approval_payload_hash(ACTION, arguments),
+        "payload_sha256": approval_payload_hash(
+            ACTION, {"arguments": dict(arguments), "upstream": UPSTREAM}
+        ),
         "requested_by": f"client:{uuid4()}",
         "required_role": "approver",
         "created_at": now,
@@ -49,16 +59,17 @@ def test_what_is_shown_is_what_was_asked_for_and_says_it_was_checked() -> None:
     arguments = {"ticket_id": "TKT-000001", "status": "closed"}
     request = _request(arguments)
 
-    shown = render(request, '{"status": "closed", "ticket_id": "TKT-000001"}')
+    shown = render(request, _stored(arguments))
 
     assert "TKT-000001" in shown.text
+    assert UPSTREAM in shown.text, "the person sees which upstream it goes to"
     assert "verified" in shown.text
     assert shown.suspicious == []
 
 
 def test_control_characters_and_escape_sequences_in_the_arguments_are_shown_escaped() -> None:
     arguments = {"ticket_id": "TKT-000001", "note": ESCAPES}
-    shown = render(_request(arguments), json.dumps(arguments))
+    shown = render(_request(arguments), _stored(arguments))
 
     assert not {"\x1b", "\x07", "\r"} & set(shown.text)
     assert "‮" not in shown.text
@@ -70,7 +81,7 @@ def test_control_characters_and_escape_sequences_in_the_arguments_are_shown_esca
 def test_free_text_from_outside_is_cleaned_of_escape_sequences() -> None:
     arguments = {"a": 1}
     request = _request(arguments, summary="ok\x1b[2J" + "x" * 10, requested_by=f"client:{uuid4()}")
-    shown = render(request, json.dumps(arguments))
+    shown = render(request, _stored(arguments))
 
     assert "\x1b" not in shown.text
 
@@ -79,14 +90,42 @@ def test_free_text_from_outside_is_cleaned_of_escape_sequences() -> None:
     ("stored", "why"),
     [
         (None, "not stored"),
-        ('{"ticket_id": "TKT-000002", "status": "closed"}', "do not match"),
-        ('{"status": "closed"}', "do not match"),
+        (_stored({"ticket_id": "TKT-000002", "status": "closed"}), "do not match"),
+        (_stored({"status": "closed"}), "do not match"),
+        (
+            _stored({"ticket_id": "TKT-000001", "status": "closed"}, "another-upstream"),
+            "do not match",
+        ),
+        (
+            json.dumps({"arguments": {"ticket_id": "TKT-000001", "status": "closed"}}),
+            "not arguments",
+        ),
+        (json.dumps({"ticket_id": "TKT-000001", "status": "closed"}), "not arguments"),
         ("not json", "not JSON"),
         ("[1, 2]", "not an object"),
-        ('{"ticket_id": "TKT-000001", "status": NaN}', "cannot be shown"),
-        ('{"a": ' + "[" * 5000 + "]" * 5000 + "}", "not JSON|cannot be shown"),
+        (
+            '{"arguments": {"ticket_id": "TKT-000001", "status": NaN}, "upstream": "'
+            + UPSTREAM
+            + '"}',
+            "cannot be shown",
+        ),
+        (
+            '{"upstream": "x", "arguments": {"a": ' + "[" * 5000 + "]" * 5000 + "}}",
+            "not JSON|cannot be shown",
+        ),
     ],
-    ids=["not-stored", "other-ticket", "fewer-keys", "not-json", "a-list", "nan", "deep-nesting"],
+    ids=[
+        "not-stored",
+        "other-ticket",
+        "fewer-keys",
+        "other-upstream",
+        "no-upstream",
+        "bare-arguments",
+        "not-json",
+        "a-list",
+        "nan",
+        "deep-nesting",
+    ],
 )
 def test_a_request_whose_arguments_are_missing_or_different_is_never_shown_as_approvable(
     stored: str | None, why: str
@@ -109,7 +148,7 @@ async def people(policy: None, test_database_url: str) -> None:
         )
 
 
-async def _ask(url: str, **arguments: object) -> UUID:
+async def _ask(url: str, **arguments: Any) -> UUID:
     decision = await _gate(url).decide(_context(), _call(**arguments))
     assert decision.outcome is ApprovalOutcome.PENDING
     assert decision.approval_id
@@ -181,7 +220,7 @@ class TestAgainstTheDatabase:
         await _owner(
             test_database_url,
             "UPDATE approval_arguments SET arguments_json = %s WHERE request_id = %s",
-            json.dumps({"ticket_id": "TKT-999999", "status": "closed"}),
+            _stored({"ticket_id": "TKT-999999", "status": "closed"}),
             str(request_id),
         )
         approvals = Approvals(policy_approver_url, ROLES)
