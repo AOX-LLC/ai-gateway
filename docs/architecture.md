@@ -431,7 +431,7 @@ it or copy its code.
 
 | Seam | Phase 1 | Later |
 | --- | --- | --- |
-| `EventSink` (`seams/events.py`) | Writes JSON lines to the log and, with a telemetry database, queues rows for it. Events already follow the audit log's record shape: dotted action, actor id `client:<uuid>`, subject, a small payload with no secret-named keys. | Phase 3 appends them to agent-core's hash-chained audit log. Phase 3 must decide again whether writing the audit record is fail-open: today a record that cannot be written is dropped, which is wrong for an audit trail of `write` tools. |
+| `EventSink` (`seams/events.py`) | Writes JSON lines to the log and, with a telemetry database, queues rows for it. Events already follow the audit log's record shape: dotted action, actor id `client:<uuid>`, subject, a small payload with no secret-named keys. | The audit log is not an `EventSink`: it is a seam of its own on the pipeline, because it can refuse a write ([Audit](#audit-phase-3)). |
 | `ApprovalGate` (`seams/approvals.py`) | Protocol only | Phase 3's `approval` layer submits the call, waits for a person, and checks the approval matches the exact argument hash. |
 | Tracing | The OpenTelemetry SDK, configured when a telemetry database is set: the gateway's spans are queued and stored in Postgres (see [Telemetry](#telemetry-phase-5)). Span names are in `telemetry/attributes.py`. | Another processor, such as an OTLP exporter, can be added without changing the gateway. |
 
@@ -445,7 +445,95 @@ as a whole, only the gateway's own spans are kept with an allowlist of attribute
 free-text column is bounded by a CHECK. An end-to-end test sends a marker argument through the
 gateway and finds it in no column of any table.
 
-### Data model
+### Audit (Phase 3)
+
+Every tool call is recorded in agent-core's append-only, hash-chained audit log, in the `policy`
+schema. agent-core is pinned by tag (`v0.1.0a2`, in `gateway/pyproject.toml`); the log and, from
+Phase 3b, the approval queue are its. This is not telemetry. Telemetry is best effort and tells the
+dashboard what happened; the audit log is the record of what the gateway did, and a write is not
+made without it.
+
+### What is recorded
+
+- **Every `tools/call`**, whatever its outcome (forwarded, blocked by a layer, blocked because the
+  tool does not exist), as `gateway.tool_call`: the client, tool, namespace, effect, outcome, the
+  layer and code that blocked it, each layer's verdict, the argument **hash**, the pipeline's
+  fingerprint and integer microseconds. No argument, no result.
+- **Before a write is forwarded**, `gateway.call_started`: the client, tool and argument hash. It is
+  appended after every layer has passed the call and before the upstream is called.
+- **Gaps in the log itself**, as `audit.gap` (see below). Approvals (Phase 3b) write their own events
+  in the same transaction as the change they describe.
+- Not `tools/list`, and not each failed login: an attacker would choose how fast the log grows.
+  They stay in telemetry; a rate-limit trip (Phase 3c) is audited once.
+
+agent-core's payloads take no floats and refuse secret-shaped keys, and the log scans strings for
+secrets; durations are integer microseconds, and the records carry hashes and codes only. A test
+sends a marker argument that the echo tool also returns, and finds it in no record.
+
+### When the audit log cannot be written
+
+| Call | Policy | Why |
+| --- | --- | --- |
+| **A write** | **Refused.** The write-ahead record is appended and waited for (2 s at most). If that fails the call is blocked as `blocked_by: audit`, code `audit_unavailable`, with the generic policy message, and the upstream is never called. | A write with no record of its attempt is worse than a refused write. |
+| **A read** (and every call's decision record) | **Proceeds.** The record is queued and never waited for. | A read is never refused because the log is down. |
+
+The queue holds 5 000 records and drops the oldest when full, counting what it dropped. When the log
+is back, the first record written is an `audit.gap` stating how many records were lost, so the log
+itself says it is incomplete. `[safety] allow_unaudited_writes = true` in `config/pipeline.toml`
+lets writes through without a record (it logs a warning, and is off by default); the same
+applies when no audit database is configured at all. `/healthz` reports `audit: {status,
+queue_depth, dropped_total, rejected_total, written_total}` and never becomes unhealthy over it: a
+failing log already refuses writes, and a restart would not help.
+
+**How this coexists with telemetry.** They are two seams fed from the same decision record, and
+neither can block the other. Telemetry goes through the `EventSink`, awaited with a 2 s bound,
+always best effort. Audit is owned by the pipeline: the write-ahead step can refuse a write, and
+the rest is a queue. Telemetry down with audit up, audit down with telemetry up, and both down are
+all tested.
+
+**Cost.** agent-core appends one event per transaction and serialises appends: about 22 ms each
+(p95 about 100 ms) when measured here, so 50 concurrent appends took 3.2 s. The recorder therefore
+writes the queue in batches of up to 100 in one transaction, using `SQLAuditLog.append_in`: 100
+events took about 150 ms. Only the write-ahead record waits for its own transaction.
+
+### Roles, and the approval guard
+
+| Role | Can |
+| --- | --- |
+| `policy_gateway` (the gateway) | read and append the audit log; create approval requests (pending only) and consume an approved one |
+| `policy_approver` (a person's tool; Phase 3b) | read and append the audit log (it writes the audit event of a decision); decide a pending request |
+| `policy_auditor` | read the audit log, and nothing else |
+
+agent-core's installer gives one app role `UPDATE` on approvals, and the rule that only a human
+resolves one lives in library code. That role could therefore approve its own requests with plain
+SQL (confirmed). A guard trigger closes that: the gateway role may only move an *approved* request
+to *consumed*, the approver may only move a *pending* one to approved or rejected, and nobody may
+create a request that is already decided. The gateway cannot decide an approval by any route,
+whatever its code does. `gateway-admin policy-setup` installs agent-core's tables once, for a
+scratch role that cannot log in (so no real role holds a grant before its guard exists), applies the
+grants and the guard in one transaction, guard first, and is safe to repeat and to run twice at
+once. The audit table's own protections are agent-core's: triggers that refuse `UPDATE`, `DELETE`
+and `TRUNCATE` (the owner included), and a check that the connecting role cannot do any of them.
+
+### Tamper evidence
+
+The hash chain detects an edit, but whoever can rewrite rows can rebuild every hash after it, and a
+test does exactly that as the database owner: the chain still verifies. Only a head kept somewhere
+the log's writers cannot reach shows the rewrite.
+
+- `gateway-admin audit-anchor --file FILE` appends the chain's head (its sequence number and hash) to
+  a file outside the database. It first verifies the chain and every earlier anchor, and refuses to
+  anchor a log that fails them, so an anchor can never make a rewrite look like the truth.
+- `gateway-admin audit-verify --anchors FILE` walks the chain, then checks every anchor against it:
+  a rewritten record, a log cut short, and two anchors that disagree about one record all fail.
+
+Both run as `policy_auditor` (`POLICY_AUDITOR_DATABASE_URL`). Keep the anchor file on a different
+host, or at least a different account, from the database, and take an anchor on a schedule (cron is
+enough): an anchor protects what came before it. Verifying 381 records took about 30 ms, so a
+million would take about a minute and a half. Signed anchors or a timestamping service are not worth
+it at this size.
+
+## Data model
 
 | Table | One row per | Holds |
 | --- | --- | --- |
@@ -585,7 +673,8 @@ and screenshots.
 | `upstream_servers` | namespace, URL, timeouts, the *name* of an environment variable holding its credential (never the value) |
 | `tool_policies` | namespace, upstream tool name, `effect` (`read` or `write`), notes, when it was reviewed |
 
-The `telemetry` schema is described under [Telemetry](#telemetry-phase-5).
+The `telemetry` schema is described under [Telemetry](#telemetry-phase-5), and the `policy` schema
+(agent-core's `agent_core_audit` and `agent_core_approvals` tables) under [Audit](#audit-phase-3).
 
 ### Database roles
 
@@ -594,6 +683,8 @@ The `telemetry` schema is described under [Telemetry](#telemetry-phase-5).
 - **`gateway_app`:** the gateway itself connects as `gateway_app`. It may read the
   registry and update `client_tokens.last_used_at`, and nothing else. It has no access to
   any server's schema.
+- **`policy_gateway`, `policy_approver`, `policy_auditor`:** see
+  [Roles, and the approval guard](#roles-and-the-approval-guard).
 - **`telemetry_writer`, `telemetry_reader`, `telemetry_purger`:** see
   [Roles, and what the dashboard can see](#roles-and-what-the-dashboard-can-see).
 - **`ticketing_app`, `crm_app`, `handbook_app`:** each server connects as its own role,
@@ -635,6 +726,7 @@ itself).
 | `version` | The `ai-gateway` package version |
 | `schema_version` | The newest applied migration of the registry, zero-padded (`"0004"`). Re-read at most every 30 s by one caller at a time, with the read bounded to 2 s; `null` if it cannot be read in time |
 | `uptime_s` | Seconds since the process started |
+| `audit` | The gateway only: `{status, queue_depth, dropped_total, rejected_total, written_total}`; `status` is `ok`, `degraded` while writes fail, or `disabled` (no audit database). It never makes the gateway unhealthy. |
 | `telemetry` | The gateway only: `{status, queue_depth, dropped_total, rejected_total, written_total}`; `status` is `ok`, `degraded` while writes fail, or `disabled`. It never makes the gateway unhealthy. |
 
 ## Ports
@@ -655,7 +747,7 @@ Compose has two networks:
 | Network | Kind | Members |
 | --- | --- | --- |
 | `edge` | ordinary bridge | the gateway and PostgreSQL, the two services that publish a port |
-| `backend` | `internal: true` | the three MCP servers, `servers-setup`, `telemetry-setup`, `telemetry-purge`, `migrate`, `admin`, `direct-check`, the test upstream, and also the gateway and PostgreSQL |
+| `backend` | `internal: true` | the three MCP servers, `servers-setup`, `telemetry-setup`, `telemetry-purge`, `policy-setup`, `migrate`, `admin`, `direct-check`, the test upstream, and also the gateway and PostgreSQL |
 
 Docker gives an internal network no route to the outside world and publishes no port from
 it. That alone is not enough: Docker filters traffic that is forwarded off the network, not
