@@ -23,6 +23,7 @@ from pydantic import SecretStr
 from ai_gateway.admin.cli import _audit_anchor, _audit_verify
 from ai_gateway.policy import policy_url
 from ai_gateway.policy.anchors import (
+    Anchor,
     AnchorFileError,
     append_anchor,
     read_anchors,
@@ -113,6 +114,32 @@ def test_an_anchor_file_that_is_a_symlink_is_refused(tmp_path: Path) -> None:
 
     with pytest.raises(OSError):  # noqa: PT011 - ELOOP, from O_NOFOLLOW
         append_anchor(link, AuditHead(seq=1, record_hash="a" * 64))
+
+
+def test_an_anchor_file_that_others_can_write_is_refused(tmp_path: Path) -> None:
+    path = tmp_path / "anchors.jsonl"
+    append_anchor(path, AuditHead(seq=1, record_hash="a" * 64))
+    path.chmod(0o666)
+
+    with pytest.raises(AnchorFileError, match="written by others"):
+        read_anchors(path)
+
+
+def test_an_anchor_file_that_is_a_symlink_is_not_read(tmp_path: Path) -> None:
+    real = tmp_path / "real.jsonl"
+    append_anchor(real, AuditHead(seq=1, record_hash="a" * 64))
+    link = tmp_path / "anchors.jsonl"
+    os.symlink(real, link)
+
+    with pytest.raises(AnchorFileError, match="cannot read"):
+        read_anchors(link)
+
+
+async def test_an_anchor_of_the_empty_log_must_hold_the_genesis_hash(
+    policy: None, policy_auditor_url: str
+) -> None:
+    with pytest.raises(AuditIntegrityError, match="genesis"):
+        await verify_with_anchors(_log(policy_auditor_url), [Anchor(0, "f" * 64, "now")])
 
 
 def test_a_file_that_is_not_an_anchor_file_is_refused(tmp_path: Path) -> None:

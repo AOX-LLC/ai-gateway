@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from aox_agent_core.audit import AuditHead, SQLAuditLog
+from aox_agent_core.audit import GENESIS_HASH, AuditHead, SQLAuditLog
 from aox_agent_core.errors import AuditIntegrityError
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -50,8 +50,15 @@ def append_anchor(path: Path, head: AuditHead, *, now: datetime | None = None) -
 
 
 def read_anchors(path: Path) -> list[Anchor]:
+    """The anchors in the file. A symlink is refused, as it is when appending, and so is a file
+    that others can write to: whoever can edit it can delete the anchors that would show a
+    rewrite."""
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(descriptor, encoding="utf-8") as handle:
+            if os.fstat(handle.fileno()).st_mode & 0o022:
+                raise AnchorFileError(f"{path} can be written by others; chmod go-w it")
+            lines = handle.read().splitlines()
     except OSError as error:
         raise AnchorFileError(f"cannot read the anchor file {path}: {error.strerror}") from error
     anchors = []
@@ -80,6 +87,9 @@ async def verify_with_anchors(log: SQLAuditLog, anchors: list[Anchor]) -> AuditH
     Raises AuditIntegrityError if a record's hash or link is wrong, if the log is shorter than an
     anchor says, or if the record at an anchor's sequence number is not the one that was
     anchored."""
+    for anchor in anchors:
+        if anchor.seq == 0 and anchor.record_hash != GENESIS_HASH:
+            raise AuditIntegrityError("an anchor of the empty log does not hold the genesis hash")
     taken = [anchor for anchor in anchors if anchor.seq > 0]
     wanted: dict[int, list[Anchor]] = defaultdict(list)
     for anchor in taken:

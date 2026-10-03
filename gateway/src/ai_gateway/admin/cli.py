@@ -15,7 +15,7 @@ from uuid import UUID
 
 import anyio
 from aox_agent_core.audit import SQLAuditLog
-from aox_agent_core.errors import AuditIntegrityError
+from aox_agent_core.errors import AuditIntegrityError, ConfigError
 from aox_agent_core.storage import open_database
 from psycopg import AsyncConnection
 from pydantic import SecretStr
@@ -96,7 +96,14 @@ def main(argv: Sequence[str] | None = None) -> None:
         sys.exit(f"gateway-admin: {database_env} is not set")
     try:
         anyio.run(args.handler, database_url, args)
-    except (AdminError, ClientNotFoundError, AnchorFileError, AuditIntegrityError) as error:
+    except (
+        AdminError,
+        ClientNotFoundError,
+        AnchorFileError,
+        AuditIntegrityError,
+        ConfigError,
+        OSError,
+    ) as error:
         sys.exit(f"gateway-admin: {error}")
 
 
@@ -275,9 +282,14 @@ async def _audit_anchor(database_url: str, args: argparse.Namespace) -> None:
     log = _audit_log(database_url)
     # Never anchor a log that fails what was anchored before: the anchor would make a rewrite look
     # like the truth. (With no anchor file yet, only the chain is checked.)
-    existing = read_anchors(args.file) if args.file.exists() else []
-    await verify_with_anchors(log, existing)
-    anchor = append_anchor(args.file, await log.head())
+    try:
+        existing = read_anchors(args.file)
+    except AnchorFileError:
+        if args.file.exists() or args.file.is_symlink():
+            raise
+        existing = []  # no file yet: the first anchor
+    verified = await verify_with_anchors(log, existing)
+    anchor = append_anchor(args.file, verified)  # the head that was verified, not a fresh one
     print(f"anchored record {anchor.seq} ({anchor.record_hash[:12]}...) in {args.file}")
 
 
