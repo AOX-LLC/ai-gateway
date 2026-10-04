@@ -113,7 +113,7 @@ ceiling in `config/classifier.toml` applies.
 docker compose up -d --build --wait
 docker compose run --rm -T admin seed-demo > demo.json
 # a normal triage as the helper: one search (limit 5), one get_account, one create_ticket
-scripts/run_redteam_check.sh        # the acceptance test (needs LAB_AUTO_APPROVE=yes for the demo approver)
+LAB_AUTO_APPROVE=yes scripts/run_redteam_check.sh   # the acceptance test (the demo approver)
 ```
 
 The dashboard (http://127.0.0.1:4400) shows each of these calls, the layer that stopped any of them,

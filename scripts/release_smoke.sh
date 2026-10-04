@@ -7,9 +7,11 @@
 #
 # It uses its own Compose project (ai-gateway-smoke) on 04's ports, so the real stack must be down
 # (`docker compose ps` shows nothing), takes the shared Docker lock if you run it under `flock`, and
-# removes the stack, its volume and the clone when it ends. LAB_AUTO_APPROVE=yes is set for the
-# checks (the fictional demo stack only). Prints no secret.
+# removes the stack, its volume and the clone when it ends. The checks play the approver, which the
+# caller must allow by running this with LAB_AUTO_APPROVE=yes in front (the fictional demo stack only;
+# no script sets that switch itself). Prints no secret.
 set -euo pipefail
+[ "${LAB_AUTO_APPROVE:-}" = "yes" ] || { echo "release_smoke: run it with LAB_AUTO_APPROVE=yes in front" >&2; exit 2; }
 ROOT=$(git rev-parse --show-toplevel)
 SHA=$(git -C "$ROOT" rev-parse --verify "${1:-HEAD}^{commit}")
 WORK=$(mktemp -d)
@@ -33,7 +35,7 @@ echo "== build and start"
 docker compose up -d --build --wait
 scripts/check_image_has_no_restricted_text.sh harborline-servers
 echo "== the Harborline scenarios and the simulator"
-LAB_AUTO_APPROVE=yes RUNNER_TEMP="$WORK" scripts/run_harborline_check.sh
+RUNNER_TEMP="$WORK" scripts/run_harborline_check.sh
 echo "== the export-every-customer acceptance test"
-LAB_AUTO_APPROVE=yes scripts/run_redteam_check.sh
+scripts/run_redteam_check.sh
 echo "PASS  the release smoke test of ${SHA:0:12}"

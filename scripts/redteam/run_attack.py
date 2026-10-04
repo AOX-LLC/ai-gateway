@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Run an attack file against the running stack and judge it. TEST TOOLING for the fictional demo.
 
-    LAB_AUTO_APPROVE=yes GATEWAY_TOKEN=... POLICY_APPROVER_DATABASE_URL=... \\
+    GATEWAY_TOKEN=... POLICY_APPROVER_DATABASE_URL=... \\
         uv run scripts/redteam/run_attack.py scripts/redteam/attacks/export-every-customer.toml \\
         --mode enforce --approve-as <approver id>
+
+With --approve-as the demo approver is played by scripts/auto_approver.py, which needs the caller to
+have set LAB_AUTO_APPROVE to yes in the environment (nothing here sets it).
 
 `--mode` says how the gateway is configured, and so what to expect: `enforce` (every layer
 enforcing: every call goes as the attack's `enforce` ranges say, with the layer that stopped it

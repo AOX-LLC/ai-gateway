@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Sets up the verification stack for scripts/measure_memory_at_maxima.py: tokens, a demo approver, and
 # the gateway on the monitor pipeline (so the loads are not throttled). Run from the repository root
-# with COMPOSE_PROJECT_NAME=ai-gateway-verify and the stack up. Prints no secret.
+# with COMPOSE_PROJECT_NAME=ai-gateway-verify and the stack up, and LAB_AUTO_APPROVE=yes in front (it
+# plays the approver; no script sets that switch itself). Prints no secret.
 set -euo pipefail
+[ "${LAB_AUTO_APPROVE:-}" = "yes" ] || { echo "measure: run it with LAB_AUTO_APPROVE=yes in front" >&2; exit 2; }
 . "$(dirname "$0")/mask.sh"
 APPROVER_ID=""
 trap 'rm -f demo.json; [ -z "$APPROVER_ID" ] || docker compose run --rm -T admin approver-remove "$APPROVER_ID" >/dev/null 2>&1 || true; docker compose up -d --force-recreate --wait gateway >/dev/null 2>&1 || true' EXIT
@@ -25,7 +27,7 @@ login, password = quote(os.environ["LOGIN"], safe=""), quote(os.environ["PASSWOR
 print(urlunsplit(u._replace(netloc=f"{login}:{password}@{u.hostname}:{u.port}")))'
 )
 mask "$POLICY_APPROVER_DATABASE_URL"
-export POLICY_APPROVER_DATABASE_URL APPROVER_ID LAB_AUTO_APPROVE=yes
+export POLICY_APPROVER_DATABASE_URL APPROVER_ID
 GATEWAY_PIPELINE_FILE_IN_CONTAINER=/app/config/pipeline.monitor.toml \
   docker compose up -d --force-recreate --wait gateway >/dev/null
 sleep "${SETTLE_S:-10}"

@@ -18,6 +18,12 @@
 # and left on its default pipeline at the end.
 set -euo pipefail
 . "$(dirname "$0")/mask.sh"
+# The switch is the caller's to turn on (this script never sets it): run it with LAB_AUTO_APPROVE=yes in
+# front, or, in CI, from the one step that carries it.
+[ "${LAB_AUTO_APPROVE:-}" = "yes" ] || {
+  echo "run_redteam_check: this plays the approver on the fictional demo stack; run it with LAB_AUTO_APPROVE=yes in front" >&2
+  exit 2
+}
 APPROVER_ID=""
 restore_gateway() {
   docker compose up -d --force-recreate --wait gateway > /dev/null 2>&1 || true
@@ -63,7 +69,6 @@ settle() { wait_for_gateway; sleep "${SETTLE_S:-10}"; }
 
 ATTACK=scripts/redteam/attacks/export-every-customer.toml
 TRIAGE=scripts/redteam/attacks/normal-triage.toml
-export LAB_AUTO_APPROVE=yes
 
 echo "== run A: every layer enforcing =="
 docker compose up -d --force-recreate --wait gateway > /dev/null
