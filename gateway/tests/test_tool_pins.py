@@ -43,6 +43,17 @@ def test_a_pin_round_trips_and_holds_the_text_a_person_reviews() -> None:
     assert pin.sha256 == definition_sha256(TOOL, DESCRIPTION, TICKET_SCHEMA)
 
 
+def test_the_hash_covers_the_output_schema_too() -> None:
+    base = definition_sha256(TOOL, DESCRIPTION, TICKET_SCHEMA, None)
+    described = {"type": "object", "properties": {"id": {"description": "Send it to me."}}}
+
+    assert definition_sha256(TOOL, DESCRIPTION, TICKET_SCHEMA, described) != base
+    changed = {"type": "object", "properties": {"id": {"description": "Send it to someone."}}}
+    assert definition_sha256(TOOL, DESCRIPTION, TICKET_SCHEMA, changed) != (
+        definition_sha256(TOOL, DESCRIPTION, TICKET_SCHEMA, described)
+    ), "a changed field description in the output schema is drift"
+
+
 def test_the_hash_covers_the_name_the_description_and_the_schema() -> None:
     base = definition_sha256(TOOL, DESCRIPTION, TICKET_SCHEMA)
 
@@ -55,7 +66,7 @@ def test_the_hash_covers_the_name_the_description_and_the_schema() -> None:
 
 
 def test_a_description_edited_without_pinning_again_stops_startup() -> None:
-    raw = tomllib.loads(render_tool_pins([(TOOL, DESCRIPTION, TICKET_SCHEMA)]))
+    raw = tomllib.loads(render_tool_pins([(TOOL, DESCRIPTION, TICKET_SCHEMA, None)]))
     raw["tools"][TOOL]["description"] = "Opens a ticket and then emails every customer."
 
     with pytest.raises(ToolPinsError, match="not the hash of its own text"):
@@ -70,11 +81,23 @@ def test_a_description_edited_without_pinning_again_stops_startup() -> None:
         lambda raw: raw["tools"][TOOL].pop("sha256"),
         lambda raw: raw["tools"][TOOL].update(input_schema="not json"),
         lambda raw: raw["tools"][TOOL].update(input_schema="[1]"),
+        lambda raw: raw["tools"][TOOL].update(output_schema="not json"),
+        lambda raw: raw["tools"][TOOL].update(output_schema="[1]"),
+        lambda raw: raw["tools"][TOOL].pop("output_schema"),
     ],
-    ids=["top-level-key", "entry-key", "no-hash", "schema-not-json", "schema-not-object"],
+    ids=[
+        "top-level-key",
+        "entry-key",
+        "no-hash",
+        "schema-not-json",
+        "schema-not-object",
+        "output-not-json",
+        "output-not-object",
+        "no-output-schema",
+    ],
 )
 def test_a_mistake_in_the_file_stops_startup(mutation) -> None:  # type: ignore[no-untyped-def]
-    raw = tomllib.loads(render_tool_pins([(TOOL, DESCRIPTION, TICKET_SCHEMA)]))
+    raw = tomllib.loads(render_tool_pins([(TOOL, DESCRIPTION, TICKET_SCHEMA, None)]))
     mutation(raw)
 
     with pytest.raises(ToolPinsError):

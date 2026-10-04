@@ -56,7 +56,10 @@ class PinnedDescriptionsLayer(BaseLayer):
         kept = []
         for tool in tools:
             sha256 = definition_sha256(
-                tool.exposed_name, tool.tool.description, tool.tool.input_schema
+                tool.exposed_name,
+                tool.tool.description,
+                tool.tool.input_schema,
+                tool.tool.output_schema,
             )
             code = self._verdict_for(tool.exposed_name, sha256)
             if code is None:
@@ -69,7 +72,10 @@ class PinnedDescriptionsLayer(BaseLayer):
         if call.definition is None:
             return Deny(DenyCode.PIN_UNPINNED, POLICY_BLOCK_MESSAGE, score=1)
         sha256 = definition_sha256(
-            call.exposed_name, call.definition.description, call.definition.input_schema
+            call.exposed_name,
+            call.definition.description,
+            call.definition.input_schema,
+            call.definition.output_schema,
         )
         code = self._verdict_for(call.exposed_name, sha256)
         if code is None:

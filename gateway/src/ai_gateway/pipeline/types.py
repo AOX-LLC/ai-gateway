@@ -150,10 +150,17 @@ class ToolDefinition:
     description: str
     input_schema_json: str = field(repr=False)
     """Canonical JSON of the tool's input schema."""
+    output_schema_json: str = field(default="null", repr=False)
+    """Canonical JSON of the tool's output schema (`null` when it has none)."""
 
     @property
     def input_schema(self) -> dict[str, Any]:
         parsed: dict[str, Any] = json.loads(self.input_schema_json)
+        return parsed
+
+    @property
+    def output_schema(self) -> dict[str, Any] | None:
+        parsed: dict[str, Any] | None = json.loads(self.output_schema_json)
         return parsed
 
 

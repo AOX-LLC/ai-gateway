@@ -33,24 +33,37 @@ NAMESPACES: dict[str, Callable[[Any], StrictToolset]] = {
 }
 
 
+Definition = tuple[str, str | None, dict[str, Any], dict[str, Any] | None]
+
+
 def current_pins_text() -> str:
     """The pins file as the servers' own definitions would write it."""
-    definitions = []
+    definitions: list[Definition] = []
     for namespace, build in NAMESPACES.items():
         # The repositories are never called: only the tool definitions are read.
         for tool in build(None).tools():
-            definitions.append((f"{namespace}__{tool.name}", tool.description, tool.input_schema))
+            definitions.append(
+                (
+                    f"{namespace}__{tool.name}",
+                    tool.description,
+                    tool.input_schema,
+                    tool.output_schema,
+                )
+            )
     definitions += _echo_definitions()
     return render_tool_pins(definitions)
 
 
-def _echo_definitions() -> list[tuple[str, str | None, dict[str, Any]]]:
+def _echo_definitions() -> list[Definition]:
     """The test upstream's tools (the Compose `test` profile and the end-to-end check use it),
     pinned like the rest: an upstream that is registered but not pinned is hidden."""
 
-    async def listed() -> list[tuple[str, str | None, dict[str, Any]]]:
+    async def listed() -> list[Definition]:
         tools = await build_echo_server().list_tools()
-        return [(f"echo__{tool.name}", tool.description, dict(tool.input_schema)) for tool in tools]
+        return [
+            (f"echo__{tool.name}", tool.description, dict(tool.input_schema), tool.output_schema)
+            for tool in tools
+        ]
 
     return asyncio.run(listed())
 
