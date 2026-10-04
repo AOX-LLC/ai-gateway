@@ -239,3 +239,32 @@ async def _append_as(url: str, action: str, subject: str) -> None:
         )
     )
     await log.database.aclose()
+
+
+async def test_the_purge_login_is_hardened_like_an_approvers_and_stays_so(
+    policy: None, test_database_url: str, policy_gateway_url: str, policy_auditor_url: str
+) -> None:
+    """The same login hardening a person's gets, with one connection: an expiring password, no
+    attribute that bypasses a check, exactly the approver role's membership (inheriting, no `SET`,
+    no `ADMIN`) and no table privilege of its own. A hand-made change does not survive a setup."""
+    from tests.test_lab_approver import _ONLY_THE_APPROVER_ROLE, _SERVICE_LOGIN_FACTS
+
+    expected = (True, False, False, False, False, False, 1, True, _ONLY_THE_APPROVER_ROLE, 0)
+    await _setup_with_purger(test_database_url, policy_gateway_url, policy_auditor_url)
+    async with await psycopg.AsyncConnection.connect(
+        test_database_url, autocommit=True
+    ) as connection:
+        cursor = await connection.execute(_SERVICE_LOGIN_FACTS, (PURGER_ROLE,))
+        assert await cursor.fetchone() == expected
+
+        await connection.execute(
+            f"ALTER ROLE {PURGER_ROLE} CREATEROLE REPLICATION CONNECTION LIMIT 50"
+            " VALID UNTIL 'infinity'"
+        )
+        await connection.execute(f"GRANT SELECT ON policy.approvers TO {PURGER_ROLE}")
+        await connection.execute(f"GRANT pg_read_all_data TO {PURGER_ROLE}")
+
+        await _setup_with_purger(test_database_url, policy_gateway_url, policy_auditor_url)
+
+        cursor = await connection.execute(_SERVICE_LOGIN_FACTS, (PURGER_ROLE,))
+        assert await cursor.fetchone() == expected, "put back by the next setup"

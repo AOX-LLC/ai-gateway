@@ -260,7 +260,9 @@ async def sync_approver_logins(connection: AsyncConnection) -> list[str]:
                 )
             continue
         if is_active:
-            await _normalise_login(connection, role)
+            await _normalise_login(
+                connection, role, connection_limit=APPROVER_LOGIN_CONNECTION_LIMIT
+            )
             active.append(role)
         else:
             await connection.execute(sql.SQL("ALTER ROLE {} NOLOGIN").format(sql.Identifier(role)))
@@ -352,14 +354,30 @@ async def _refuse_name_clash(
 
 async def _create_login(connection: AsyncConnection, login: str, password: str) -> None:
     await ensure_role(connection, password, login, POLICY_IDLE_IN_TRANSACTION_MS)
+    await harden_login(connection, login)
+
+
+async def harden_login(
+    connection: AsyncConnection,
+    login: str,
+    *,
+    connection_limit: int = APPROVER_LOGIN_CONNECTION_LIMIT,
+) -> None:
+    """What every login in the approver role gets, a person's or a service's (the lab approver, the
+    payload purge): a password that stops working after 90 days, a connection limit, no attribute
+    that bypasses a check, the one membership and no other, and no table privilege of its own.
+    `policy-setup` runs it for each of them every time, which is also what renews the expiry of the
+    two services' logins (it runs on every `docker compose up`)."""
     expires = (datetime.now(UTC) + timedelta(days=APPROVER_LOGIN_VALID_DAYS)).isoformat()
     await connection.execute(
         sql.SQL("ALTER ROLE {} VALID UNTIL {}").format(sql.Identifier(login), sql.Literal(expires))
     )
-    await _normalise_login(connection, login)
+    await _normalise_login(connection, login, connection_limit=connection_limit)
 
 
-async def _normalise_login(connection: AsyncConnection, login: str) -> None:
+async def _normalise_login(
+    connection: AsyncConnection, login: str, *, connection_limit: int
+) -> None:
     """The login's attributes, its one membership and nothing else: no attribute that bypasses a
     check, a connection limit, membership of the approver role with inheritance, without `SET ROLE`
     and without the right to grant it on, no other role, no role that is a member of it (that
@@ -370,7 +388,7 @@ async def _normalise_login(connection: AsyncConnection, login: str) -> None:
         sql.SQL(
             "ALTER ROLE {} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS"
             " CONNECTION LIMIT {}"
-        ).format(name, sql.Literal(APPROVER_LOGIN_CONNECTION_LIMIT))
+        ).format(name, sql.Literal(connection_limit))
     )
     await connection.execute(
         sql.SQL("REVOKE ALL ON ALL TABLES IN SCHEMA {} FROM {}").format(

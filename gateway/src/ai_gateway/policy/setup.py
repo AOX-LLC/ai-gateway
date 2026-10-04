@@ -42,6 +42,7 @@ from ai_gateway.policy.approver_logins import (
     approver_principal,
     bind_active_approvers,
     bind_login,
+    harden_login,
     managed_logins,
     sync_approver_logins,
 )
@@ -496,14 +497,10 @@ async def _set_up_lab_role(connection: AsyncConnection, password: str | None) ->
         )
         return
     await ensure_role(connection, password, LAB_APPROVER_ROLE, POLICY_IDLE_IN_TRANSACTION_MS)
-    await reset_role(connection, LAB_APPROVER_ROLE)
-    # Inheritance is how it connects and decides; without SET it cannot `SET ROLE` to the group and
-    # write records as the shared role.
-    await connection.execute(
-        sql.SQL("GRANT {} TO {} WITH INHERIT TRUE, SET FALSE").format(
-            sql.Identifier(APPROVER_ROLE), name
-        )
-    )
+    # The same hardening as a person's login: an expiring password, a connection limit, the one
+    # membership of the approver role (inheriting, without `SET`, so it cannot write records as the
+    # shared role) and no grant of its own.
+    await harden_login(connection, LAB_APPROVER_ROLE)
     # The login is the identity: a decision it writes is recorded under this role, so the approver
     # record that names it is made here and `approver-add` refuses the id.
     await connection.execute(
@@ -538,13 +535,7 @@ async def _set_up_purger(connection: AsyncConnection, password: str | None) -> N
     if not password:
         return
     await ensure_role(connection, password, PURGER_ROLE, POLICY_IDLE_IN_TRANSACTION_MS)
-    await reset_role(connection, PURGER_ROLE)
-    await connection.execute(sql.SQL("ALTER ROLE {} CONNECTION LIMIT 1").format(name))
-    await connection.execute(
-        sql.SQL("GRANT {} TO {} WITH INHERIT TRUE, SET FALSE, ADMIN FALSE").format(
-            sql.Identifier(APPROVER_ROLE), name
-        )
-    )
+    await harden_login(connection, PURGER_ROLE, connection_limit=1)
     await bind_login(connection, PURGER_ROLE, PURGER_PRINCIPAL)
 
 

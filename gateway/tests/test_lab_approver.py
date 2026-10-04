@@ -174,3 +174,47 @@ async def test_audit_verify_says_when_a_stack_has_been_used_as_a_lab(
 
     output = capsys.readouterr().out
     assert "1 approval decision(s) were made by the lab approver role" in output
+
+
+_SERVICE_LOGIN_FACTS = (
+    "SELECT rolcanlogin, rolsuper, rolcreatedb, rolcreaterole, rolreplication, rolbypassrls,"
+    " rolconnlimit,"
+    " rolvaliduntil BETWEEN now() + interval '89 days' AND now() + interval '91 days',"
+    " (SELECT array_agg(parent.rolname || ':' || m.inherit_option || m.set_option"
+    "  || m.admin_option) FROM pg_auth_members m JOIN pg_roles parent ON parent.oid = m.roleid"
+    "  WHERE m.member = r.oid),"
+    " (SELECT count(*) FROM information_schema.role_table_grants WHERE grantee = r.rolname)"
+    " FROM pg_roles r WHERE r.rolname = %s"
+)
+_ONLY_THE_APPROVER_ROLE = ["policy_approver:truefalsefalse"]  # inherit, no SET, no ADMIN
+
+
+async def test_the_lab_login_is_hardened_like_an_approvers_and_stays_so(
+    policy: None,
+    test_database_url: str,
+    policy_gateway_url: str,
+    policy_auditor_url: str,
+) -> None:
+    """The same login hardening a person's gets: an expiring password, a connection limit, no
+    attribute that bypasses a check, exactly the approver role's membership (inheriting, no `SET`,
+    no `ADMIN`) and no table privilege of its own. A hand-made change does not survive a setup."""
+    args = (test_database_url, policy_gateway_url, policy_auditor_url)
+    expected = (True, False, False, False, False, False, 2, True, _ONLY_THE_APPROVER_ROLE, 0)
+    await _setup(*args, lab=LAB_PASSWORD)
+    async with await psycopg.AsyncConnection.connect(
+        test_database_url, autocommit=True
+    ) as connection:
+        cursor = await connection.execute(_SERVICE_LOGIN_FACTS, ("policy_lab_approver",))
+        assert await cursor.fetchone() == expected
+
+        await connection.execute(
+            "ALTER ROLE policy_lab_approver CREATEDB CREATEROLE CONNECTION LIMIT -1"
+            " VALID UNTIL 'infinity'"
+        )
+        await connection.execute("GRANT SELECT ON policy.agent_core_audit TO policy_lab_approver")
+        await connection.execute("GRANT pg_read_all_data TO policy_lab_approver")
+
+        await _setup(*args, lab=LAB_PASSWORD)
+
+        cursor = await connection.execute(_SERVICE_LOGIN_FACTS, ("policy_lab_approver",))
+        assert await cursor.fetchone() == expected, "put back by the next setup"
