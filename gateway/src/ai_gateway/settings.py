@@ -16,6 +16,10 @@ class GatewaySettings(ServiceSettings):
     """Connection string for the least-privilege gateway_app role. Secret because it
     carries a password; never logged."""
 
+    argument_hash_key: SecretStr
+    """The secret key of the HMAC that hashes call arguments for decision records, telemetry and
+    audit records (`ai_gateway.hashing`). Required: a gateway without one does not start."""
+
     port: Annotated[int, Field(ge=1, le=65535)] = 4401
     pipeline_file: Path = Path("config/pipeline.toml")
     approval_roles_file: Path = Path("config/approval_roles.toml")

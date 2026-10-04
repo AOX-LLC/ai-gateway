@@ -151,6 +151,7 @@ def test_an_empty_build_argument_means_unknown(
     monkeypatch: pytest.MonkeyPatch, given: str, expected: str | None
 ) -> None:
     monkeypatch.setenv("GATEWAY_DATABASE_URL", "postgresql://unused")
+    monkeypatch.setenv("GATEWAY_ARGUMENT_HASH_KEY", "test-only-argument-hash-key-0123456789")
     monkeypatch.setenv("GATEWAY_GIT_COMMIT", given)
 
     assert GatewaySettings().git_commit == expected

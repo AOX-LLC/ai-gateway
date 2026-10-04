@@ -526,3 +526,49 @@ async def test_the_recorder_queues_an_alert_like_a_decision_record() -> None:
     await recorder.close()
 
     assert [e.action for e in log.committed] == ["gateway.alert"]
+
+
+# --- the argument hash is keyed -----------------------------------------------------------------
+
+
+def test_the_argument_hash_is_an_hmac_not_a_hash_anyone_can_compute() -> None:
+    import hashlib
+
+    from ai_gateway.hashing import configure_hash_key
+    from tests.conftest import TEST_HASH_KEY
+
+    arguments = {"ticket_id": "TKT-000123"}
+    plain = hashlib.sha256(_call_with(arguments).arguments_json.encode()).hexdigest()
+
+    keyed = _call_with(arguments).arguments_sha256
+
+    assert keyed != plain, "guessing arguments and hashing them proves nothing"
+    assert len(keyed) == 64
+    configure_hash_key(b"another-secret-key-of-enough-length")
+    try:
+        assert _call_with(arguments).arguments_sha256 != keyed, "another key, another hash"
+    finally:
+        configure_hash_key(TEST_HASH_KEY.encode())
+    assert _call_with(arguments).arguments_sha256 == keyed, "the same key, the same hash"
+
+
+def test_hashing_without_a_key_is_refused_rather_than_done_unkeyed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import ai_gateway.hashing as hashing
+
+    monkeypatch.setattr(hashing, "_key", None)
+
+    with pytest.raises(RuntimeError, match="not configured"):
+        hashing.keyed_sha256("x")
+
+
+def test_a_key_too_short_to_be_a_secret_is_refused() -> None:
+    from ai_gateway.hashing import configure_hash_key
+
+    with pytest.raises(ValueError, match="too short"):
+        configure_hash_key(b"short")
+
+
+def _call_with(arguments: dict[str, str]):  # type: ignore[no-untyped-def]
+    return ToolCall.create("tickets__get_ticket", "tickets", "get_ticket", arguments, "read")

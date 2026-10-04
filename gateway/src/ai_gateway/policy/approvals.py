@@ -19,7 +19,6 @@ never go to the audit log or telemetry.
 """
 
 import asyncio
-import hashlib
 import json
 import logging
 from collections.abc import Callable, Mapping
@@ -38,6 +37,7 @@ from aox_agent_core.approvals import (
 )
 from aox_agent_core.errors import AgentCoreError, ApprovalConflictError, ApprovalExpiredError
 
+from ai_gateway.hashing import keyed_sha256
 from ai_gateway.pipeline.types import CallContext, ToolCall
 from ai_gateway.policy import ACTIVE_APPROVERS_VIEW
 from ai_gateway.seams.approvals import ApprovalDecision, ApprovalOutcome
@@ -69,9 +69,11 @@ def approval_summary(action: str, arguments: Mapping[str, Any]) -> str:
     agent-core treats a repeat of an open request with another summary as a conflict, so the summary
     must not depend on who asks, when, or how the gateway is set up: two retries of one call give
     the identical text. It carries no argument text (the approver reads the stored payload, which
-    the request's hash binds), only a short digest to tell calls apart in a list."""
+    the request's hash binds), only a short keyed digest to tell calls apart in a list. The digest
+    is keyed so it cannot be used to guess the arguments, and the key is the deployment's, so it
+    is still the same for every retry."""
     canonical = json.dumps(arguments, sort_keys=True, separators=(",", ":"))
-    digest = hashlib.sha256(canonical.encode()).hexdigest()[:12]
+    digest = keyed_sha256(canonical)[:12]
     return f"{action} {digest}"
 
 

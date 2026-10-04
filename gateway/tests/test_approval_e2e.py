@@ -201,6 +201,7 @@ def _settings(url: str, tmp_path: Path) -> GatewaySettings:
     (tmp_path / "allowlist.toml").write_text("")
     (tmp_path / "rate_limits.toml").write_text("")
     return GatewaySettings(
+        argument_hash_key=SecretStr("test-only-argument-hash-key-0123456789"),
         database_url=SecretStr(url),
         pipeline_file=pipeline,
         approval_roles_file=roles,

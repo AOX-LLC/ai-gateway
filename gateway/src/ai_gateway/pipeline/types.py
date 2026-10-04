@@ -1,6 +1,5 @@
 """The request pipeline's vocabulary: layers, verdicts, and what they inspect."""
 
-import hashlib
 import json
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -11,6 +10,7 @@ from uuid import UUID
 
 from mcp.types import CallToolResult, Tool
 
+from ai_gateway.hashing import keyed_sha256
 from ai_gateway.text import printable
 
 POLICY_BLOCK_MESSAGE = "Request blocked by gateway policy."
@@ -206,7 +206,9 @@ class ToolCall:
 
     @cached_property
     def arguments_sha256(self) -> str:
-        return hashlib.sha256(self.arguments_json.encode()).hexdigest()
+        """The keyed hash (HMAC-SHA256) of the arguments, for the decision record, the audit
+        write-ahead record and telemetry (see `ai_gateway.hashing`; the name predates the key)."""
+        return keyed_sha256(self.arguments_json)
 
 
 class BaseLayer:

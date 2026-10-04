@@ -177,6 +177,7 @@ def run_gateway(
     events = MemoryEventSink()
     settings = GatewaySettings(
         database_url=SecretStr(database_url),
+        argument_hash_key=SecretStr("test-only-argument-hash-key-0123456789"),
         pipeline_file=pipeline_file,
         approval_roles_file=roles_file,
         allowlist_file=allowlist_file,

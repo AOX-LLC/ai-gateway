@@ -19,6 +19,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from ai_gateway.auth.middleware import BearerAuthMiddleware
 from ai_gateway.auth.throttle import LoginThrottle, ThrottleConfig
 from ai_gateway.auth.verifier import TokenVerifier
+from ai_gateway.hashing import configure_hash_key
 from ai_gateway.pipeline.config import load_pipeline_config
 from ai_gateway.pipeline.crosscheck import check_policy_files
 from ai_gateway.pipeline.layers.allowlist import load_allowlist
@@ -66,6 +67,7 @@ class _McpEndpoint:
 def create_app(settings: GatewaySettings, events: EventSink | None = None) -> FastAPI:
     """Build the app. Configuration errors, such as a bad pipeline file, raise here,
     before the gateway accepts a single request."""
+    configure_hash_key(settings.argument_hash_key.get_secret_value().encode())
     audit = build_audit(settings)
     telemetry = build_telemetry(settings)
     event_sink: EventSink = events or LogEventSink()
