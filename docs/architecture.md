@@ -35,7 +35,7 @@ AI client ──HTTPS──► bearer auth ──► protocol version guard ─�
                                          (unknown: same answer as out of scope)
                                                                      ▼
               ┌──────────────── pipeline, one run per request ────────────────┐
-  tools/list  │ filter_tools:  scope → allowlist → pinned descriptions …      │
+  tools/list  │ filter_tools:  scope → … → pinned descriptions                │
   tools/call  │ before_call:   scope → allowlist → rate limit → schema →      │
               │                egress → canary → classifier → approval        │
               │ ── forward exactly the checked arguments to the upstream ──   │
@@ -47,8 +47,8 @@ AI client ──HTTPS──► bearer auth ──► protocol version guard ─�
 Phase 1 implements `scope`. Phase 3 adds `allowlist`, `rate_limit` and `approval` (3a, 3b and 3c:
 see [Allowlist and rate limits](#allowlist-and-rate-limits-phase-3c) and
 [Approvals](#approvals-phase-3b)); the login throttle in front of the pipeline is
-[Failed logins](#failed-logins-phase-3c). Phase 4 adds `schema`, `pinned_descriptions`, `egress`,
-`canary` and `classifier`.
+[Failed logins](#failed-logins-phase-3c). Phase 4b adds `schema`, `pinned_descriptions`, `egress`
+and `canary` (see [Injection layers](#injection-layers-phase-4b)); the classifier follows in 4c.
 
 ## The pipeline
 
@@ -804,6 +804,45 @@ tool limit that the traffic simulator uses to show the layer working.
 
 Both layers switch `enforce`, `monitor` and `off` like any other (they are not floor layers).
 
+### Injection layers (Phase 4b)
+
+Four layers sit between the policy layers and approval, in this order: **schema → pinned_descriptions
+→ egress → canary**. Each switches `enforce`, `monitor` and `off`, none is a floor layer, and each
+records a verdict with a code and, in a column of its own (`layer_verdicts.score`), an integer count
+(violations found, values matched, canaries seen): never a name or a value. A refusal is the generic
+policy message to the client; the layer is named in the decision record only. They run before
+approval, so a call they refuse never asks a person.
+
+| Layer | Detection | False-positive risk | What monitor mode records |
+| --- | --- | --- | --- |
+| `schema` | Arguments against the *pinned* input schema (the catalog's own for a tool with no pin), with a top-level `additionalProperties: false` forced; also NUL in any key or string, a non-finite number, nesting over 6, arguments over 64 KiB | A client that sends `"5"` for an integer, or an argument the server used to drop | `would_block`, `schema_violation`, the number of violations (at most 50) |
+| `pinned_descriptions` | SHA-256 of name, description and input schema against `config/tool_pins.toml`. A drifted or unpinned tool is hidden from tools/list and refused on a call, and an alert is raised once per tool and definition | A legitimate deployment that changes a description hides the tool until it is pinned again | `would_block`, `pin_drift` or `pin_unpinned`; the tool stays visible |
+| `egress` | Per MCP session, the record ids, emails and phone numbers that reads returned; a write is refused when it carries 5 or more of them, or 10 across the session's writes, or any internal-only marker. The record a call is about is exempt per tool | A legitimate write that cites more than a few records | `would_block`, `egress_bulk` or `egress_marker`, and the count of matching values, kept for allowed calls too |
+| `canary` | A seeded decoy value (squeezed of case, separators and zero-width characters, base64 and hex runs decoded) in any call's arguments, found by hash | Near zero: a model quoting a decoy verbatim into a comment | `would_block`, `canary_hit`, the count of canaries |
+
+**Pins.** `config/tool_pins.toml` holds each tool's reviewed description and input schema as text
+with their hash, so a change to a description is a diff someone reads; the gateway refuses to start
+when an entry's hash is not the hash of its own text, and a test fails when the file is not what the
+servers define (`scripts/generate_tool_pins.py` rewrites it). It is read once at startup, so
+re-pinning is a restart; a call carries the definition the catalog holds *now*, which is what is
+compared. An alert is an ERROR in the log and a `gateway.alert` audit record (kind, tool, client,
+hash or canary name), once per condition per ten minutes.
+
+**What egress keeps.** A set of 64-bit keyed hashes per session, in memory, under a key that is random
+per process: 2 000 values a session, 200 000 in all, 1 000 sessions, least recently used first. Never
+an argument, a result or a value; nothing on disk, in the database or in telemetry; a restart forgets
+it. A session past its cap stops noting values, which makes the score read low. It does not catch a
+transformation of the data (a summary, an encoding) or a value the session never read.
+
+**Canaries.** Two, in the fictional data: a code in the `about` of account `ACC-00001` and in the
+description of ticket `TKT-000001` (on a fresh volume; an existing volume's data is not reseeded).
+`config/canaries.toml` holds their names and hashes, never the values. They are public, since they
+are in this repository: a real deployment makes its own and keeps the list secret.
+
+**Startup cross-check.** The allowlist, the rate limits and the approval roles are checked against the
+pins before the gateway accepts a request: a tool no pin names, an argument the pinned schema does not
+have, a range on a string, a value outside an enum, each stops startup, naming every mistake.
+
 ### Idle transactions (Phase 3c)
 
 Any role that can connect can take agent-core's one audit append lock, and a write that cannot be
@@ -886,7 +925,7 @@ it at this size.
 | Table | One row per | Holds |
 | --- | --- | --- |
 | `requests` | decision record (a `tools/call` or a `tools/list`) | time, kind, client id and name, tool and namespace, effect, `outcome` (`forwarded`, `blocked`, `listed`), `blocked_by` and `deny_code`, upstream status, total and upstream duration, the argument **hash**, protocol version, pipeline fingerprint, trace id |
-| `layer_verdicts` | request × layer × hook | the layer's name, the hook (`filter`, `before_call`, `after_call`), its mode, the verdict (`allow`, `deny`, `would_block`, `off`, `error`), code, time |
+| `layer_verdicts` | request × layer × hook | the layer's name, the hook (`filter`, `before_call`, `after_call`), its mode, the verdict (`allow`, `deny`, `would_block`, `off`, `error`), code, time, and an integer `score` some layers set (a count, never content) |
 | `auth_failures` | failed authentication | time, reason, the token's lookup id (the non-secret part); not the address |
 | `spans` | span of the gateway's own instrumentation | trace and span ids, parent, name, start, duration, status, request id, allowlisted attributes |
 | `pipeline_configs` | configuration fingerprint | the layers and their modes, in order |
