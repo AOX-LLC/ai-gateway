@@ -200,7 +200,59 @@ def test_a_mistake_in_the_file_stops_startup(tmp_path: Path, text: str) -> None:
 def test_the_shipped_allowlist_loads_and_holds_the_urgent_ticket_rule() -> None:
     rules = load_allowlist(ROOT / "config" / "allowlist.toml")
 
-    assert [rule.name for rule in rules] == ["support-bot-no-urgent-tickets"]
+    assert "support-bot-no-urgent-tickets" in [rule.name for rule in rules]
+
+
+HELPER = "harborline-helper-api"
+
+
+def _shipped() -> AllowlistLayer:
+    return AllowlistLayer(load_allowlist(ROOT / "config" / "allowlist.toml"))
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("tool", "arguments"),
+    [
+        ("crm__search_accounts", {"query": "Harborline", "limit": 5}),
+        ("crm__search_accounts", {"query": "Harborline", "limit": 3, "offset": 5}),
+        ("crm__list_deals", {"account_id": "ACC-00003", "limit": 5}),
+        ("tickets__create_ticket", {"description": "x" * 1000, "priority": "normal"}),
+    ],
+)
+async def test_a_normal_triage_never_meets_the_helper_apis_caps(
+    tool: str, arguments: dict[str, Any]
+) -> None:
+    assert await _shipped().before_call(_ctx(HELPER), _call(tool, **arguments)) is ALLOW
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("tool", "arguments"),
+    [
+        ("crm__search_accounts", {"query": "Harborline", "limit": 6}),
+        ("crm__search_accounts", {"query": "Harborline"}),  # no limit: the server's default is 10
+        ("crm__search_accounts", {"query": "Harborline", "limit": 5, "offset": 21}),
+        ("crm__list_deals", {"limit": 20}),
+        ("crm__list_deals", {}),
+        ("crm__list_deals", {"limit": 5, "offset": 10000}),
+        ("tickets__create_ticket", {"description": "x" * 1001}),
+    ],
+)
+async def test_a_bulk_read_or_write_by_the_helper_api_is_refused(
+    tool: str, arguments: dict[str, Any]
+) -> None:
+    refused = await _shipped().before_call(_ctx(HELPER), _call(tool, **arguments))
+
+    assert isinstance(refused, Deny)
+    assert refused.code is DenyCode.ALLOWLIST_VIOLATION
+
+
+@pytest.mark.anyio
+async def test_the_helper_apis_caps_bind_that_client_only() -> None:
+    wide = _call("crm__search_accounts", query="Harborline", limit=20)
+
+    assert await _shipped().before_call(_ctx("harborline-support-bot"), wide) is ALLOW
 
 
 @pytest.mark.anyio

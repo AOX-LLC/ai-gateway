@@ -126,6 +126,7 @@ class Backfill:
     requests: list[dict[str, Any]] = field(default_factory=list)
     verdicts: list[dict[str, Any]] = field(default_factory=list)
     auth_failures: list[dict[str, Any]] = field(default_factory=list)
+    usage: list[dict[str, Any]] = field(default_factory=list)
 
 
 def config_fingerprint(layers: list[tuple[str, str]]) -> str:
@@ -252,6 +253,7 @@ def build_backfill(
     result.requests.sort(key=lambda r: (r["ts"], r["request_id"]))
     result.verdicts.sort(key=lambda v: (v["ts"], v["request_id"], v["ordinal"]))
     result.auth_failures.sort(key=lambda a: (a["ts"], a["event_id"]))
+    result.usage.sort(key=lambda u: (u["ts"], u["usage_id"]))
     return result
 
 
@@ -397,9 +399,18 @@ def _call(
                 )
             )
             # The injection layers pass the demo's honest traffic (it has no attack for them yet).
+            # About one call in fifty has a text the recordings do not hold: the classifier says
+            # `unclassified` (never clean). Model usage has its own stream, seeded from the plan's.
+            usage_rng = random.Random(rng.getrandbits(48))  # noqa: S311
+            unrecorded = usage_rng.random() < 0.02
             verdicts.extend(
                 (layer, "allow", None)
-                for layer in ("schema", "pinned_descriptions", "egress", "canary", "classifier")
+                for layer in ("schema", "pinned_descriptions", "egress", "canary")
+            )
+            verdicts.append(
+                ("classifier", "unclassified", "classifier_unrecorded")
+                if unrecorded
+                else ("classifier", "allow", None)
             )
             if effect == "write" and rng.random() < 0.45:
                 blocked_by, deny_code = "approval", "approval_pending"
@@ -432,6 +443,8 @@ def _call(
         sha=sha,
     )
     result.requests.append(row)
+    if any(layer == "classifier" for layer, _, _ in verdicts):
+        _usage(result, usage_rng, ts, row["request_id"], effect, unrecorded)
     modes = dict(LAYERS)
     for ordinal, (layer, verdict, code) in enumerate(verdicts):
         result.verdicts.append(
@@ -450,6 +463,47 @@ def _call(
         )
 
 
+PRICE_PER_MTOK = (1.0, 5.0)
+"""Dollars per million input and output tokens of the small tier (as in config/agent-core.toml)."""
+
+
+def _usage(
+    result: Backfill,
+    rng: random.Random,
+    ts: datetime,
+    request_id: str,
+    effect: str,
+    unrecorded: bool,
+) -> None:
+    """The classifier's model calls for one request: one to three units, answered from recordings
+    (mode `replay`, so the cost is the recording's and nothing was billed)."""
+    for unit in range(1 + int(rng.random() * (2 if effect == "write" else 3))):
+        missing = unrecorded and unit == 0
+        tokens_in = 0 if missing else rng.randint(180, 900)
+        tokens_out = 0 if missing else rng.randint(18, 24)
+        result.usage.append(
+            {
+                "usage_id": str(uuid.UUID(int=rng.getrandbits(128), version=4)),
+                "request_id": request_id,
+                "ts": ts,
+                "layer": "classifier",
+                "purpose": "tool_arguments" if effect == "write" else "tool_result",
+                "model": "claude-haiku-4-5-20251001",
+                "tier": "small",
+                "mode": "replay",
+                "input_tokens": tokens_in,
+                "output_tokens": tokens_out,
+                "cache_read_tokens": 0,
+                "cache_write_tokens": 0,
+                "cost_usd": round(
+                    (tokens_in * PRICE_PER_MTOK[0] + tokens_out * PRICE_PER_MTOK[1]) / 1e6, 8
+                ),
+                "latency_ms": round(rng.uniform(1.0, 6.0), 3),
+                "status": "unrecorded" if missing else "ok",
+            }
+        )
+
+
 def summary(backfill: Backfill) -> dict[str, Any]:
     calls = [r for r in backfill.requests if r["kind"] == "tool_call"]
     return {
@@ -463,6 +517,8 @@ def summary(backfill: Backfill) -> dict[str, Any]:
         "auth_failures": len(backfill.auth_failures),
         "auth_reasons": dict(sorted(Counter(a["reason"] for a in backfill.auth_failures).items())),
         "upstream_errors": sum(r["upstream_status"] in {"error", "timeout"} for r in calls),
+        "model_calls": len(backfill.usage),
+        "unrecorded": sum(u["status"] == "unrecorded" for u in backfill.usage),
     }
 
 
@@ -504,6 +560,23 @@ VERDICT_COLUMNS = [
     "duration_ms",
 ]
 AUTH_COLUMNS = ["event_id", "ts", "reason", "lookup_id"]
+USAGE_COLUMNS = [
+    "usage_id",
+    "request_id",
+    "ts",
+    "layer",
+    "purpose",
+    "model",
+    "tier",
+    "mode",
+    "input_tokens",
+    "output_tokens",
+    "cache_read_tokens",
+    "cache_write_tokens",
+    "cost_usd",
+    "latency_ms",
+    "status",
+]
 
 
 def read_env(path: Path) -> dict[str, str]:
@@ -545,6 +618,8 @@ def write_backfill(url: str, backfill: Backfill) -> None:
                 cursor, "layer_verdicts", VERDICT_COLUMNS, backfill.verdicts[start : start + 2000]
             )
         insert(cursor, "auth_failures", AUTH_COLUMNS, backfill.auth_failures)
+        for start in range(0, len(backfill.usage), 2000):
+            insert(cursor, "model_usage", USAGE_COLUMNS, backfill.usage[start : start + 2000])
 
 
 DEMO_PROJECT = "ai-gateway-demo"
@@ -659,12 +734,16 @@ async def seed_approvals(
     from pydantic import SecretStr
 
     from ai_gateway.approver.cli import Approvals
+    from ai_gateway.hashing import configure_hash_key
     from ai_gateway.pipeline.types import CallContext, ClientIdentity, ToolCall
     from ai_gateway.policy import approval_queue_on, policy_url
     from ai_gateway.policy.approvals import PostgresApprovalGate
     from ai_gateway.policy.database import BoundedPostgresDatabase
     from ai_gateway.policy.roles import load_roles_by_action
 
+    # The calls below are built here with the gateway's code, which hashes their arguments under the
+    # gateway's key: the same one, from the same .env.
+    configure_hash_key(env["GATEWAY_ARGUMENT_HASH_KEY"].encode())
     roles = load_roles_by_action(Path(args.roles_file))
     app_url = database_url(env, "gateway_app", "GATEWAY_APP_DB_PASSWORD", args.host, args.port)
     with psycopg.connect(app_url) as connection:

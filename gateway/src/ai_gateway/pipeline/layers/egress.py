@@ -1,39 +1,55 @@
-"""The egress layer: data read in a session does not flow back out through a write.
+"""The egress layer: data a client read does not flow back out through a write.
 
-Detection. After every read the layer notes, per MCP session, which *values* the result carried:
-record identifiers (ACC-00001), email addresses and phone numbers (the patterns are configuration).
-A write is refused when its arguments carry too many distinct values the same session read: five in
-one write (a bulk copy of customer records), or ten across the session's writes (the same copy
-dripped out a few at a time). A write that carries an internal-only marker (`[INTERNAL-ONLY]`) is
-refused whatever the session read, since a marker has no honest use outside the system. The record a
-tool acts on (a ticket id the call is *about*) is exempt per tool, so an ops bot working through a
-list is not counted for naming each ticket once.
+Detection. After every read the layer notes, per *client*, which values the result carried: record
+identifiers (ACC-00001), email addresses and phone numbers (the patterns are configuration), each
+with the time it was last read. A value is remembered for a sliding window (`window_s`, 30 minutes
+by default) and forgotten after it. A write is refused when its arguments carry too many distinct
+values the client read within the window, in any of the client's MCP sessions: five in one write (a
+bulk copy of customer records), ten in one session's writes, or ten across all the client's writes
+in the window (the same copy dripped out a few at a time, in one session or across several). A
+refused attempt still counts, so a session that has reached its tally of ten is quarantined: every
+later write in it is refused, whatever it carries (a session that tried a bulk copy is suspect). A
+write that carries an internal-only marker (`[INTERNAL-ONLY]`) is refused whatever the client read,
+since a marker has no honest use outside the system. The record a tool acts on (a ticket id the call
+is *about*) is exempt per tool, so an ops bot working through a list is not counted for naming each
+ticket once.
+
+Why per client. A ledger kept per MCP session is bypassed by reading in one session and writing in
+another, and sessions are cheap. The client is what the gateway authenticates, so what it read is
+what it may not write back out, whichever session it uses. The cost is that one client's honest
+sessions share a tally: a client that cites more than ten read values in its writes within half an
+hour (an ops bot's summaries) is refused the next one that carries any; raise `per_window` for it,
+and watch the score in monitor mode first.
 
 What the gateway keeps. Never arguments or results, and nothing on disk, in the database or in
 telemetry. The ledger holds, in memory, a 64-bit keyed hash of each value (the key is random per
-process and never leaves it, so the hashes mean nothing outside it) in a set per session, bounded:
-2 000 values a session, 200 000 in all, 1 000 sessions, least recently used sessions first. A
-restart forgets everything, and a session past its cap stops noting values (the score then reads
-low, which is the safe error for monitoring and the unsafe one for enforcing: the caps are large
-against what a session of this system reads).
+process and never leaves it, so the hashes mean nothing outside it) per client, with the time, and a
+small tally per session. Every cap is per client, so one client's sessions can never push another's
+ledger out: `max_values_per_client` values (2 000), `max_sessions_per_client` session tallies (100,
+least recently used first; a session whose tally was dropped starts a fresh tally, but the client's
+own ledger and window tally still apply). A client that has read more than it can be tracked for
+(or a result too large to scan) cannot write a value until the window has passed: the layer cannot
+check it, and forgetting would fail open. A restart forgets everything.
 
-False positives. A legitimate write that cites more than a few records the session read (an ops
+False positives. A legitimate write that cites more than a few records the client read (an ops
 summary ticket). Monitor mode records the count of matching values as the verdict's `score`, so the
 limits can be set from what honest traffic does before they are enforced.
 
-What it does not catch: a transformation of the data (a summary, an encoding), a value the session
-never read, an exfiltration through a read tool's arguments. The classifier on arguments and the
-canary layer cover some of that; this layer is the cheap deterministic one.
+What it does not catch: a transformation of the data (a summary, an encoding, another spelling of
+a phone number or an id), a value the client never read through the gateway, data copied out after
+the window has passed, an exfiltration through a read tool's arguments. The classifier on arguments
+and the canary layer cover some of that; this layer is the cheap deterministic one.
 """
 
 import hashlib
 import hmac
 import re
 import secrets
+import time
 import tomllib
 import unicodedata
 from collections import OrderedDict
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -59,7 +75,6 @@ _MAX_TEXT = 262_144
 _DASHES = dict.fromkeys(
     map(ord, "\u2010\u2011\u2012\u2013\u2014\u2015\u2212\ufe58\ufe63\uff0d"), "-"
 )
-_MAX_EVICTED_REMEMBERED = 4_096
 
 
 def normalise(text: str) -> str:
@@ -79,9 +94,10 @@ class EgressConfigError(ValueError):
 class EgressConfig:
     per_write: int = 5
     per_session: int = 10
-    max_sessions: int = 1_000
-    max_values_per_session: int = 2_000
-    max_values_total: int = 200_000
+    per_window: int = 10
+    window_s: int = 1_800
+    max_sessions_per_client: int = 100
+    max_values_per_client: int = 2_000
     identifier_patterns: tuple[re.Pattern[str], ...] = ()
     emails: bool = True
     phone_pattern: re.Pattern[str] | None = None
@@ -129,9 +145,10 @@ def parse_egress_config(raw: Mapping[str, Any]) -> EgressConfig:
     return EgressConfig(
         per_write=_positive(limits, "per_write", 5),
         per_session=_positive(limits, "per_session", 10),
-        max_sessions=_positive(memory, "max_sessions", 1_000),
-        max_values_per_session=_positive(memory, "max_values_per_session", 2_000),
-        max_values_total=_positive(memory, "max_values_total", 200_000),
+        per_window=_positive(limits, "per_window", 10),
+        window_s=_positive(limits, "window_s", 1_800),
+        max_sessions_per_client=_positive(memory, "max_sessions_per_client", 100),
+        max_values_per_client=_positive(memory, "max_values_per_client", 2_000),
         identifier_patterns=patterns,
         emails=bool(values.get("emails", True)),
         phone_pattern=phone_pattern,
@@ -163,25 +180,31 @@ def _result_text(result: CallToolResult) -> str:
 
 
 @dataclass
-class _SessionLedger:
-    read: set[int] = field(default_factory=set)
-    egressed: set[int] = field(default_factory=set)
-    saturated: bool = False
-    """The session read more values than it may be tracked for: what it read afterwards is not
-    recorded, so a write from it that carries any value cannot be checked and is refused."""
+class _ClientLedger:
+    """What one client read and tried to write out, within the window."""
+
+    read: dict[int, float] = field(default_factory=dict)
+    """Fingerprint of a value read, with when it was last read, oldest first."""
+    egressed: dict[int, float] = field(default_factory=dict)
+    """Fingerprints of values a write of the client carried that it had read (refused or not)."""
+    sessions: OrderedDict[str, set[int]] = field(default_factory=OrderedDict)
+    """Per MCP session, the fingerprints its writes carried: the quarantine tally."""
+    saturated_at: float | None = None
+    """When the client last read more than it can be tracked for (or a result too large to scan):
+    until the window has passed, a write of it that carries any value cannot be checked and is
+    refused."""
 
 
 class EgressLayer(BaseLayer):
     name = "egress"
 
-    def __init__(self, config: EgressConfig | None = None) -> None:
+    def __init__(
+        self, config: EgressConfig | None = None, clock: Callable[[], float] = time.monotonic
+    ) -> None:
         self._config = config or EgressConfig()
+        self._clock = clock
         self._key = secrets.token_bytes(32)
-        self._ledgers: OrderedDict[tuple[str, str], _SessionLedger] = OrderedDict()
-        self._evicted: OrderedDict[tuple[str, str], None] = OrderedDict()
-        """Sessions whose ledger was dropped for room (keys only): a write from one is refused,
-        because what it read can no longer be compared, and forgetting would fail open."""
-        self._total = 0
+        self._clients: dict[str, _ClientLedger] = {}
 
     # -- what counts as a value -----------------------------------------------------------------
 
@@ -204,46 +227,58 @@ class EgressLayer(BaseLayer):
 
     # -- the ledger -----------------------------------------------------------------------------
 
-    def _ledger(self, ctx: CallContext) -> _SessionLedger:
-        key = (str(ctx.client.id), ctx.session_id or "-")
-        ledger = self._ledgers.get(key)
-        if ledger is None:
-            ledger = self._ledgers[key] = _SessionLedger()
-        self._ledgers.move_to_end(key)
-        while len(self._ledgers) > self._config.max_sessions or (
-            self._total > self._config.max_values_total and len(self._ledgers) > 1
-        ):
-            gone, evicted = self._ledgers.popitem(last=False)
-            self._total -= len(evicted.read) + len(evicted.egressed)
-            self._evicted[gone] = None
-            while len(self._evicted) > _MAX_EVICTED_REMEMBERED:
-                self._evicted.popitem(last=False)
+    def _client(self, ctx: CallContext, now: float) -> _ClientLedger:
+        """The client's ledger with everything older than the window forgotten."""
+        ledger = self._clients.setdefault(str(ctx.client.id), _ClientLedger())
+        horizon = now - self._config.window_s
+        for table in (ledger.read, ledger.egressed):
+            while table:
+                oldest = next(iter(table))
+                if table[oldest] > horizon:
+                    break
+                del table[oldest]
+        if ledger.saturated_at is not None and ledger.saturated_at <= horizon:
+            ledger.saturated_at = None
         return ledger
+
+    def _session(self, ledger: _ClientLedger, ctx: CallContext) -> set[int]:
+        """The session's tally; the client's least recently used sessions go first when it has
+        more than `max_sessions_per_client` (never another client's)."""
+        key = ctx.session_id or "-"
+        tally = ledger.sessions.get(key)
+        if tally is None:
+            tally = ledger.sessions[key] = set()
+        ledger.sessions.move_to_end(key)
+        while len(ledger.sessions) > self._config.max_sessions_per_client:
+            ledger.sessions.popitem(last=False)
+        return tally
 
     def stored_values(self) -> int:
         """How many fingerprints are held now, for the memory measurement."""
-        return self._total
+        return sum(
+            len(c.read) + len(c.egressed) + sum(len(t) for t in c.sessions.values())
+            for c in self._clients.values()
+        )
 
     # -- hooks ----------------------------------------------------------------------------------
 
     async def after_call(self, ctx: CallContext, call: ToolCall, result: CallToolResult) -> Verdict:
         if call.effect != "read":
             return ALLOW
+        now = self._clock()
         text = _result_text(result)
         values = self._values_in(text[:_MAX_TEXT])
-        ledger = self._ledger(ctx)
+        ledger = self._client(ctx, now)
         if len(text) > _MAX_TEXT:
-            ledger.saturated = (
-                True  # what lies past the bound is not recorded: writes cannot be checked
-            )
-        room = self._config.max_values_per_session - len(ledger.read)
-        if len(values) > max(room, 0):
-            ledger.saturated = True
-        for value in list(values)[: max(room, 0)]:
+            ledger.saturated_at = now  # what lies past the bound is not recorded
+        for value in values:
             fingerprint = self._fingerprint(value)
-            if fingerprint not in ledger.read:
-                ledger.read.add(fingerprint)
-                self._total += 1
+            if fingerprint in ledger.read:
+                del ledger.read[fingerprint]  # read again: the window starts over, newest last
+            elif len(ledger.read) >= self._config.max_values_per_client:
+                ledger.saturated_at = now  # not recorded: writes cannot be checked for a while
+                continue
+            ledger.read[fingerprint] = now
         return Allow(score=len(values))
 
     async def before_call(self, ctx: CallContext, call: ToolCall) -> Verdict:
@@ -259,15 +294,13 @@ class EgressLayer(BaseLayer):
         if markers:
             return Deny(DenyCode.EGRESS_MARKER, POLICY_BLOCK_MESSAGE, score=markers)
 
-        key = (str(ctx.client.id), ctx.session_id or "-")
-        if key in self._evicted:
-            return Deny(DenyCode.EGRESS_STATE_LOST, POLICY_BLOCK_MESSAGE, score=1)
+        now = self._clock()
         exempt_values: set[str] = set()
         for argument in self._config.exempt.get(call.exposed_name, frozenset()):
             exempt_values |= self._values_in("\n".join(_keys_and_values(arguments.get(argument))))
         carried = self._values_in(text) - exempt_values
-        ledger = self._ledger(ctx)
-        if ledger.saturated and carried:
+        ledger = self._client(ctx, now)
+        if ledger.saturated_at is not None and carried:
             return Deny(DenyCode.EGRESS_STATE_LOST, POLICY_BLOCK_MESSAGE, score=len(carried))
         copied = {
             fingerprint
@@ -275,18 +308,27 @@ class EgressLayer(BaseLayer):
             if (fingerprint := self._fingerprint(value)) in ledger.read
         }
         # Attempts count, refused or not: a write that was stopped still shows what was tried.
-        new = copied - ledger.egressed
-        room = self._config.max_values_per_session - len(ledger.egressed)
-        for fingerprint in list(new)[: max(room, 0)]:
-            ledger.egressed.add(fingerprint)
-            self._total += 1
+        tally = self._session(ledger, ctx)
+        tally |= copied
+        for fingerprint in copied:
+            if fingerprint in ledger.egressed or len(ledger.egressed) < (
+                self._config.max_values_per_client
+            ):
+                ledger.egressed.pop(fingerprint, None)
+                ledger.egressed[fingerprint] = now
+        # A session that has reached its tally is quarantined: every later write in it is refused,
+        # even one that carries nothing it read. A session that tried a bulk copy is suspect, and a
+        # write in the writer's own words, or in a spelling the patterns do not match, is how it
+        # would carry on. The client's window tally stops the same copy dripped out across sessions:
+        # a write that carries what the client read is refused once the client has tried ten.
         if (
             len(copied) >= self._config.per_write
-            or len(ledger.egressed) >= self._config.per_session
+            or len(tally) >= self._config.per_session
+            or (copied and len(ledger.egressed) >= self._config.per_window)
         ):
             return Deny(
                 DenyCode.EGRESS_BULK,
                 POLICY_BLOCK_MESSAGE,
-                score=max(len(copied), len(ledger.egressed)),
+                score=max(len(copied), len(tally), len(ledger.egressed)),
             )
         return Allow(score=len(copied))

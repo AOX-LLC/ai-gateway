@@ -1,14 +1,18 @@
-# What the egress layer counts as data read in a session, and how much of it a write may carry.
+# What the egress layer counts as data a client read (in any of its sessions, within a window), and
+# how much of it a write may carry.
 # See gateway/src/ai_gateway/pipeline/layers/egress.py. Harborline Supply Co. is fictional.
 
 [limits]
-per_write = 5        # distinct values read in this session that one write may carry
-per_session = 10     # ... across all of the session's writes (the same copy, dripped out)
+per_write = 5        # distinct values the client read that one write may carry
+per_session = 10     # ... across one MCP session's writes (the same copy, dripped out); a session
+                     # that reaches it is quarantined: every later write in it is refused
+per_window = 10      # ... across all of the client's writes in the window, in any session
+window_s = 1800      # how long a value read, or a copy tried, counts: 30 minutes, sliding
 
 [memory]
-max_sessions = 1000
-max_values_per_session = 2000
-max_values_total = 200000
+# Every cap is per client, so one client cannot push another's ledger out.
+max_values_per_client = 2000
+max_sessions_per_client = 100
 
 [values]
 identifier_patterns = ["ACC-[0-9]{5}", "CON-[0-9]{5}", "DEAL-[0-9]{5}", "TKT-[0-9]{6}"]

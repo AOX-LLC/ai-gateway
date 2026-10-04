@@ -12,8 +12,10 @@ also what keeps live cost down). What happens to each unit:
 - anything else (a provider error, a refusal, a budget, a timeout, an answer that does not fit the
   schema, a recording made under other prompt text): **failed**, and the layer fails closed.
 
-Cost guards: a per-client call rate, an hourly spend ceiling for live calls, agent-core's own
-per-call budget (its configuration), a timeout, and a limit on units per call (in the layer).
+Cost guards: a per-client call rate, each client's own share of an hourly spend ceiling for billed
+calls and the gateway-wide ceiling itself (a replayed call is not spend), agent-core's own per-call
+budget (its configuration), a timeout that also covers the wait for a model slot, and a limit on
+units per call (in the layer).
 """
 
 import logging
@@ -86,6 +88,7 @@ class JudgeConfig:
     cache_entries: int = 4_096
     max_calls_per_minute_per_client: int = 120
     max_usd_per_hour: Decimal = Decimal("2.00")
+    max_usd_per_hour_per_client: Decimal = Decimal("0.50")
     judge_arguments: bool = True
 
 
@@ -98,26 +101,53 @@ class Judge:
     def __post_init__(self) -> None:
         self._cache: OrderedDict[str, UnitResult] = OrderedDict()
         self._calls: dict[str, deque[float]] = {}
-        self._spend: deque[tuple[float, Decimal]] = deque()
+        self._spend: deque[tuple[float, Decimal, str]] = deque()
+        self._warned: dict[tuple[str, str], float] = {}
         self._limiter = anyio.CapacityLimiter(self.config.concurrency)
 
     # -- the guards -----------------------------------------------------------------------------
 
     def _allow_call(self, client_name: str) -> bool:
+        """Whether this client may cause one more model call now. Three guards, cheapest first: the
+        client's rate, the client's own share of the hour's spend, and the gateway-wide ceiling. A
+        client that has spent its share is refused while the others still have the rest of the
+        ceiling, so one client cannot use it all up. Only billed calls (live, record) are spend: a
+        replayed call costs nothing."""
         now = time.monotonic()
         recent = self._calls.setdefault(client_name, deque())
         while recent and now - recent[0] > _MINUTE_S:
             recent.popleft()
         if len(recent) >= self.config.max_calls_per_minute_per_client:
+            self._refused(client_name, "rate", now)
             return False
         while self._spend and now - self._spend[0][0] > _HOUR_S:
             self._spend.popleft()
-        if sum((cost for _, cost in self._spend), Decimal(0)) >= self.config.max_usd_per_hour:
+        total = sum((cost for _, cost, _ in self._spend), Decimal(0))
+        own = sum((cost for _, cost, who in self._spend if who == client_name), Decimal(0))
+        if own >= self.config.max_usd_per_hour_per_client:
+            self._refused(client_name, "client_budget", now)
+            return False
+        if total >= self.config.max_usd_per_hour:
+            self._refused(client_name, "ceiling", now)
             return False
         recent.append(now)
         if len(self._calls) > 2_048:  # bounded: the least recently inserted client goes
             self._calls.pop(next(iter(self._calls)))
         return True
+
+    def _refused(self, client_name: str, guard: str, now: float) -> None:
+        """Say, once a minute per client and guard, that a guard refused a call: otherwise the only
+        sign is `classifier_unavailable`. A client's name and a guard's name, never any text."""
+        key = (client_name, guard)
+        if now - self._warned.get(key, -_MINUTE_S) >= _MINUTE_S:
+            self._warned[key] = now
+            logger.error(
+                "the injection classifier refused a model call for client %s: the %s guard",
+                client_name,
+                guard,
+            )
+            if len(self._warned) > 2_048:
+                self._warned.pop(next(iter(self._warned)))
 
     # -- one unit -------------------------------------------------------------------------------
 
@@ -131,19 +161,23 @@ class Judge:
             return cached
         if not self._allow_call(client_name):
             return UnitResult(Outcome.FAILED)  # a budget: not cached, tried again later
-        result = await self._call(surface, text, request_id)
+        result = await self._call(surface, text, request_id, client_name)
         if result.outcome is not Outcome.FAILED:
             self._cache[key] = result
             while len(self._cache) > self.config.cache_entries:
                 self._cache.popitem(last=False)
         return result
 
-    async def _call(self, surface: str, text: str, request_id: UUID | None) -> UnitResult:
+    async def _call(
+        self, surface: str, text: str, request_id: UUID | None, client_name: str
+    ) -> UnitResult:
         started = time.perf_counter()
         context = RunContext(run_id=str(request_id)) if request_id is not None else None
         try:
-            async with self._limiter:
-                with anyio.fail_after(self.config.timeout_s):
+            # The limit covers the wait for a slot as well as the call: one client's backlog cannot
+            # hold another's calls longer than `timeout_s`.
+            with anyio.fail_after(self.config.timeout_s):
+                async with self._limiter:
                     answered = await self.client.call(
                         JUDGE,
                         inputs={"surface": surface, "text": prepare(text)},
@@ -153,16 +187,16 @@ class Judge:
                         context=context,
                     )
         except ReplayMissError:
-            self._record(request_id, surface, None, started, "unrecorded")
+            self._record(request_id, surface, None, started, "unrecorded", client_name)
             return UnitResult(Outcome.UNCLASSIFIED)
         except Exception as error:
             # Fail closed. The class name says what happened; the message might quote the text.
             logger.error(
                 "the injection classifier could not judge a unit (%s)", type(error).__name__
             )
-            self._record(request_id, surface, None, started, "error")
+            self._record(request_id, surface, None, started, "error", client_name)
             return UnitResult(Outcome.FAILED)
-        self._record(request_id, surface, answered, started, "ok")
+        self._record(request_id, surface, answered, started, "ok", client_name)
         judged = answered.output
         flagged = (
             judged.verdict == "injection"
@@ -174,7 +208,13 @@ class Judge:
         )
 
     def _record(
-        self, request_id: UUID | None, surface: str, answered: object, started: float, status: str
+        self,
+        request_id: UUID | None,
+        surface: str,
+        answered: object,
+        started: float,
+        status: str,
+        client_name: str,
     ) -> None:
         if self.usage is None:
             return
@@ -186,7 +226,11 @@ class Judge:
             )  # fmt: skip
         else:
             usage = answered.usage  # type: ignore[attr-defined]
-            self._spend.append((time.monotonic(), answered.cost_usd))  # type: ignore[attr-defined]
+            if answered.mode.value != "replay":  # type: ignore[attr-defined]
+                # Billed calls only: a replayed call's cost is the recording's, nothing was charged.
+                self._spend.append(
+                    (time.monotonic(), answered.cost_usd, client_name)  # type: ignore[attr-defined]
+                )
             record = UsageRecord(
                 request_id,
                 surface,

@@ -62,6 +62,7 @@ async def test_seed_demo_registers_the_upstream_policies_and_clients(
     )
     assert sorted(tokens) == [
         "harborline-decoy-bot",
+        "harborline-helper-api",
         "harborline-ops-bot",
         "harborline-support-bot",
     ]
@@ -71,7 +72,11 @@ async def test_seed_demo_registers_the_upstream_policies_and_clients(
         ("tickets", "http://ticketing:4412/mcp", "TICKETING_SERVICE_TOKEN"),
     ]
     assert policies == [("read", 7), ("write", 4)]
-    assert scopes == [("harborline-ops-bot", 11), ("harborline-support-bot", 9)]
+    assert scopes == [
+        ("harborline-helper-api", 4),
+        ("harborline-ops-bot", 11),
+        ("harborline-support-bot", 9),
+    ]
 
 
 async def test_seed_demo_is_idempotent_and_replaces_the_old_tokens(
@@ -93,8 +98,8 @@ async def test_seed_demo_is_idempotent_and_replaces_the_old_tokens(
         " (SELECT count(*) FROM clients)",
     )
     assert first != second
-    assert live == [(3,)]
-    assert counts == [(3, 11, 3)]
+    assert live == [(4,)]
+    assert counts == [(3, 11, 4)]
 
 
 async def test_tool_policy_set_changes_one_tools_effect(
@@ -145,10 +150,17 @@ async def test_seeding_both_data_sets_leaves_each_client_with_exactly_its_own_sc
     assert scopes["echo-test-wide"] == ["echo__say", "echo__shout"]
     assert len(scopes["harborline-support-bot"]) == 9
     assert len(scopes["harborline-ops-bot"]) == 11
+    assert scopes["harborline-helper-api"] == [
+        "crm__get_account",
+        "crm__list_deals",
+        "crm__search_accounts",
+        "tickets__create_ticket",
+    ]
     assert not any(tool.startswith("echo__") for tool in scopes["harborline-ops-bot"])
     assert sorted(scopes) == [
         "echo-test-narrow",
         "echo-test-wide",
+        "harborline-helper-api",
         "harborline-ops-bot",
         "harborline-support-bot",
     ]

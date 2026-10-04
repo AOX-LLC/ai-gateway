@@ -62,6 +62,7 @@ _KEYS = frozenset(
         "cache_entries",
         "max_calls_per_minute_per_client",
         "max_usd_per_hour",
+        "max_usd_per_hour_per_client",
         "judge_arguments",
     }
 )
@@ -98,6 +99,9 @@ def parse_judge_config(raw: Mapping[str, Any]) -> JudgeConfig:
                 "max_calls_per_minute_per_client", defaults.max_calls_per_minute_per_client
             ),
             max_usd_per_hour=Decimal(str(table.get("max_usd_per_hour", defaults.max_usd_per_hour))),
+            max_usd_per_hour_per_client=Decimal(
+                str(table.get("max_usd_per_hour_per_client", defaults.max_usd_per_hour_per_client))
+            ),
             judge_arguments=table.get("judge_arguments", "writes") == "writes",
         )
     except (InvalidOperation, ValueError, TypeError) as error:
@@ -117,25 +121,33 @@ def parse_judge_config(raw: Mapping[str, Any]) -> JudgeConfig:
         raise ClassifierConfigError(
             "the classifier's sizes and limits are whole numbers of 1 or more"
         )
-    if config.timeout_s <= 0 or config.max_usd_per_hour <= 0:
-        raise ClassifierConfigError("timeout_s and max_usd_per_hour are above zero")
+    if (
+        config.timeout_s <= 0
+        or config.max_usd_per_hour <= 0
+        or config.max_usd_per_hour_per_client <= 0
+    ):
+        raise ClassifierConfigError(
+            "timeout_s, max_usd_per_hour and max_usd_per_hour_per_client are above zero"
+        )
     if table.get("judge_arguments", "writes") not in ("writes", "none"):
         raise ClassifierConfigError('judge_arguments is "writes" or "none"')
     return config
 
 
 def result_values(result: CallToolResult) -> Any:
-    """What of a result is judged: its structured content, or else its text (parsed as JSON when it
-    is, so each value is its own unit)."""
-    if result.structured_content is not None:
-        return result.structured_content
-    texts = [block.text for block in result.content if isinstance(block, TextContent)]
+    """What of a result is judged: its structured content AND its text blocks (parsed as JSON when
+    they are, so each value is its own unit; a string both carry is judged once). A client may be
+    shown either, so a server that puts something different in each is judged on both."""
     values: list[Any] = []
-    for text in texts:
+    if result.structured_content is not None:
+        values.append(result.structured_content)
+    for block in result.content:
+        if not isinstance(block, TextContent):
+            continue
         try:
-            values.append(json.loads(text))
+            values.append(json.loads(block.text))
         except ValueError:
-            values.append(text)
+            values.append(block.text)
     return values
 
 

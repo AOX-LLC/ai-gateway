@@ -343,7 +343,10 @@ def test_the_default_environment_and_the_workflow_do_not_switch_it_on_globally()
         index
         for index, step in enumerate(steps)
         if step.get("name")
-        == "Harborline scenario through the gateway and directly, then simulated traffic"
+        == (
+            "Harborline scenario through the gateway and directly, simulated traffic,"
+            " then the export attack"
+        )
     ]
     assert len(named) == 1
     assert paths == [f"ci.yml:jobs.e2e.steps[{named[0]}].env.LAB_AUTO_APPROVE"]

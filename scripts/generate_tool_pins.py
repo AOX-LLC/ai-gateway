@@ -1,4 +1,4 @@
-"""Write `config/tool_pins.toml`: the reviewed description and input schema of each tool.
+"""Write `config/tool_pins.toml`: the reviewed description and schemas of each tool.
 
     uv run scripts/generate_tool_pins.py            # rewrite the file
     uv run scripts/generate_tool_pins.py --check    # fail if the file is not what the servers say

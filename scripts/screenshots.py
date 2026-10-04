@@ -136,10 +136,24 @@ def main() -> None:
             "the queue shows an approved, a rejected and an expired request",
         )
 
+        # The classifier's tokens and cost, from the seeded replayed model calls: the cost must read
+        # as replayed, never as spend.
+        for panel in ("tokens", "cost", "calls"):
+            check(page.locator(f"#{panel}").is_visible(), f"the {panel} panel is on the page")
+        usage = page.locator("#tokens, #cost, #calls").all_inner_texts()
+        usage_text = " ".join(usage)
+        check("replayed, not billed" in usage_text, 'the cost says "replayed, not billed"')
+        check(
+            re.search(r"(?<!not )billed", usage_text) is None,
+            "no figure of the replayed cost is labelled billed",
+        )
+        check("Unclassified" in usage_text, "the unclassified calls are counted apart")
+
         # The overview in dark: the first screen, and the whole page.
         shot(page, "overview-dark-fold.png")
         shot(page, "overview-dark.png", full_page=True)
         shot(page.locator("#approvals"), "approval-queue-dark.png")
+        shot(page.locator(".chart-section").last, "tokens-cost-dark.png")
 
         # The decisions pager: older, then newer.
         first_time = page.locator("#decisions tbody tr").first.locator("td").nth(1).inner_text()
@@ -169,12 +183,12 @@ def main() -> None:
             == "7d",
             "7d is the selected range",
         )
-        shot(page.locator(".chart-section"), "charts-7d-dark.png")
+        shot(page.locator(".chart-section").first, "charts-7d-dark.png")
         page.get_by_role("link", name="24h").click()
         page.wait_for_url(f"{args.url}/?range=24h")
         page.wait_for_selector("#volume svg")
         settle(page)
-        shot(page.locator(".chart-section"), "charts-24h-dark.png")
+        shot(page.locator(".chart-section").first, "charts-24h-dark.png")
 
         # The theme toggle: light now, and it stays light after a reload.
         page.get_by_role("button", name="Switch to light theme").click()
@@ -190,7 +204,8 @@ def main() -> None:
         )
         shot(page, "overview-light-fold.png")
         shot(page, "overview-light.png", full_page=True)
-        shot(page.locator(".chart-section"), "charts-24h-light.png")
+        shot(page.locator(".chart-section").first, "charts-24h-light.png")
+        shot(page.locator(".chart-section").last, "tokens-cost-light.png")
         page.goto(f"{args.url}/?range=24h")
         page.get_by_role("button", name="Switch to dark theme").click()
         check(

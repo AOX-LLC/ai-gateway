@@ -1,0 +1,18 @@
+# The red-team lab's pipeline (scripts/run_redteam_check.sh points the gateway at it for the second
+# run of the acceptance attack): every layer that may be weakened is in monitor mode, so a call a layer
+# would have refused goes through and records `would_block`, which is how the test sees that each
+# layer noticed the attack. `scope` and `approval` are floor layers and stay enforcing.
+# Never use this for anything real: a monitored layer stops nothing.
+[layers]
+scope = "enforce"
+allowlist = "monitor"
+rate_limit = "monitor"
+schema = "monitor"
+pinned_descriptions = "monitor"
+egress = "monitor"
+canary = "monitor"
+classifier = "monitor"
+approval = "enforce"
+
+[safety]
+allow_floor_override = false

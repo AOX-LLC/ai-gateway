@@ -7,7 +7,9 @@ data. Standard library only. Prints no secret.
     DASHBOARD_PASSWORD=... python3 scripts/check_dashboard.py --expect-data
 
 `--expect-data` also requires tool calls and a decided approval in the data (a run of the simulator
-leaves both). The password is read from the environment, never an argument.
+leaves both). `--expect-layers egress,canary,...` requires each named layer to appear in the
+decisions as the layer that stopped a call or as one that would have (the red-team run leaves
+both). The password is read from the environment, never an argument.
 """
 
 import argparse
@@ -63,12 +65,31 @@ def check(condition: bool, what: str) -> None:
     print(f"ok    {what}")
 
 
+def layers_named(client: Client, first: dict[str, object]) -> set[str]:
+    """Every layer the decisions name, as what blocked a call or what would have (all pages)."""
+    named: set[str] = set()
+    page: dict[str, object] = first
+    for _ in range(60):
+        for decision in page["decisions"]:  # type: ignore[attr-defined]
+            if decision.get("blockedBy"):
+                named.add(decision["blockedBy"])
+            named.update(decision.get("wouldBlock") or [])
+        cursor = page.get("nextCursor")
+        if not cursor:
+            break
+        query = urllib.parse.urlencode({"range": "24h", "cursor": cursor})
+        _, _, body = client.request("GET", f"/api/decisions?{query}")
+        page = json.loads(body)
+    return named
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawTextHelpFormatter
     )
     parser.add_argument("--url", default="http://127.0.0.1:4400")
     parser.add_argument("--expect-data", action="store_true")
+    parser.add_argument("--expect-layers", default="", help="comma-separated layer names")
     args = parser.parse_args()
     password = os.environ.get("DASHBOARD_PASSWORD", "")
     if not password:
@@ -149,6 +170,11 @@ def main() -> None:
                 status == 200 and older and shown.isdisjoint(d["requestId"] for d in older),
                 "the next page is older and repeats nothing",
             )
+    if args.expect_layers:
+        wanted = [name for name in args.expect_layers.split(",") if name]
+        named = layers_named(client, decisions)
+        for layer in wanted:
+            check(layer in named, f"the dashboard names {layer} as a layer that stopped a call")
     status, _, _ = client.request(
         "GET", "/api/decisions?range=24h&cursor=%27%3B%20drop%20table%20x"
     )

@@ -77,3 +77,6 @@ dashboard/CLAUDE.md
 
 # The demo stack's throwaway state (a demo-only password); removed by `run_dashboard_demo.sh down`
 .demo/
+
+# Browser captures the Playwright tooling writes into the working directory
+.playwright-mcp/

@@ -227,3 +227,24 @@ def test_the_seed_refuses_when_it_cannot_tell_whose_database_it_is(
     monkeypatch.setattr(module.subprocess, "run", no_docker)
 
     assert "cannot tell" in (module.not_the_demo_stack(4402) or "")
+
+
+def test_the_demo_model_usage_is_all_replayed_priced_like_the_recordings_and_agrees_with_verdicts(
+    week: Any,
+) -> None:
+    usage = week.usage
+    assert usage
+    assert {u["mode"] for u in usage} == {"replay"}  # nothing the demo shows was billed
+    for u in usage[:500]:
+        cost = (u["input_tokens"] * 1.0 + u["output_tokens"] * 5.0) / 1e6
+        assert u["cost_usd"] == pytest.approx(cost, abs=1e-8)
+    unrecorded = [u for u in usage if u["status"] == "unrecorded"]
+    assert unrecorded
+    assert all(
+        u["input_tokens"] == u["output_tokens"] == 0 and u["cost_usd"] == 0 for u in unrecorded
+    )
+    unclassified = {v["request_id"] for v in week.verdicts if v["verdict"] == "unclassified"}
+    assert {u["request_id"] for u in unrecorded} == unclassified
+    assert {v["code"] for v in week.verdicts if v["verdict"] == "unclassified"} == {
+        "classifier_unrecorded"
+    }

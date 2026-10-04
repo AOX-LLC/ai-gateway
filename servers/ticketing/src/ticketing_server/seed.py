@@ -259,6 +259,19 @@ async def is_seeded(connection: AsyncConnection) -> bool:
     return bool(row and row[0])
 
 
+async def sync_canary(connection: AsyncConnection) -> bool:
+    """Put the canary in a volume seeded before it existed. Idempotent: the sentence is appended to
+    the first ticket's description only when the canary is not in it, so a fresh volume (which has
+    it from the seed) and a volume synced before are left as they are. Returns whether it changed.
+    """
+    cursor = await connection.execute(
+        "UPDATE tickets SET description = description || ' ' || %s"
+        " WHERE id = 'TKT-000001' AND position(%s IN description) = 0",
+        (TICKETING_CANARY_SENTENCE, TICKETING_CANARY),
+    )
+    return cursor.rowcount == 1
+
+
 async def insert_dataset(connection: AsyncConnection, dataset: Dataset) -> None:
     """Write the dataset in one transaction, then continue the ticket sequence after it."""
     async with connection.transaction(), connection.cursor() as cursor:

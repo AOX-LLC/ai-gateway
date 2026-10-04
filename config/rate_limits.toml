@@ -17,3 +17,10 @@ per = 60
 [tools.crm__list_deals]
 burst = 4
 per = 3600
+
+# A triage looks up the one or two accounts a message is about. Reading dozens of accounts one by
+# one is what a bulk export does, so each client gets 30 an hour (a bucket per client): above any
+# triage and the traffic simulator, below the 40 accounts of the fictional CRM.
+[tools.crm__get_account]
+burst = 30
+per = 3600

@@ -156,10 +156,12 @@ def test_the_simulators_idea_of_each_layer_matches_the_shipped_configuration(sim
     assert {tool: entry["burst"] for tool, entry in limits["tools"].items()} == sim.TOOL_BURSTS
     assert min(entry["per"] for entry in limits["tools"].values()) >= 3600, "no refill in a run"
     assert GatewaySettings.model_fields["login_failures_per_id"].default == sim.THROTTLE_PER_ID
+    # The simulator drives the support and ops bots: the rules that can reach them, not the helper
+    # API client's (which it never uses).
     urgent = [
         r
         for r in load_allowlist(root / "config" / "allowlist.toml")
-        if r.tool == "tickets__create_ticket"
+        if r.tool == "tickets__create_ticket" and r.client in ("harborline-support-bot", "*")
     ]
     assert [(r.client, r.argument) for r in urgent] == [("harborline-support-bot", "priority")]
     assert "urgent" not in urgent[0].one_of  # type: ignore[operator]

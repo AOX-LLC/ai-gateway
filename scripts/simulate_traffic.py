@@ -61,7 +61,7 @@ SUPPORT, OPS = "harborline-support-bot", "harborline-ops-bot"
 DECOY = "harborline-decoy-bot"
 """A client with no scopes whose token the wrong-secret attempts use: the failed-login throttle
 locks a token id out, and the bots the simulator is driving must not be the ones it locks."""
-TOOL_BURSTS = {"crm__list_deals": 4}
+TOOL_BURSTS = {"crm__list_deals": 4, "crm__get_account": 30}
 """Tools with a limit of their own (config/rate_limits.toml): the calls a client may make before the
 rest are refused. The refill is too slow to matter in a run (a test pins this to the file)."""
 THROTTLE_PER_ID = 5

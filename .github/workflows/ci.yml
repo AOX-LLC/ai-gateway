@@ -257,7 +257,7 @@ jobs:
           LOOKUP_ID=$(echo "$SUPPORT" | cut -d_ -f2)
           docker compose run --rm -T admin token-revoke "$LOOKUP_ID"
           GATEWAY_TOKEN="$SUPPORT" uv run scripts/test_client.py --expect-rejected
-      - name: Harborline scenario through the gateway and directly, then simulated traffic
+      - name: Harborline scenario through the gateway and directly, simulated traffic, then the export attack
         shell: bash
         env:
           # Test tooling only (scripts/auto_approver.py): set on this one step, which runs the
@@ -265,6 +265,7 @@ jobs:
           LAB_AUTO_APPROVE: "yes"
         run: |
           scripts/run_harborline_check.sh
+          scripts/run_redteam_check.sh
       - name: The dashboard signs in and shows live data
         shell: bash
         env:
@@ -274,7 +275,7 @@ jobs:
           set -euo pipefail
           python3 scripts/set_dashboard_password.py --password-env DASHBOARD_PASSWORD
           docker compose up -d --force-recreate --wait dashboard
-          python3 scripts/check_dashboard.py --expect-data
+          python3 scripts/check_dashboard.py --expect-data --expect-layers egress,canary,classifier,rate_limit
       - name: Show stack logs
         if: failure()
         run: docker compose --profile test logs --no-color

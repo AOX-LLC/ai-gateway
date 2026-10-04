@@ -152,4 +152,7 @@ def test_the_shipped_limits_load() -> None:
 
     assert limits.reads == Limit(600, 60.0)
     assert limits.writes == Limit(60, 60.0)
-    assert limits.tools == {"crm__list_deals": Limit(4, 3600.0)}
+    assert limits.tools == {
+        "crm__list_deals": Limit(4, 3600.0),
+        "crm__get_account": Limit(30, 3600.0),
+    }

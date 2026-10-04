@@ -97,19 +97,100 @@ async def test_the_same_copy_dripped_out_a_few_at_a_time_is_caught_across_writes
     assert refused.score >= 10
 
 
-async def test_what_one_session_read_does_not_count_for_another_session_or_client() -> None:
+async def test_what_a_client_read_in_one_session_cannot_be_written_out_from_another() -> None:
     layer = EgressLayer(SHIPPED)
     await _read(layer, _accounts(1, 20), ctx(session="a"))
 
     other_session = await layer.before_call(
         ctx(session="b"), _write(" ".join(f"ACC-{n:05d}" for n in range(1, 8)))
     )
+
+    assert isinstance(other_session, Deny)
+    assert other_session.code is DenyCode.EGRESS_BULK
+    assert other_session.score == 7
+
+
+async def test_what_one_client_read_does_not_count_for_another_client() -> None:
+    layer = EgressLayer(SHIPPED)
+    await _read(layer, _accounts(1, 20), ctx(session="a"))
+
     other_client = await layer.before_call(
         ctx("another-bot", session="a"), _write(" ".join(f"ACC-{n:05d}" for n in range(1, 8)))
     )
 
-    assert isinstance(other_session, Allow)
     assert isinstance(other_client, Allow)
+
+
+async def test_a_copy_dripped_out_across_sessions_is_caught_by_the_clients_window_tally() -> None:
+    layer = EgressLayer(SHIPPED)
+    await _read(layer, _accounts(1, 30), ctx(session="reader"))
+
+    def four(first: int):  # type: ignore[no-untyped-def]
+        return _write(" ".join(f"ACC-{n:05d}" for n in range(first, first + 4)))
+
+    verdicts = [
+        await layer.before_call(ctx(session=f"writer-{n}"), four(1 + 4 * n)) for n in range(3)
+    ]
+
+    assert [isinstance(v, Allow) for v in verdicts] == [True, True, False]
+    refused = verdicts[2]
+    assert isinstance(refused, Deny)
+    assert refused.score is not None
+    assert refused.score >= 10
+
+
+async def test_an_honest_triage_across_sessions_passes() -> None:
+    """One session looks the account up, another opens the ticket: the ticket names the account it
+    is about (exempt) and cites a value or two, as a real one does."""
+    layer = EgressLayer(SHIPPED)
+    await _read(layer, _accounts(3, 1) + " ops@harborline.example 555-0142", ctx(session="look"))
+
+    ticket = await layer.before_call(
+        ctx(session="open"),
+        _write("Damaged order for ACC-00003, call 555-0142", account_id="ACC-00003"),
+    )
+
+    assert isinstance(ticket, Allow)
+    assert ticket.score == 1, "the phone number; the account the ticket is about is exempt"
+
+
+async def test_a_value_read_is_forgotten_after_the_window_unless_it_is_read_again() -> None:
+    now = [1000.0]
+    layer = EgressLayer(SHIPPED, clock=lambda: now[0])
+    bulk = _write(" ".join(f"ACC-{n:05d}" for n in range(1, 8)))
+    await _read(layer, _accounts(1, 20), ctx(session="a"))
+
+    now[0] += 1700  # inside the 30 minutes
+    inside = await layer.before_call(ctx(session="b"), bulk)
+    await _read(layer, _accounts(1, 20), ctx(session="c"))  # read again: the window starts over
+    now[0] += 1700
+    renewed = await layer.before_call(ctx(session="d"), bulk)
+    now[0] += 1900  # past it, with no read since
+    after = await layer.before_call(ctx(session="e"), bulk)
+
+    assert isinstance(inside, Deny)
+    assert isinstance(renewed, Deny)
+    assert isinstance(after, Allow)
+    assert after.score == 0
+
+
+async def test_the_tally_of_what_a_client_tried_to_write_also_ages_out() -> None:
+    now = [1000.0]
+    layer = EgressLayer(SHIPPED, clock=lambda: now[0])
+    await _read(layer, _accounts(1, 30), ctx(session="a"))
+    refused = await layer.before_call(
+        ctx(session="b"), _write(" ".join(f"ACC-{n:05d}" for n in range(1, 12)))
+    )
+    now[0] += 1700
+    await _read(layer, _accounts(1, 30), ctx(session="c"))  # still reading: values stay known
+    soon = await layer.before_call(ctx(session="d"), _write("see ACC-00003"))
+    now[0] += 1900
+    await _read(layer, _accounts(1, 30), ctx(session="e"))
+    later = await layer.before_call(ctx(session="f"), _write("see ACC-00003"))
+
+    assert isinstance(refused, Deny)
+    assert isinstance(soon, Deny), "the attempt 1700 s ago still counts"
+    assert isinstance(later, Allow), "and 3600 s ago it does not"
 
 
 async def test_emails_and_phones_read_count_as_values() -> None:
@@ -164,46 +245,56 @@ async def test_the_ledger_holds_no_argument_or_result_content() -> None:
     await _read(layer, f"{marker} ACC-00001 someone@harborline.example", context)
     await layer.before_call(context, _write(f"{marker} ACC-00001"))
 
-    held = repr(vars(layer)) + repr([vars(ledger) for ledger in layer._ledgers.values()])
+    held = repr(vars(layer)) + repr([vars(ledger) for ledger in layer._clients.values()])
     assert marker not in held
     assert "ACC-00001" not in held
     assert "someone@" not in held
-    ledger = next(iter(layer._ledgers.values()))
-    assert all(isinstance(fingerprint, int) for fingerprint in ledger.read | ledger.egressed)
+    ledger = next(iter(layer._clients.values()))
+    assert all(isinstance(fingerprint, int) for fingerprint in [*ledger.read, *ledger.egressed])
+    assert all(isinstance(f, int) for tally in ledger.sessions.values() for f in tally)
 
 
-async def test_the_ledger_is_bounded_and_the_least_recent_sessions_go_first() -> None:
-    layer = EgressLayer(
-        EgressConfig(
-            max_sessions=3,
-            max_values_per_session=5,
-            max_values_total=100,
-            identifier_patterns=SHIPPED.identifier_patterns,
-        )
+async def test_every_cap_is_per_client_so_one_client_cannot_push_another_out() -> None:
+    config = EgressConfig(
+        max_sessions_per_client=3,
+        max_values_per_client=10,
+        identifier_patterns=SHIPPED.identifier_patterns,
     )
-    for session in ("a", "b", "c", "d"):
-        await _read(layer, _accounts(1, 20), ctx(session=session))
+    layer = EgressLayer(config)
+    honest = ctx("honest-bot", session="v")
+    await _read(layer, _accounts(1, 6), honest)
+    for n in range(300):  # a client that opens session after session, each reading what it can
+        loud_session = ctx("loud-bot", session=f"s{n}")
+        await _read(layer, _accounts(1, 20), loud_session)
+        await layer.before_call(loud_session, _write("nothing to see"))
 
-    assert len(layer._ledgers) == 3, "the oldest session was dropped"
-    assert all(len(ledger.read) <= 5 for ledger in layer._ledgers.values()), "per-session cap"
-    assert layer.stored_values() == sum(
-        len(s.read) + len(s.egressed) for s in layer._ledgers.values()
+    loud = layer._clients[str(ctx("loud-bot").client.id)]
+    quiet = layer._clients[str(honest.client.id)]
+    bulk = await layer.before_call(
+        ctx("honest-bot", session="other"), _write(" ".join(f"ACC-{n:05d}" for n in range(1, 7)))
     )
+    cites_one = await layer.before_call(ctx("honest-bot", session="x"), _write("see ACC-00001"))
+
+    assert len(loud.read) <= 10, "its own cap held"
+    assert len(loud.sessions) <= 3, "and so did its session tallies"
+    assert len(quiet.read) == 6, "nothing of the honest client's ledger was dropped"
+    assert isinstance(bulk, Deny), "still checked, from any session"
+    assert bulk.code is DenyCode.EGRESS_BULK
+    assert isinstance(cites_one, Allow), "not refused for want of state"
 
 
-async def test_the_total_cap_drops_whole_sessions() -> None:
-    layer = EgressLayer(
-        EgressConfig(
-            max_values_total=12,
-            max_values_per_session=10,
-            identifier_patterns=SHIPPED.identifier_patterns,
-        )
-    )
-    for session in ("a", "b", "c"):
-        await _read(layer, _accounts(1, 10), ctx(session=session))
+async def test_a_clients_flooding_leaves_another_clients_writes_unaffected() -> None:
+    config = EgressConfig(max_values_per_client=5, identifier_patterns=SHIPPED.identifier_patterns)
+    layer = EgressLayer(config)
+    await _read(layer, _accounts(1, 30), ctx("loud-bot", session="a"))  # past its cap: saturated
+    await _read(layer, _accounts(1, 3), ctx("quiet-bot", session="a"))
 
-    assert layer.stored_values() <= 12 + 10, "never more than a session over the cap"
-    assert len(layer._ledgers) < 3
+    loud = await layer.before_call(ctx("loud-bot", session="b"), _write("see ACC-00099"))
+    quiet = await layer.before_call(ctx("quiet-bot", session="b"), _write("see ACC-00099"))
+
+    assert isinstance(loud, Deny)
+    assert loud.code is DenyCode.EGRESS_STATE_LOST
+    assert isinstance(quiet, Allow)
 
 
 async def test_the_modes_and_the_score_in_the_record() -> None:
@@ -284,33 +375,42 @@ async def test_a_value_in_a_dict_key_is_counted_too() -> None:
     assert isinstance(verdict, Deny)
 
 
-async def test_a_session_that_read_more_than_it_is_tracked_for_cannot_write_values() -> None:
-    """Flooding a session with reads must not make it forget what it read afterwards: past the cap
-    the layer refuses writes that carry any value (it cannot check them), not wave them through."""
-    config = EgressConfig(max_values_per_session=5, identifier_patterns=SHIPPED.identifier_patterns)
-    layer, context = EgressLayer(config), ctx()
+async def test_a_client_that_read_more_than_it_is_tracked_for_cannot_write_values_for_a_while() -> (
+    None
+):
+    """Flooding the ledger with reads must not make the client forget what it read afterwards: past
+    the cap the layer refuses writes that carry any value (it cannot check them), not wave them
+    through, until the window has passed."""
+    now = [0.0]
+    config = EgressConfig(max_values_per_client=5, identifier_patterns=SHIPPED.identifier_patterns)
+    layer, context = EgressLayer(config, clock=lambda: now[0]), ctx()
     await _read(layer, _accounts(1, 30), context)
 
     carrying = await layer.before_call(context, _write("see ACC-00099"))
     plain = await layer.before_call(context, _write("see the attached"))
+    now[0] += 2000
+    later = await layer.before_call(ctx(session="other"), _write("see ACC-00099"))
 
     assert isinstance(carrying, Deny)
     assert carrying.code is DenyCode.EGRESS_STATE_LOST
     assert isinstance(plain, Allow)
+    assert isinstance(later, Allow), "the window has passed and the values it read are forgotten"
 
 
-async def test_a_session_whose_ledger_was_dropped_for_room_cannot_write_values() -> None:
-    config = EgressConfig(max_sessions=2, identifier_patterns=SHIPPED.identifier_patterns)
+async def test_a_session_tally_dropped_for_room_starts_fresh_but_the_ledger_applies() -> None:
+    config = EgressConfig(
+        max_sessions_per_client=2, identifier_patterns=SHIPPED.identifier_patterns
+    )
     layer = EgressLayer(config)
     victim = ctx(session="victim")
     await _read(layer, _accounts(1, 20), victim)
     for other in ("a", "b"):
-        await _read(layer, _accounts(1, 2), ctx(session=other))  # crowd the victim out
+        await layer.before_call(ctx(session=other), _write("nothing"))  # crowd its tally out
 
     verdict = await layer.before_call(victim, _write(" ".join(f"ACC-{n:05d}" for n in range(1, 8))))
 
-    assert isinstance(verdict, Deny), "forgetting would fail open"
-    assert verdict.code is DenyCode.EGRESS_STATE_LOST
+    assert isinstance(verdict, Deny), "what the client read is still known"
+    assert verdict.code is DenyCode.EGRESS_BULK
 
 
 async def test_arguments_too_large_to_scan_are_refused_not_scanned_in_part() -> None:
@@ -336,3 +436,26 @@ async def test_a_result_too_large_to_scan_marks_the_session_so_writes_with_value
     verdict = await layer.before_call(context, _write("see ACC-00005"))
 
     assert isinstance(verdict, Deny)
+
+
+async def test_a_session_at_its_tally_is_quarantined_and_a_new_session_starts_clean() -> None:
+    """A refused attempt still counts, so one bulk attempt fills the session's tally. After that
+    every write in the session is refused, even one that carries nothing it read (a session that
+    tried a bulk copy is suspect, and its own words are how it would carry on). A new session of
+    the same client starts clean."""
+    layer, context = EgressLayer(SHIPPED), ctx()
+    await _read(layer, _accounts(1, 30), context)
+    bulk = await layer.before_call(context, _write(" ".join(f"ACC-{n:05d}" for n in range(1, 12))))
+
+    cites = await layer.before_call(context, _write("Damaged order for ACC-00003"))
+    own_words = await layer.before_call(context, _write("The pallet arrived with crushed corners"))
+
+    assert isinstance(bulk, Deny)
+    assert isinstance(cites, Deny)
+    assert cites.code is DenyCode.EGRESS_BULK
+    assert isinstance(own_words, Deny)
+    assert own_words.code is DenyCode.EGRESS_BULK
+    fresh = await layer.before_call(
+        ctx(session="s2"), _write("The pallet arrived with crushed corners")
+    )
+    assert isinstance(fresh, Allow)

@@ -12,3 +12,50 @@ client = "harborline-support-bot"
 tool = "tickets__create_ticket"
 argument = "priority"
 one_of = ["low", "normal", "high"]
+
+# The helper API of the 09 demo (harborline-helper-api) triages one email at a time: a handful of
+# CRM lookups and one ticket. These caps sit below what the servers allow (20 results, offset up to
+# 10000, 4000 characters), well above what a triage uses, and they make a bulk read or a bulk write
+# a refusal rather than a long run. `required` on `limit` means a call that leaves it out, and so
+# gets the server's default of 10, is refused too.
+
+[[rule]]
+name = "helper-api-search-limit"
+client = "harborline-helper-api"
+tool = "crm__search_accounts"
+argument = "limit"
+minimum = 1
+maximum = 5
+required = true
+
+[[rule]]
+name = "helper-api-search-no-paging"
+client = "harborline-helper-api"
+tool = "crm__search_accounts"
+argument = "offset"
+minimum = 0
+maximum = 20
+
+[[rule]]
+name = "helper-api-deals-limit"
+client = "harborline-helper-api"
+tool = "crm__list_deals"
+argument = "limit"
+minimum = 1
+maximum = 5
+required = true
+
+[[rule]]
+name = "helper-api-deals-no-paging"
+client = "harborline-helper-api"
+tool = "crm__list_deals"
+argument = "offset"
+minimum = 0
+maximum = 20
+
+[[rule]]
+name = "helper-api-ticket-description-length"
+client = "harborline-helper-api"
+tool = "tickets__create_ticket"
+argument = "description"
+max_length = 1000

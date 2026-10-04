@@ -1,4 +1,4 @@
-"""The reviewed definition of each tool: its description and input schema, pinned by hash.
+"""The reviewed definition of each tool (description, input and output schemas), pinned by hash.
 
 A tool's description and schema are what a model reads when it decides what to call and with what,
 so a server that changes them after review (a "rug pull") changes what the model is told. The
