@@ -82,6 +82,13 @@ class JudgeConfig:
     min_chars: int = 24
     min_words: int = 3
     max_unit_chars: int = 6_000
+    short_text: str = "normalized"
+    """`normalized` counts a value's length and words after underscores and zero-width characters
+    are read as spaces (the value is still judged as written); `legacy` counts them as written.
+    `legacy` is what v0.1.0 did, kept so the scorecard can show before and after."""
+    unit_overlap_chars: int = 400
+    """How far a unit of a long value reaches back into the one before it; 0 is v0.1.0's cut
+    without overlap."""
     max_units: int = 40
     concurrency: int = 8
     timeout_s: float = 8.0

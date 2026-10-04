@@ -5,7 +5,9 @@
 min_confidence = "medium"       # a flagged unit refuses the call at this confidence or higher
 min_chars = 24                  # a value shorter than this, or with fewer words, is not judged
 min_words = 3
+short_text = "normalized"       # "normalized": length and words are counted after `_` and zero-width characters read as spaces (the value is judged as written); "legacy" is v0.1.0's rule
 max_unit_chars = 6000           # a longer value is cut into units of this size
+unit_overlap_chars = 400        # a unit reaches this far back into the one before it, so a sentence on a boundary is whole in one unit; 0 is v0.1.0's cut
 max_units = 40                  # more units than this in one call is refused, not partly judged
 concurrency = 8                 # model calls in flight at once
 timeout_s = 8.0                 # one call's limit; a call that times out fails closed
