@@ -280,9 +280,12 @@ class EgressLayer(BaseLayer):
         for fingerprint in list(new)[: max(room, 0)]:
             ledger.egressed.add(fingerprint)
             self._total += 1
-        if (
-            len(copied) >= self._config.per_write
-            or len(ledger.egressed) >= self._config.per_session
+        # A session that has reached the tally is refused the writes that carry what it read, and
+        # only those: a write that carries none of it (a status change, a ticket in the writer's
+        # own words) is not what the tally counts, and a refused attempt must not lock an honest
+        # session out of everything.
+        if len(copied) >= self._config.per_write or (
+            copied and len(ledger.egressed) >= self._config.per_session
         ):
             return Deny(
                 DenyCode.EGRESS_BULK,

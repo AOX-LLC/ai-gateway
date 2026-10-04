@@ -336,3 +336,23 @@ async def test_a_result_too_large_to_scan_marks_the_session_so_writes_with_value
     verdict = await layer.before_call(context, _write("see ACC-00005"))
 
     assert isinstance(verdict, Deny)
+
+
+async def test_a_session_at_its_tally_is_refused_writes_that_carry_what_it_read_and_no_others() -> (
+    None
+):
+    """A refused attempt still counts, so one bulk attempt fills the session's tally. After that the
+    writes that carry something the session read are refused, and a write that carries none of it
+    (a status change, a ticket in the writer's own words) is not locked out with them."""
+    layer, context = EgressLayer(SHIPPED), ctx()
+    await _read(layer, _accounts(1, 30), context)
+    bulk = await layer.before_call(context, _write(" ".join(f"ACC-{n:05d}" for n in range(1, 12))))
+
+    cites = await layer.before_call(context, _write("Damaged order for ACC-00003"))
+    own_words = await layer.before_call(context, _write("The pallet arrived with crushed corners"))
+
+    assert isinstance(bulk, Deny)
+    assert isinstance(cites, Deny)
+    assert cites.code is DenyCode.EGRESS_BULK
+    assert isinstance(own_words, Allow)
+    assert own_words.score == 0
