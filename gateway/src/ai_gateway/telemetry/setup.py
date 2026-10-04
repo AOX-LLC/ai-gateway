@@ -36,6 +36,7 @@ DASHBOARD_VIEWS = [
     "dash_layer_verdicts",
     "dash_auth_failures",
     "dash_pipeline_layers",
+    "dash_model_usage",
 ]
 
 READER_CONNECTION_LIMIT = 5

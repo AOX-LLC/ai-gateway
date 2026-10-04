@@ -44,6 +44,11 @@ COLUMNS: dict[str, tuple[str, ...]] = {
         "request_id", "attrs",
     ),
     "pipeline_configs": ("sha256", "first_seen", "layers"),
+    "model_usage": (
+        "usage_id", "request_id", "ts", "layer", "purpose", "model", "tier", "mode",
+        "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "cost_usd",
+        "latency_ms", "status",
+    ),
 }  # fmt: skip
 """The columns written, per table. A row's other keys are ignored."""
 
