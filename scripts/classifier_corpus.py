@@ -97,7 +97,8 @@ def _row_values(row: Any) -> dict[str, Any]:
 
 def seeded_data(config: JudgeConfig | None = None) -> list[CorpusUnit]:
     from crm_server.seed import build_dataset as crm
-    from harborline_setup.handbook_documents import load_documents
+    from handbook_server.repo import snippet
+    from harborline_setup.handbook_documents import chunk_document, load_documents
     from mcp_common.notice import FICTIONAL_NOTICE
     from ticketing_server.seed import build_dataset as ticketing
 
@@ -132,6 +133,12 @@ def seeded_data(config: JudgeConfig | None = None) -> list[CorpusUnit]:
             units += [
                 CorpusUnit("handbook", SURFACE_RESULT, text)
                 for text in _units([document.title, document.body], config)
+            ]
+            # Search returns each chunk's heading and a snippet of its text, not the whole body.
+            units += [
+                CorpusUnit("handbook search", SURFACE_RESULT, text)
+                for chunk in chunk_document(document)
+                for text in _units([chunk.heading, snippet(chunk.text)], config)
             ]
     units += scenario_writes(config) + simulator_writes(config)
     return units
