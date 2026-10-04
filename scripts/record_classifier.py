@@ -14,6 +14,7 @@ committed. It prints counts, tokens and cost, never a text. Harborline Supply Co
 import argparse
 import asyncio
 import os
+import secrets
 import sys
 from decimal import Decimal
 from pathlib import Path
@@ -107,7 +108,6 @@ async def _record(units: list[corpus.CorpusUnit]) -> None:
         sys.exit("record_classifier: AGENT_CORE_ANTHROPIC_API_KEY is not set")
     missing = await _missing(units)
     print(f"{len(missing)} units to record")
-    configure_hash_key(b"record-classifier-" + b"x" * 32)
     totals: dict[str, Any] = {"in": 0, "out": 0, "cost": Decimal(0), "ok": 0, "failed": 0}
     client = _client("record")
 
@@ -176,6 +176,9 @@ def main() -> None:
     group.add_argument("--count", action="store_true", help="how many calls, and the cost")
     group.add_argument("--verify", action="store_true", help="replay every unit: fail on a miss")
     args = parser.parse_args()
+    # The judge's cache is keyed by a hash of each text. Here it only has to agree with itself for
+    # one run, so the key is random and thrown away: the gateway's own key is never needed or read.
+    configure_hash_key(secrets.token_bytes(32))
     units = corpus.everything()
     if args.count:
         asyncio.run(_count(units))
