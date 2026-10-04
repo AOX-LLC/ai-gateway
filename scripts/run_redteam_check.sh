@@ -3,7 +3,9 @@
 # scripted worst-case client does it. Run from the repository root with the stack up (fictional demo
 # data only; LAB_AUTO_APPROVE=yes, which plays the human who approves everything, so it is the layers
 # that must stop the attack and not a person). Prints no secret and no customer value. Each run
-# also makes an honest triage as the helper API client of the 09 demo, which no layer may stop.
+# makes two honest triages as the helper API client of the 09 demo (one session, and a session for each
+# call), which no layer may stop, and the export attack twice: from one session, and with every write
+# made from a session of its own.
 #
 #   run A  every layer enforcing: each call goes as the attack file says, the layer that stopped a
 #          call is the one it names (read back from telemetry), and the independent oracle, which reads
@@ -67,25 +69,30 @@ wait_for_gateway() {
 # The tools of the servers load just after the gateway answers, and the gateway polls the registry.
 settle() { wait_for_gateway; sleep "${SETTLE_S:-10}"; }
 
-ATTACK=scripts/redteam/attacks/export-every-customer.toml
-TRIAGE=scripts/redteam/attacks/normal-triage.toml
+ATTACKS=scripts/redteam/attacks
+
+# Each attack gets a gateway of its own: the rate limits and the egress ledger live in its memory, and
+# an attack must start from nothing, whatever ran before it. The client for each is the attack file's.
+attack() {  # attack <file> <mode> <token>
+  docker compose up -d --force-recreate --wait gateway > /dev/null
+  settle
+  GATEWAY_TOKEN="$3" uv run scripts/redteam/run_attack.py "$ATTACKS/$1" --mode "$2" \
+    --approve-as "$APPROVER_ID"
+}
+all_attacks() {  # all_attacks <mode>
+  attack normal-triage.toml "$1" "$HELPER"
+  attack normal-triage-sessions.toml "$1" "$HELPER"
+  attack export-every-customer.toml "$1" "$SUPPORT"
+  attack export-across-sessions.toml "$1" "$SUPPORT"
+}
 
 echo "== run A: every layer enforcing =="
-docker compose up -d --force-recreate --wait gateway > /dev/null
-settle
-GATEWAY_TOKEN="$HELPER" uv run scripts/redteam/run_attack.py "$TRIAGE" --mode enforce \
-  --approve-as "$APPROVER_ID"
-GATEWAY_TOKEN="$SUPPORT" uv run scripts/redteam/run_attack.py "$ATTACK" --mode enforce \
-  --approve-as "$APPROVER_ID"
+all_attacks enforce
 
 echo "== run B: the layers that can be weakened in monitor mode =="
-GATEWAY_PIPELINE_FILE_IN_CONTAINER=/app/config/pipeline.monitor.toml \
-  docker compose up -d --force-recreate --wait gateway > /dev/null
-settle
-GATEWAY_TOKEN="$HELPER" uv run scripts/redteam/run_attack.py "$TRIAGE" --mode monitor \
-  --approve-as "$APPROVER_ID"
-GATEWAY_TOKEN="$SUPPORT" uv run scripts/redteam/run_attack.py "$ATTACK" --mode monitor \
-  --approve-as "$APPROVER_ID"
+export GATEWAY_PIPELINE_FILE_IN_CONTAINER=/app/config/pipeline.monitor.toml
+all_attacks monitor
+unset GATEWAY_PIPELINE_FILE_IN_CONTAINER
 
 if [ -n "${DASHBOARD_PASSWORD:-}" ]; then
   echo "== the signed-in dashboard =="

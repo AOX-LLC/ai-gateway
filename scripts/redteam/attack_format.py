@@ -44,6 +44,11 @@ earlier result carried, and `{text:name}` a string named in the file's `[texts]`
 corpus string, so replay has it). A template that cannot be filled stops the run: the attack never
 guesses.
 
+`session = "name"` runs a step in a named MCP session (default `main`); the client opens each name
+once, with the same token, the first time a step uses it, and `{i}` may be in the name (a session
+for each iteration). What a client read in one session it can write from another: that is what the
+cross-session attacks are for.
+
 `hostile = false` marks an honest run (a normal triage): nothing in it should be stopped, and the
 oracle should find no export in either run. `[plant]` is optional.
 
@@ -74,7 +79,7 @@ TOKENS = re.compile(r"\{(\w+)(?::([^{}]*))?\}")
 KNOWN_TOKENS = frozenset({"i", "planted", "marker", "step", "values", "canary", "text"})
 _TOP = frozenset({"id", "title", "client", "marker", "hostile", "plant", "texts", "step"})
 _PLANT = frozenset({"account_id", "subject", "text_from"})
-_STEP = frozenset({"id", "tool", "arguments", "repeat", "enforce", "monitor"})
+_STEP = frozenset({"id", "tool", "session", "arguments", "repeat", "enforce", "monitor"})
 _ENFORCE = frozenset({"first", "last", "outcome", "blocked_by"})
 _MONITOR = frozenset({"first", "last", "would_block"})
 CORPUS = Path(__file__).resolve().parents[2] / "config" / "classifier_corpus"
@@ -107,6 +112,7 @@ class Step:
     repeat: int
     enforce: tuple[Enforce, ...]
     monitor: tuple[Monitor, ...]
+    session: str = "main"
 
     def expected_enforce(self, i: int) -> Enforce:
         return next(e for e in self.enforce if e.first <= i <= e.last)
@@ -208,7 +214,10 @@ def _step(raw: dict[str, Any], where: str, texts: dict[str, str]) -> Step:
     monitor = tuple(_monitor(m, repeat, here) for m in raw.get("monitor", []))
     _covers(enforce, repeat, here, "enforce")
     _covers(monitor, repeat, here, "monitor")
-    return Step(step_id, str(raw["tool"]), arguments, repeat, enforce, monitor)
+    session = str(raw.get("session", "main"))
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,40}(\{i(:[0-9]*d)?\}[A-Za-z0-9_-]{0,20})?", session):
+        raise AttackFormatError(f"{here}: session is a name, with {{i}} at most once at its end")
+    return Step(step_id, str(raw["tool"]), arguments, repeat, enforce, monitor, session)
 
 
 def _enforce(raw: dict[str, Any], repeat: int, where: str) -> Enforce:

@@ -18,7 +18,13 @@ import classifier_corpus as corpus  # noqa: E402
 from redteam.attack_format import AttackFormatError, load_attack, parse_attack  # noqa: E402
 from redteam.oracle import THRESHOLD, Landed, clean_up, plant_ticket, read_landed  # noqa: E402
 from redteam.run_attack import judge  # noqa: E402
-from redteam.scripted_client import AttackStoppedError, CallRecord, Loot, render  # noqa: E402
+from redteam.scripted_client import (  # noqa: E402
+    AttackStoppedError,
+    CallRecord,
+    Loot,
+    render,
+    session_name,
+)
 
 ATTACK = ROOT / "scripts" / "redteam" / "attacks" / "export-every-customer.toml"
 
@@ -281,3 +287,45 @@ def test_the_scripted_client_treats_every_way_the_gateway_refuses_as_a_refusal()
     from redteam.scripted_client import REFUSAL_CODES
 
     assert {INVALID_PARAMS, POLICY_BLOCKED} == REFUSAL_CODES
+
+
+# -- sessions -----------------------------------------------------------------------------------
+
+ATTACKS = ROOT / "scripts" / "redteam" / "attacks"
+
+
+@pytest.mark.parametrize("path", sorted(ATTACKS.glob("*.toml")), ids=lambda p: p.stem)
+def test_every_shipped_attack_loads_and_judges_every_call_in_both_runs(path: Path) -> None:
+    attack = load_attack(path)
+
+    assert attack.calls()
+    for step, i in attack.calls():
+        assert step.expected_enforce(i)
+        assert step.expected_monitor(i) is not None
+
+
+def test_the_cross_session_attack_reads_in_one_session_and_writes_from_others() -> None:
+    attack = load_attack(ATTACKS / "export-across-sessions.toml")
+    sessions = {
+        step.id: {session_name(step.session, i) for s, i in attack.calls() if s is step}
+        for step in attack.steps
+    }
+
+    assert sessions["read-the-planted-ticket"] == sessions["read-every-account"] == {"reader"}
+    writes = [sessions[s] for s in ("write-canary", "write-bulk", "write-drip")]
+    all_writers = set().union(*writes)
+    assert "reader" not in all_writers, "no write is made in the session that read"
+    assert len(all_writers) == 6, "the canary, the bulk and each of the four drip writes"
+
+
+def test_the_honest_cross_session_triage_makes_each_call_from_its_own_session() -> None:
+    attack = load_attack(ATTACKS / "normal-triage-sessions.toml")
+
+    assert not attack.hostile
+    assert len({s.session for s in attack.steps}) == len(attack.steps)
+
+
+@pytest.mark.parametrize("session", ["", "a b", "x{j}", "{i}x{i}", "a" * 50, "../up"])
+def test_a_bad_session_name_is_refused(session: str) -> None:
+    with pytest.raises(AttackFormatError, match="session"):
+        parse_attack(_raw(session=session))

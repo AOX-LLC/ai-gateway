@@ -11,7 +11,7 @@ in memory for the run and never printed. Harborline Supply Co. is fictional.
 import json
 import re
 from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -109,12 +109,23 @@ async def connect(url: str, token: str) -> AsyncGenerator[Client]:
         yield client
 
 
+def session_name(template: str, i: int) -> str:
+    """The session a call is made in: the step's `session` with `{i}` (or `{i:02d}`) filled in."""
+    return str(TOKENS.sub(lambda m: format(i, m.group(2) or ""), template))
+
+
 async def play(attack: Attack, url: str, token: str, planted: str) -> list[CallRecord]:
-    """Make every call of the attack, in order, in one session. Returns what happened to each."""
+    """Make every call of the attack, in order, each in the session its step names (one session
+    unless a step says otherwise). Returns what happened to each."""
     loot = Loot()
     records: list[CallRecord] = []
-    async with connect(url, token) as client:
+    async with AsyncExitStack() as stack:
+        sessions: dict[str, Client] = {}
         for step, i in attack.calls():
+            name = session_name(step.session, i)
+            if name not in sessions:  # a session is opened the first time a step uses it
+                sessions[name] = await stack.enter_async_context(connect(url, token))
+            client = sessions[name]
             arguments: dict[str, Any] = {
                 key: render(value, attack=attack, step_id=step.id, i=i, planted=planted, loot=loot)
                 if isinstance(value, str)
