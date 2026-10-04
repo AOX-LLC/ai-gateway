@@ -48,8 +48,10 @@ RESERVED_APPROVER_IDS = frozenset({LAB_APPROVER_ID})
 """Ids `approver-add` refuses: the lab approver's login is set up by `policy-setup` alone."""
 LAB_APPROVER_ROLE = "policy_lab_approver"
 """Phase 6's lab approver, which approves automatically. It exists only while `policy-setup` is
-given its password (POLICY_LAB_APPROVER_DB_PASSWORD), as a member of the approver role, and the next
-setup without one drops it. Not one of ROLES: setup removes every membership in those."""
+given its password (POLICY_LAB_APPROVER_DB_PASSWORD), as a member of the approver role; the next
+setup without one shuts it (no login, no membership, no grant) but keeps the role, since a login
+mapping is by the role's OID and is never made twice. Not one of ROLES: setup removes every
+membership in those."""
 AUDITOR_ROLE = "policy_auditor"
 """Reads the audit log, to verify it and to take anchors."""
 ROLES = (GATEWAY_ROLE, APPROVER_ROLE, AUDITOR_ROLE)
@@ -70,7 +72,10 @@ removes them (agent-core's `purge_payloads`); the request keeps its hash."""
 PURGER_ROLE = "policy_payload_purger"
 """The login `approvals-purge` connects as. agent-core lets only the approver side purge a payload,
 so it is a member of the approver role, and it is mapped to a principal that is not an approver
-(`policy.approvers` does not list it): it can purge and cannot make a decision anyone uses."""
+(`policy.approvers` does not list it). The gate and `audit-verify` use or accept no decision it
+writes, approval or rejection. The guard itself still lets any approver-role login write one (a
+purge-only role in agent-core would end that), so the purge credential is as guarded as an
+approver's, and the gate is what keeps it from deciding anything."""
 PURGER_PRINCIPAL = "service:payload-purger"
 
 

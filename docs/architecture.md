@@ -548,11 +548,12 @@ not store either twice.
 | `policy_gateway` (the gateway) | read and append the audit log; create approval requests (pending only) and consume an approved one (not one whose approver has been removed: it may ask whether an approver is still active, and nothing else about them) |
 | `policy_approver` (a group: nobody logs in as it; each approver's own login is a member, see [Approver identity](#approver-identity-phase-5c-1)) | read and append the audit log (a login writes the audit event of its decision); decide a pending request (only as the principal the owner mapped to its login, see below); read the approvers and the stored arguments |
 | `policy_auditor` | read the audit log and which login is which approver, and nothing else (never the arguments or the approvers' names) |
-| `policy_payload_purger` (one login, `approvals-purge`) | a member of the approver role with no `SET`, one connection; it purges stored arguments after 7 days and is mapped to a principal that is not an approver, so no decision it writes is used |
+| `policy_payload_purger` (one login, `approvals-purge`) | a member of the approver role with no `SET`, one connection; it purges stored arguments after 7 days and is mapped to a principal that is not an approver, so the gate uses no decision it writes (an approval or a rejection) and `audit-verify` refuses its decisions |
 
 A write's arguments are stored with its request (`include_payload`), where the approver reads them;
-the auditor and the dashboard's reader cannot. The gateway role can read the arguments of its own
-requests (it must, to return an open one; it had them to begin with).
+the auditor and the dashboard's reader cannot. The gateway role can read the stored arguments of every request (agent-core's requester
+layout; it must, to return an open one, and it had them to begin with), so a stolen gateway
+credential yields the last 7 days of them, not only live traffic.
 
 agent-core v0.1.0 ships the two roles and the guard itself. Its installer (`gateway-admin
 policy-setup` runs it every time: it is idempotent and upgrades an older schema in place, keeping
@@ -839,6 +840,17 @@ description of ticket `TKT-000001` (on a fresh volume; an existing volume's data
 `config/canaries.toml` holds their names and hashes, never the values. They are public, since they
 are in this repository: a real deployment makes its own and keeps the list secret.
 
+**Known limits of these layers** (gatekeeper pass 1): the guard lets any login in the approver role
+write a decision, so the payload-purge credential can reject or approve a pending request; the gate
+counts only an active approver's decision (a rejection included), so the effect is that a client's
+request is asked afresh, which a holder of the credential can repeat. A purge-only role in agent-core
+would end it. The pins cover the description and the input schema, not the output schema or titles.
+Egress and canary scan at most 256 KiB of a call's arguments. A session that read more values than it
+is tracked for, or whose ledger was dropped for room, cannot write a value (`egress_state_lost`).
+The service logins' 90-day expiry is renewed by every `policy-setup`, so it does not force a
+rotation. The dashboard's sign-in redirect takes its scheme from the request URL: behind a TLS-
+terminating proxy that does not forward the scheme it would point at `http://`.
+
 **Startup cross-check.** The allowlist, the rate limits and the approval roles are checked against the
 pins before the gateway accepts a request: a tool no pin names, an argument the pinned schema does not
 have, a range on a string, a value outside an enum, each stops startup, naming every mistake.
@@ -889,10 +901,11 @@ no image). It is off unless asked for three times, and each is enforced:
    resolves every service's variables whatever the profile, so it cannot be a required variable);
 3. a database role that exists only when `policy-setup` is given its password
    (`POLICY_LAB_APPROVER_DB_PASSWORD`): `policy_lab_approver`, a member of the approver role, so it
-   has the approver's powers and nothing else; the next setup without the password drops it.
+   has the approver's powers and nothing else; the next setup without the password shuts it (no
+   login, no membership, no grant) and keeps the role.
 
-The role is rebuilt, not reset, on every setup that has the password (a grant or membership made by
-hand does not survive it). Its decisions are in the audit log under its own role name, which
+The role is reset on every setup (a grant or membership made by hand does not survive it), not
+dropped and made again: agent-core's login mapping is by the role's OID and is never made twice. Its decisions are in the audit log under its own role name, which
 `audit-verify` accepts for `approval.resolved` and for nothing else, and says so when it finds any:
 a stack that was used as a lab is not quietly mistaken for one that was not. Setup records it as
 approver `lab-approver` (inactive when the role is gone). Never use it
