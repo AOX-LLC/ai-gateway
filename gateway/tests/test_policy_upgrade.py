@@ -282,3 +282,16 @@ async def test_setup_names_duplicate_open_requests_and_goes_on_once_one_is_cance
         " AND indexname IN ('agent_core_approvals_one_open', 'policy_approvals_one_pending')",
     )
     assert indexes == [("agent_core_approvals_one_open",)], "agent-core's index, not the gateway's"
+
+
+def test_the_installer_message_the_fallback_matches_is_still_agent_cores() -> None:
+    """The fallback in `policy.setup._install` tells one ConfigError from another by its text, since
+    agent-core has no type for it. Pinned here against the installed tag: a tag that rewords it
+    fails this test when it is bumped, instead of silently turning the fallback into a failure."""
+    import inspect
+
+    from aox_agent_core import storage
+
+    from ai_gateway.policy.setup import INSTALLER_NO_DECISIONS_MESSAGE
+
+    assert INSTALLER_NO_DECISIONS_MESSAGE in inspect.getsource(storage)

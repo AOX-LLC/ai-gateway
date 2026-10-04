@@ -11,6 +11,7 @@ holds beyond its layout.
 """
 
 import logging
+import sys
 from dataclasses import dataclass
 
 import anyio
@@ -55,6 +56,10 @@ from mcp_common.roles import (
 )
 
 logger = logging.getLogger(__name__)
+
+INSTALLER_NO_DECISIONS_MESSAGE = "close_unaudited_approvals needs"
+"""The start of agent-core's error when it will not cancel unaudited approvals because no current
+approver has decided anything (see `_install`)."""
 
 _SETUP_LOCK = PROVISIONING_LOCK
 
@@ -201,15 +206,30 @@ async def _install(owner_url: str, *, bind: bool | None = None) -> None:
     try:
         report = await anyio.to_thread.run_sync(lambda: install(close=True))
     except ConfigError as error:
-        if "close_unaudited_approvals needs" not in str(error):
+        # agent-core raises a plain ConfigError for this, so the case is told by its message: a
+        # test pins the text against the installed tag, so a change shows when the tag moves, not
+        # in production (where the error simply stops setup, as any other would).
+        if INSTALLER_NO_DECISIONS_MESSAGE not in str(error):
             raise
         if await _approved_without_an_explained_decision(owner_url):
             raise  # an approval no approver's decision made: that is what setup exists to stop
         report = await anyio.to_thread.run_sync(lambda: install(close=False))
-        logger.warning(
-            "approved requests were left as they are: the only decisions behind them are by"
-            " approvers who have been removed, and the gateway will not use them: %s",
-            ", ".join(report.unaudited_approvals),
+        left = ", ".join(report.unaudited_approvals)
+        if not report.unaudited_approvals:
+            raise RuntimeError(
+                "the installer refused to cancel approvals whose approvers were removed, but then"
+                " listed none: not guessing what to leave as it is"
+            ) from error
+        # Loud: an error, not a warning, and on stderr as well as in the log, because this leaves
+        # approved requests in place that nobody who may still approve ever approved.
+        logger.error(
+            "LEFT AS THEY ARE, NOT CANCELLED: approved requests whose only decisions are by"
+            " approvers who have been removed (the gateway will not use them; they expire): %s",
+            left,
+        )
+        print(
+            f"policy-setup: left approved requests of removed approvers as they are: {left}",
+            file=sys.stderr,
         )
     if report.closed_approvals:
         logger.warning(
