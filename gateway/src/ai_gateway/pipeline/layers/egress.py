@@ -21,9 +21,13 @@ False positives. A legitimate write that cites more than a few records the sessi
 summary ticket). Monitor mode records the count of matching values as the verdict's `score`, so the
 limits can be set from what honest traffic does before they are enforced.
 
-What it does not catch: a transformation of the data (a summary, an encoding), a value the session
-never read, an exfiltration through a read tool's arguments. The classifier on arguments and the
-canary layer cover some of that; this layer is the cheap deterministic one.
+What it does not catch: a transformation of the data (a summary, an encoding, another spelling of
+a phone number or an id), a value the session never read, an exfiltration through a read tool's
+arguments. The ledger is per MCP session, so a client that reads in one session and writes in
+another is not seen at all (the second session's ledger is empty), and a session's ledger can be
+evicted for room by other clients' sessions (its writes are then refused: `egress_state_lost`).
+The classifier on arguments and the canary layer cover some of that; this layer is the cheap
+deterministic one.
 """
 
 import hashlib

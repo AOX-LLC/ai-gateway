@@ -1,7 +1,7 @@
-"""The pinned_descriptions layer: a tool is offered and called only while its description and input
-schema are the ones a person reviewed.
+"""The pinned_descriptions layer: a tool is offered and called only while its description and its
+input and output schemas are the ones a person reviewed.
 
-Detection: the hash of the tool's name, description and input schema (what the catalog holds now)
+Detection: the hash of the tool's name, description and both schemas (what the catalog holds now)
 against the pin in `config/tool_pins.toml`. A tool whose hash differs is drifted; a tool with no pin
 is unpinned (a new tool is unreviewed, as one with no effect policy is a write). Either is hidden
 from tools/list and refused on a call, and an alert is raised once per tool and definition.

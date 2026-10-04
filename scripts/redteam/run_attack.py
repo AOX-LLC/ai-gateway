@@ -54,12 +54,12 @@ def _owner_url() -> str:
 
 
 def _check_ports(*urls: str) -> None:
+    """Every URL this talks to (the gateway, the databases) is on this machine and in 04's ports: it
+    sends a gateway token to one and the database owner's login to another."""
     for url in urls:
-        port = urlsplit(url).port
-        if port not in PORT_RANGE:
-            sys.exit(
-                f"run_attack: {urlsplit(url).hostname}:{port} is outside 04's ports (4400-4499)"
-            )
+        parts = urlsplit(url)
+        if parts.hostname not in ("127.0.0.1", "localhost") or parts.port not in PORT_RANGE:
+            sys.exit(f"run_attack: {parts.hostname}:{parts.port} is not 127.0.0.1 in 4400-4499")
 
 
 def _recorded(
@@ -161,7 +161,9 @@ async def _run(args: argparse.Namespace) -> int:
     if not token or not reader:
         sys.exit("run_attack: set GATEWAY_TOKEN and TELEMETRY_READER_DATABASE_URL")
     owner = _owner_url()
-    _check_ports(owner, reader, args.url)
+    _check_ports(
+        owner, reader, args.url, *filter(None, [os.environ.get("POLICY_APPROVER_DATABASE_URL")])
+    )
     planted, since = (
         plant_ticket(owner, attack.plant.account_id, attack.plant.subject, attack.plant.text)
         if attack.plant

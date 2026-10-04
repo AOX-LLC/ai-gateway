@@ -16,6 +16,9 @@ ROOT=$(git rev-parse --show-toplevel)
 SHA=$(git -C "$ROOT" rev-parse --verify "${1:-HEAD}^{commit}")
 WORK=$(mktemp -d)
 export COMPOSE_PROJECT_NAME=${SMOKE_PROJECT:-ai-gateway-smoke}
+case "$COMPOSE_PROJECT_NAME" in
+  ai-gateway|ai-gateway-demo|ai-gateway-verify) echo "SMOKE_PROJECT must not be a project that holds data: cleanup removes its volumes" >&2; exit 1 ;;
+esac
 cleanup() {
   (cd "$WORK/clone" 2>/dev/null && docker compose down -v --remove-orphans >/dev/null 2>&1) || true
   rm -rf "$WORK"
