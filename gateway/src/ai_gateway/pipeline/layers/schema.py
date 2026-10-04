@@ -73,8 +73,8 @@ def _shape_violations(value: Any, depth: int = 0) -> int:
 
 
 _SCHEMA_MAPS = ("properties", "patternProperties", "$defs", "definitions", "dependentSchemas")
-_SCHEMA_LISTS = ("allOf", "anyOf", "oneOf", "prefixItems")
-_SCHEMAS = ("items", "additionalProperties", "not", "if", "then", "else", "contains")
+_SCHEMA_LISTS = ("allOf", "anyOf", "prefixItems")
+_SCHEMAS = ("items", "additionalProperties")
 
 
 def _closed(schema: Any, *, root: bool = False) -> Any:
@@ -82,7 +82,10 @@ def _closed(schema: Any, *, root: bool = False) -> Any:
     `unevaluatedProperties: false` sees through `$ref`, `allOf` and `anyOf`, so the root and each
     nested object (a pydantic model's nested models name their fields but do not forbid others)
     refuse an extra field whatever shape they have. A map (`additionalProperties` is a schema, no
-    `properties`) keeps its open keys: its values are closed instead."""
+    `properties`) keeps its open keys: its values are closed instead. Only keywords where a closed
+    subschema can match less and so refuse more are walked: `not`, `if`, `contains` and `oneOf` are
+    left as written, since closing inside them would flip their meaning (a closed `not` matches
+    less, so more passes); the root's `unevaluatedProperties` still covers what they let through."""
     if not isinstance(schema, dict):
         return schema
     closed = dict(schema)
@@ -135,7 +138,7 @@ def _blocks_repeat(result: CallToolResult, structured: Any) -> bool:
     """Whether every content block is a text block whose JSON is the structured content: what a
     client is shown in the text is then what was validated, and nothing rides along beside it."""
     for block in result.content:
-        if not isinstance(block, TextContent):
+        if not isinstance(block, TextContent) or block.meta or block.annotations:
             return False
         try:
             if _canonical(_strict_json(block.text)) != _canonical(structured):
