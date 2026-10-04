@@ -212,3 +212,18 @@ async def test_the_oracle_sees_values_and_canaries_that_landed_and_nothing_else(
     assert read_landed(test_database_url, since, planted, "RT-x") == Landed((), 0, 0)
     assert datetime.now(UTC) - since < timedelta(minutes=5)
     assert CRM_CANARY  # the seed's constant, as the oracle uses it
+
+
+# -- the lab's pipeline -------------------------------------------------------------------------
+
+
+def test_the_monitor_pipeline_weakens_every_layer_that_may_be_and_keeps_the_floors() -> None:
+    from ai_gateway.pipeline.config import LayerMode, load_pipeline_config
+    from ai_gateway.pipeline.registry import LAYER_ORDER
+
+    config = load_pipeline_config(ROOT / "config" / "pipeline.monitor.toml", LAYER_ORDER)
+
+    assert not config.allow_floor_override
+    for layer in LAYER_ORDER:
+        want = LayerMode.ENFORCE if layer.floor else LayerMode.MONITOR
+        assert config.modes[layer.name] is want, layer.name
