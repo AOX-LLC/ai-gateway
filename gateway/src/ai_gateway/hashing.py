@@ -13,15 +13,19 @@ arguments and is agent-core's.
 import hashlib
 import hmac
 
-_MIN_KEY_BYTES = 16
+_MIN_KEY_BYTES = 32
+_PLACEHOLDER = b"change-me"
 _key: bytes | None = None
 
 
 def configure_hash_key(key: bytes) -> None:
-    """Set the key, once at startup. A key too short to be a secret is refused."""
+    """Set the key, once at startup. A key too short to be a secret, or still the placeholder of
+    `.env.example` (as the servers refuse a service credential that is), is refused."""
     global _key
     if len(key) < _MIN_KEY_BYTES:
         raise ValueError("the argument hash key is too short to be a secret")
+    if _PLACEHOLDER in key:
+        raise ValueError("the argument hash key is still the placeholder: run scripts/init_env.py")
     _key = key
 
 

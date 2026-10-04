@@ -572,3 +572,10 @@ def test_a_key_too_short_to_be_a_secret_is_refused() -> None:
 
 def _call_with(arguments: dict[str, str]):  # type: ignore[no-untyped-def]
     return ToolCall.create("tickets__get_ticket", "tickets", "get_ticket", arguments, "read")
+
+
+def test_the_placeholder_from_the_example_file_is_refused_as_a_key() -> None:
+    from ai_gateway.hashing import configure_hash_key
+
+    with pytest.raises(ValueError, match="placeholder"):
+        configure_hash_key(b"change-me-argument-hash-key-of-some-length")
