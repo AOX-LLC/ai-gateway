@@ -10,6 +10,7 @@ that carries a login (the test tooling's) is used as it is.
 
 import argparse
 import getpass
+import json
 import os
 import sys
 from collections.abc import Mapping, Sequence
@@ -78,20 +79,18 @@ class Approvals:
             id=f"human:{rows[0][0]}", kind=PrincipalKind.HUMAN, roles=frozenset(rows[0][1])
         )
 
-    async def arguments_json(self, request_id: UUID) -> str | None:
-        async def read(session: Any) -> list[tuple[Any, ...]]:
-            rows: list[tuple[Any, ...]] = await session.execute(
-                "SELECT arguments_json FROM policy.approval_arguments WHERE request_id = ?",
-                (str(request_id),),
-            )
-            return rows
-
-        rows = await self.database.run(read)
-        return str(rows[0][0]) if rows else None
-
     async def show(self, request_id: UUID) -> tuple[ApprovalRequest, str]:
+        """The request, and what a person is shown of it. The arguments are the request's own
+        stored payload; a purged one, or one that was never stored, cannot be shown (and can only
+        be rejected)."""
         request = await self.queue.get(request_id)
-        return request, render(request, await self.arguments_json(request_id)).text
+        if request.payload is None:
+            raise ApprovalNotShowableError(
+                "the arguments of this request were purged: it can only be rejected"
+                if request.payload_purged_at is not None
+                else "the arguments of this request were never stored: it can only be rejected"
+            )
+        return request, render(request, json.dumps(request.payload)).text
 
     async def decide(
         self, request_id: UUID, decision: Decision, reason: str | None

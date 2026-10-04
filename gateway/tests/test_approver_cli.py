@@ -13,7 +13,7 @@ import anyio
 import psycopg
 import pytest
 from aox_agent_core.approvals import ApprovalRequest, Decision, approval_payload_hash
-from aox_agent_core.errors import NotAuthorizedToResolveError
+from aox_agent_core.errors import ApprovalIntegrityError, NotAuthorizedToResolveError
 
 from ai_gateway.approver.cli import Approvals, ApproverError, _sign_in, main
 from ai_gateway.approver.display import ApprovalNotShowableError, render
@@ -33,6 +33,18 @@ UPSTREAM = "0123456789abcdef0123456789abcdef"
 def _stored(arguments: Mapping[str, Any], upstream: str = UPSTREAM) -> str:
     """What the gateway stores for the approver: the arguments and the upstream they go to."""
     return json.dumps({"arguments": arguments, "upstream": upstream})
+
+
+async def _owner_without_the_guard(url: str, statement: str, *params: object) -> None:
+    """What only the table's owner can do, and only by switching its guard off: change a row."""
+    async with await psycopg.AsyncConnection.connect(
+        policy_url(url), autocommit=True
+    ) as connection:
+        await connection.execute("ALTER TABLE agent_core_approvals DISABLE TRIGGER USER")
+        try:
+            await connection.execute(statement.encode(), params)
+        finally:
+            await connection.execute("ALTER TABLE agent_core_approvals ENABLE TRIGGER USER")
 
 
 def _request(arguments: Mapping[str, Any], **changes: object) -> ApprovalRequest:
@@ -230,33 +242,38 @@ class TestAgainstTheDatabase:
         with pytest.raises(NotAuthorizedToResolveError):
             await intern.decide(request_id, Decision.APPROVE, None)
 
-    async def test_arguments_changed_after_the_request_are_not_approvable_but_can_be_rejected(
+    async def test_arguments_changed_after_the_request_are_not_approvable_but_can_be_cancelled(
         self, make_approver: MakeApprover, policy_gateway_url: str, test_database_url: str
     ) -> None:
+        """agent-core checks the stored payload against the request's hash whenever it reads it,
+        so a payload changed behind its back (by the owner, with the guard off) is never shown."""
         approvals = Approvals(await make_approver(AIDEN), ROLES)
         request_id = await _ask(policy_gateway_url)
-        await _owner(
+        await _owner_without_the_guard(
             test_database_url,
-            "UPDATE approval_arguments SET arguments_json = %s WHERE request_id = %s",
+            "UPDATE agent_core_approvals SET payload_json = %s WHERE id = %s",
             _stored({"ticket_id": "TKT-999999", "status": "closed"}),
             str(request_id),
         )
 
-        with pytest.raises(ApprovalNotShowableError, match="do not match"):
+        with pytest.raises(ApprovalIntegrityError):
             await approvals.decide(request_id, Decision.APPROVE, None)
-        assert (await approvals.queue.get(request_id)).status.value == "pending"
-        rejected = await approvals.decide(request_id, Decision.REJECT, "does not match")
-        assert rejected.status.value == "rejected"
 
-    async def test_a_request_whose_arguments_were_purged_is_not_approvable(
+    async def test_a_request_whose_arguments_were_purged_says_so_instead_of_showing_them(
         self, make_approver: MakeApprover, policy_gateway_url: str, test_database_url: str
     ) -> None:
         approvals = Approvals(await make_approver(AIDEN), ROLES)
         request_id = await _ask(policy_gateway_url)
-        await _owner(test_database_url, "DELETE FROM approval_arguments")
+        await approvals.decide(request_id, Decision.REJECT, "no")  # only a finished one is purged
+        await _owner_without_the_guard(
+            test_database_url,
+            "UPDATE agent_core_approvals SET payload_json = NULL,"
+            " payload_purged_at = '2026-01-01T00:00:00.000000Z' WHERE id = %s",
+            str(request_id),
+        )
 
-        with pytest.raises(ApprovalNotShowableError, match="not stored"):
-            await approvals.decide(request_id, Decision.APPROVE, None)
+        with pytest.raises(ApprovalNotShowableError, match="purged"):
+            await approvals.show(request_id)
 
     async def test_the_command_signs_in_with_the_login_from_the_environment_and_decides(
         self,

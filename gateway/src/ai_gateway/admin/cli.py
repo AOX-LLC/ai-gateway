@@ -320,6 +320,7 @@ async def _policy_setup(database_url: str, _: argparse.Namespace) -> None:
             gateway=os.environ["POLICY_GATEWAY_DB_PASSWORD"],
             auditor=os.environ["POLICY_AUDITOR_DB_PASSWORD"],
             lab_approver=os.environ.get("POLICY_LAB_APPROVER_DB_PASSWORD") or None,
+            payload_purger=os.environ.get("POLICY_PURGER_DB_PASSWORD") or None,
         ),
     )
     print("policy schema is set up")

@@ -9,10 +9,10 @@ once, right before the call is forwarded, after the gateway has checked that thi
 one who asked (agent-core's consume checks it too; the gate's own check is a second one, and
 fails the call with a log line of its own).
 
-The full arguments are stored for the approver in `policy.approval_arguments` (the gateway can
-insert them and never read them back) so that a person approves what the call really says. That
-is the one place the gateway keeps arguments; they are purged after 7 days and never go to the
-audit log or telemetry.
+The arguments a person approves are stored with the request itself (`include_payload`), so the
+approver sees what the call really says and the request's hash binds it. It is the one place the
+gateway keeps arguments; `approvals-purge` removes them 7 days after the request finished, and they
+never go to the audit log or telemetry.
 """
 
 import asyncio
@@ -20,7 +20,6 @@ import hashlib
 import json
 import logging
 from collections.abc import Callable, Mapping
-from contextlib import suppress
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
@@ -35,11 +34,9 @@ from aox_agent_core.approvals import (
     approval_payload_hash,
 )
 from aox_agent_core.errors import AgentCoreError, ApprovalConflictError, ApprovalExpiredError
-from psycopg.errors import UniqueViolation
 
 from ai_gateway.pipeline.types import CallContext, ToolCall
-from ai_gateway.policy import ACTIVE_APPROVERS_VIEW, ARGUMENTS_PURGE_FUNCTION, SCHEMA
-from ai_gateway.policy.database import BoundedPostgresDatabase
+from ai_gateway.policy import ACTIVE_APPROVERS_VIEW
 from ai_gateway.seams.approvals import ApprovalDecision, ApprovalOutcome
 
 logger = logging.getLogger(__name__)
@@ -295,46 +292,17 @@ class PostgresApprovalGate:
                 "no approver role is set for %s: a write nobody may approve", call.exposed_name
             )
             return None
-        # No delegates: only this client may use the approval it asked for.
-        request = await self._queue.submit(
+        # No delegates: only this client may use the approval it asked for. The payload is stored
+        # with the request, so a person is shown exactly what its hash binds.
+        return await self._queue.submit(
             action=call.exposed_name,
             summary=approval_summary(call.exposed_name, call.arguments),
             payload=payload,
             requested_by=requester,
             required_role=role,
             ttl_seconds=self._ttl_s,
+            include_payload=True,
         )
-
-        # Without its arguments nobody can be shown what to approve, and the approver's tool
-        # refuses such a request: an orphan stays pending until it expires.
-        async def store(session: Any) -> None:
-            await session.execute(
-                "INSERT INTO policy.approval_arguments (request_id, arguments_json) VALUES (?, ?)",
-                (str(request.id), text),
-            )
-
-        with suppress(UniqueViolation):  # the request was already open: its arguments are stored
-            await self._database.run(store, write=True)
-        return request
-
-
-async def purge_arguments_forever(
-    database: BoundedPostgresDatabase, interval_s: float = PURGE_EVERY_S
-) -> None:
-    """Delete stored arguments past their retention, now and then. Failing to is logged: the
-    next round tries again."""
-    while True:
-        try:
-
-            async def purge(session: Any) -> None:
-                await session.execute(f"SELECT {SCHEMA}.{ARGUMENTS_PURGE_FUNCTION}()", ())
-
-            await database.run(purge, write=True)
-        except asyncio.CancelledError:
-            raise
-        except Exception as error:
-            logger.warning("purging approval arguments failed (%s)", type(error).__name__)
-        await anyio.sleep(interval_s)
 
 
 async def expire_due_forever(

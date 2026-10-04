@@ -28,6 +28,7 @@ ai-gateway = "ai_gateway.__main__:main"
 gateway-admin = "ai_gateway.admin.cli:main"
 gateway-approver = "ai_gateway.approver.cli:main"
 telemetry-purge = "ai_gateway.telemetry.purge:main"
+approvals-purge = "ai_gateway.policy.purge:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/ai_gateway"]

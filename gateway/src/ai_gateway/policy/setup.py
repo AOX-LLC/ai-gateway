@@ -24,9 +24,6 @@ from ai_gateway.policy import (
     APPROVER_LOGINS_VIEW,
     APPROVER_ROLE,
     APPROVERS_TABLE,
-    ARGUMENTS_PURGE_FUNCTION,
-    ARGUMENTS_RETENTION_DAYS,
-    ARGUMENTS_TABLE,
     AUDIT_TABLE,
     AUDITOR_ROLE,
     DASHBOARD_VIEW,
@@ -35,6 +32,8 @@ from ai_gateway.policy import (
     LAB_APPROVER_ROLE,
     POLICY_IDLE_IN_TRANSACTION_MS,
     PROVISIONING_LOCK,
+    PURGER_PRINCIPAL,
+    PURGER_ROLE,
     ROLES,
     SCHEMA,
 )
@@ -65,7 +64,10 @@ class PolicyPasswords:
     gateway: str
     auditor: str
     lab_approver: str | None = None
-    """Set only for a lab stack: creates the lab approver role. Unset, the role is dropped."""
+    """Set only for a lab stack: creates the lab approver role. Unset, the role cannot log in."""
+    payload_purger: str | None = None
+    """The password of the payload purge's login. Unset, the login cannot log in and old arguments
+    are not removed (the purge service refuses to start without it)."""
 
 
 async def setup_policy(owner_url: str, passwords: PolicyPasswords) -> None:
@@ -108,13 +110,19 @@ async def setup_policy(owner_url: str, passwords: PolicyPasswords) -> None:
         await grant_policy_access(connection)
         await sync_approver_logins(connection)
         await _set_up_lab_role(connection, passwords.lab_approver)
+        await _set_up_purger(connection, passwords.payload_purger)
         # Binding goes on last: every active approver's login is mapped first, so nobody who could
         # decide a moment ago is locked out. From here the database refuses a decision whose
         # `resolved_by` is not the principal mapped to the login that made it.
         await bind_active_approvers(connection)
         await _install(owner_url, bind=True)
         await restrict_database_access(
-            connection, [*ROLES, *([LAB_APPROVER_ROLE] if passwords.lab_approver else [])]
+            connection,
+            [
+                *ROLES,
+                *([LAB_APPROVER_ROLE] if passwords.lab_approver else []),
+                *([PURGER_ROLE] if passwords.payload_purger else []),
+            ],
         )
 
 
@@ -227,24 +235,15 @@ _GRANTS = {
     # (`created_at` is the database's): only these two columns.
     # And it may ask whether the person behind an approval is still an approver, and nothing more
     # about them: a removed approver's approval is not used.
-    GATEWAY_ROLE: (
-        (ARGUMENTS_TABLE, "INSERT (request_id, arguments_json)"),
-        (ACTIVE_APPROVERS_VIEW, "SELECT"),
-    ),
-    APPROVER_ROLE: ((ARGUMENTS_TABLE, "SELECT"), (APPROVERS_TABLE, "SELECT")),
+    GATEWAY_ROLE: ((ACTIVE_APPROVERS_VIEW, "SELECT"),),
+    APPROVER_ROLE: ((APPROVERS_TABLE, "SELECT"),),
     # Arguments are never in the audit trail. The auditor also sees which login is which approver
     # (not the approvers' names), so `audit-verify` can check who wrote a decision.
     AUDITOR_ROLE: ((AUDIT_TABLE, "SELECT"), (APPROVER_LOGINS_VIEW, "SELECT")),
 }
-_OWN_TABLES = (ARGUMENTS_TABLE, APPROVERS_TABLE, APPROVER_LOGINS_VIEW, ACTIVE_APPROVERS_VIEW)
+_OWN_TABLES = (APPROVERS_TABLE, APPROVER_LOGINS_VIEW, ACTIVE_APPROVERS_VIEW)
 
 _APPROVAL_TABLES = f"""
-CREATE TABLE IF NOT EXISTS {ARGUMENTS_TABLE} (
-    request_id TEXT PRIMARY KEY REFERENCES {APPROVALS_TABLE} (id),
-    arguments_json TEXT NOT NULL CHECK (length(arguments_json) <= 65536),
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS {ARGUMENTS_TABLE}_created ON {ARGUMENTS_TABLE} (created_at);
 CREATE TABLE IF NOT EXISTS {APPROVERS_TABLE} (
     id TEXT PRIMARY KEY CHECK (id ~ '^[a-z][a-z0-9._-]{{0,62}}$'),
     display_name TEXT NOT NULL CHECK (length(display_name) BETWEEN 1 AND 100),
@@ -290,15 +289,12 @@ CREATE INDEX IF NOT EXISTS policy_approvals_find
 ON {APPROVALS_TABLE} (requested_by, payload_sha256, created_at DESC)
 """  # the gate looks a request up by client and argument hash on every write
 
-_PURGE_FUNCTION = f"""
-CREATE OR REPLACE FUNCTION {ARGUMENTS_PURGE_FUNCTION}() RETURNS bigint
-LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
-    WITH purged AS (
-        DELETE FROM {SCHEMA}.{ARGUMENTS_TABLE}
-        WHERE created_at < now() - interval '{ARGUMENTS_RETENTION_DAYS} days' RETURNING 1
-    ) SELECT count(*) FROM purged
-$$
-"""  # noqa: S608 - fixed names and no input: a function body, not a query
+_RETIRE_THE_ARGUMENTS_TABLE = """
+DROP FUNCTION IF EXISTS purge_approval_arguments();
+DROP TABLE IF EXISTS approval_arguments
+"""  # the arguments are stored with the request now (agent-core's include_payload) and purged by
+# `approvals-purge`; the table and its hourly purge are gone. What it held was kept 7 days at most,
+# and a request still open when it goes cannot be shown to an approver (it can only be rejected).
 
 _DASHBOARD_VIEW = f"""
 CREATE OR REPLACE VIEW {DASHBOARD_VIEW} AS
@@ -347,11 +343,7 @@ async def _ensure_approval_tables(connection: AsyncConnection) -> None:
             sql.SQL("SET LOCAL search_path TO {}").format(sql.Identifier(SCHEMA))
         )
         await connection.execute(_APPROVAL_TABLES.encode())
-        await connection.execute(_PURGE_FUNCTION.encode())
-        # Created and closed to PUBLIC in the one transaction: it runs with its owner's rights.
-        await connection.execute(
-            f"REVOKE ALL ON FUNCTION {ARGUMENTS_PURGE_FUNCTION}() FROM PUBLIC".encode()
-        )
+        await connection.execute(_RETIRE_THE_ARGUMENTS_TABLE.encode())
         await connection.execute(_FIND_INDEX.encode())
         await connection.execute(_RESOLVED_INDEX.encode())
         await connection.execute(_DASHBOARD_VIEW.encode())
@@ -405,16 +397,6 @@ async def grant_policy_access(connection: AsyncConnection) -> None:
                         sql.SQL(privileges), schema, sql.Identifier(table), name
                     )
                 )
-        # The purge runs with its owner's rights, so who may call it is the whole control.
-        purge = sql.SQL("{}.{}()").format(schema, sql.Identifier(ARGUMENTS_PURGE_FUNCTION))
-        await connection.execute(sql.SQL("REVOKE ALL ON FUNCTION {} FROM PUBLIC").format(purge))
-        for role in ROLES:
-            verb = (
-                "GRANT EXECUTE ON FUNCTION {} TO {}"
-                if role == GATEWAY_ROLE
-                else ("REVOKE ALL ON FUNCTION {} FROM {}")
-            )
-            await connection.execute(sql.SQL(verb).format(purge, sql.Identifier(role)))
 
 
 async def _clear_layout_grants(connection: AsyncConnection) -> None:
@@ -445,6 +427,7 @@ _MEMBERSHIPS = (
     " JOIN pg_roles member ON member.oid = m.member"
     " JOIN pg_roles grantor ON grantor.oid = m.grantor WHERE parent.rolname = ANY(%s)"
     " AND member.rolname <> %s"  # the lab approver's membership is set up deliberately, below
+    " AND member.rolname <> %s"  # and so is the payload purger's
     # An active approver's login stays a member of the approver role (and only that): it is what
     # lets them decide, and agent-core's installer counts a decision only while its writer is one.
     # `sync_approver_logins` makes sure the membership is the right kind.
@@ -515,6 +498,36 @@ async def _set_up_lab_role(connection: AsyncConnection, password: str | None) ->
     logger.warning("the lab approver role exists: it decides requests as the approver role")
 
 
+async def _set_up_purger(connection: AsyncConnection, password: str | None) -> None:
+    """The payload purge's login. agent-core lets only the approver side purge a stored payload, so
+    it is a member of the approver role (inheriting, without `SET`), made one connection at a time.
+
+    It is not an approver: it is mapped to a principal `policy.approvers` does not list, so the
+    gateway will not use a decision it writes and `audit-verify` refuses one. Like the lab role it
+    is kept, not dropped and made again (a mapping is for good, by the role's OID), and without the
+    password it cannot log in."""
+    name = sql.Identifier(PURGER_ROLE)
+    if await _role_exists(connection, PURGER_ROLE):
+        await connection.execute(sql.SQL("ALTER ROLE {} NOLOGIN").format(name))
+        await connection.execute(
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = %s",
+            (PURGER_ROLE,),
+        )
+        await connection.execute(sql.SQL("DROP OWNED BY {}").format(name))
+        await reset_role(connection, PURGER_ROLE)
+    if not password:
+        return
+    await ensure_role(connection, password, PURGER_ROLE, POLICY_IDLE_IN_TRANSACTION_MS)
+    await reset_role(connection, PURGER_ROLE)
+    await connection.execute(sql.SQL("ALTER ROLE {} CONNECTION LIMIT 1").format(name))
+    await connection.execute(
+        sql.SQL("GRANT {} TO {} WITH INHERIT TRUE, SET FALSE, ADMIN FALSE").format(
+            sql.Identifier(APPROVER_ROLE), name
+        )
+    )
+    await bind_login(connection, PURGER_ROLE, PURGER_PRINCIPAL)
+
+
 async def _role_exists(connection: AsyncConnection, role: str) -> bool:
     cursor = await connection.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (role,))
     return await cursor.fetchone() is not None
@@ -523,7 +536,13 @@ async def _role_exists(connection: AsyncConnection, role: str) -> bool:
 async def _memberships(connection: AsyncConnection) -> list[tuple[str, str, str]]:
     cursor = await connection.execute(
         _MEMBERSHIPS,
-        (list(ROLES), LAB_APPROVER_ROLE, APPROVER_ROLE, await managed_logins(connection)),
+        (
+            list(ROLES),
+            LAB_APPROVER_ROLE,
+            PURGER_ROLE,
+            APPROVER_ROLE,
+            await managed_logins(connection),
+        ),
     )
     return [(str(a), str(b), str(c)) for a, b, c in await cursor.fetchall()]
 

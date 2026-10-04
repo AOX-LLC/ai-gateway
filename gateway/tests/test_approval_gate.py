@@ -1,7 +1,6 @@
 """The approval gate on the real policy database: asking, holding, approving, using once."""
 
 import json
-from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -14,7 +13,6 @@ from aox_agent_core.approvals import (
     PrincipalKind,
     RoleApproverPolicy,
     SQLApprovalQueue,
-    approval_payload_hash,
 )
 from aox_agent_core.storage import open_database
 from psycopg import errors
@@ -206,51 +204,6 @@ async def test_a_request_that_expired_before_it_was_decided_is_asked_for_afresh(
     assert second.approval_id != first.approval_id
 
 
-async def test_the_arguments_are_kept_for_the_approver_and_hash_to_the_request(
-    policy: None, policy_gateway_url: str, policy_approver_url: str
-) -> None:
-    gate, ctx, call = _gate(policy_gateway_url), _context(), _call()
-    pending = await gate.decide(ctx, call)
-
-    async with await psycopg.AsyncConnection.connect(policy_url(policy_approver_url)) as connection:
-        cursor = await connection.execute(
-            "SELECT a.arguments_json, r.payload_sha256 FROM approval_arguments a"
-            " JOIN agent_core_approvals r ON r.id = a.request_id WHERE a.request_id = %s",
-            (pending.approval_id,),
-        )
-        row = await cursor.fetchone()
-
-    assert row is not None
-    assert json.loads(row[0]) == {"arguments": call.arguments, "upstream": call.upstream_identity}
-    assert approval_payload_hash("tickets__change_status", json.loads(row[0])) == row[1]
-
-
-async def test_only_the_approver_can_read_the_arguments_and_nobody_else_can_change_them(
-    policy: None,
-    policy_gateway_url: str,
-    policy_approver_url: str,
-    policy_auditor_url: str,
-) -> None:
-    gate = _gate(policy_gateway_url)
-    pending = await gate.decide(_context(), _call())
-
-    for url in (policy_gateway_url, policy_auditor_url):
-        async with await psycopg.AsyncConnection.connect(policy_url(url)) as connection:
-            with pytest.raises(errors.InsufficientPrivilege):
-                await connection.execute("SELECT arguments_json FROM approval_arguments")
-    for statement in (
-        "UPDATE approval_arguments SET arguments_json = '{}'",
-        "DELETE FROM approval_arguments",
-        "INSERT INTO approval_arguments (request_id, arguments_json) VALUES ('x', '{}')",
-    ):
-        async with await psycopg.AsyncConnection.connect(
-            policy_url(policy_approver_url), autocommit=True
-        ) as connection:
-            with pytest.raises(errors.InsufficientPrivilege):
-                await connection.execute(statement)
-    assert pending.approval_id
-
-
 async def test_the_arguments_are_in_no_audit_record(
     policy: None, policy_gateway_url: str, policy_auditor_url: str
 ) -> None:
@@ -298,38 +251,6 @@ async def test_calls_beyond_the_hold_limit_are_answered_pending_at_once(
     assert decision.outcome is ApprovalOutcome.PENDING
 
 
-async def test_the_purge_removes_arguments_older_than_a_week_and_only_the_gateway_may_run_it(
-    policy: None,
-    policy_gateway_url: str,
-    policy_approver_url: str,
-    policy_auditor_url: str,
-    test_database_url: str,
-) -> None:
-    gate = _gate(policy_gateway_url)
-    old = await gate.decide(_context(), _call(n=1))
-    fresh = await gate.decide(_context(), _call(n=2))
-    async with await psycopg.AsyncConnection.connect(
-        policy_url(test_database_url), autocommit=True
-    ) as owner:
-        await owner.execute(
-            "UPDATE approval_arguments SET created_at = %s WHERE request_id = %s",
-            (datetime.now(UTC) - timedelta(days=7, minutes=1), old.approval_id),
-        )
-    for url in (policy_approver_url, policy_auditor_url):
-        async with await psycopg.AsyncConnection.connect(policy_url(url)) as connection:
-            with pytest.raises(errors.InsufficientPrivilege):
-                await connection.execute("SELECT policy.purge_approval_arguments()")
-
-    async with await psycopg.AsyncConnection.connect(
-        policy_url(policy_gateway_url), autocommit=True
-    ) as connection:
-        cursor = await connection.execute("SELECT policy.purge_approval_arguments()")
-        assert await cursor.fetchone() == (1,)
-    async with await psycopg.AsyncConnection.connect(policy_url(policy_approver_url)) as connection:
-        cursor = await connection.execute("SELECT request_id FROM approval_arguments")
-        assert await cursor.fetchall() == [(fresh.approval_id,)]
-
-
 async def test_the_dashboard_reader_sees_requests_without_arguments_and_nothing_else_in_policy(
     telemetry: None, policy: None, policy_gateway_url: str, reader_url: str
 ) -> None:
@@ -346,7 +267,6 @@ async def test_the_dashboard_reader_sees_requests_without_arguments_and_nothing_
         assert not {"summary", "payload_sha256", "reason", "run_context"} & set(columns)
         for table in (
             "agent_core_approvals",
-            "approval_arguments",
             "agent_core_audit",
             "approvers",
         ):
@@ -504,27 +424,6 @@ async def test_one_client_cannot_fill_every_wait_slot(
     assert len([label for label in waited if label.startswith("g")]) == 2
     assert "p0" in waited, "the other client waited like any other: it was not locked out"
     assert len([label for label in quick if label.startswith("g")]) == 2
-
-
-async def test_the_gateway_inserts_only_the_arguments_and_cannot_choose_their_retention(
-    policy: None, policy_gateway_url: str
-) -> None:
-    pending = await _gate(policy_gateway_url, hold_s=0).decide(_context(), _call())
-
-    async with await psycopg.AsyncConnection.connect(
-        policy_url(policy_gateway_url), autocommit=True
-    ) as connection:
-        for statement in (
-            "INSERT INTO approval_arguments (request_id, arguments_json, created_at)"
-            " VALUES (%s, '{}', '9999-01-01')",
-            "UPDATE approval_arguments SET arguments_json = '{}'",
-            "DELETE FROM approval_arguments",
-            "SELECT arguments_json FROM approval_arguments",
-        ):
-            with pytest.raises(errors.InsufficientPrivilege):
-                await connection.execute(
-                    statement.encode(), (pending.approval_id,) if "%s" in statement else None
-                )
 
 
 async def test_a_hand_given_create_on_the_schema_does_not_survive_setup(

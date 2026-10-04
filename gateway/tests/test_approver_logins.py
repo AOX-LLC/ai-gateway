@@ -970,3 +970,21 @@ async def test_the_reserved_lab_id_cannot_be_rotated_or_removed(
         for action in (rotate_approver, remove_approver):
             with pytest.raises(ApproverLoginError, match="reserved"):
                 await action(owner, _audit(policy_gateway_url), "lab-approver")
+
+
+async def test_the_url_agent_core_maps_logins_with_keeps_the_owners_connection_settings(
+    policy: None, test_database_url: str
+) -> None:
+    """The mapping functions open a connection of their own: it must not be weaker than the
+    owner's (a URL that dropped `sslmode` would quietly downgrade it)."""
+    from urllib.parse import parse_qs, urlsplit
+
+    from ai_gateway.policy.approver_logins import owner_url_of
+
+    url = test_database_url + ("&" if "?" in test_database_url else "?") + "sslmode=prefer"
+    async with await _owner(url) as owner:
+        rebuilt = urlsplit(owner_url_of(owner))
+
+    assert parse_qs(rebuilt.query)["sslmode"] == ["prefer"]
+    assert rebuilt.username == urlsplit(test_database_url).username
+    assert rebuilt.path == urlsplit(test_database_url).path

@@ -442,9 +442,16 @@ def approver_principal(approver_id: str) -> str:
     return f"human:{approver_id}"
 
 
+_URL_PARTS = frozenset({"user", "password", "host", "port", "dbname"})
+
+
 def owner_url_of(connection: AsyncConnection) -> str:
     """The URL the owner's connection was made with, for agent-core's own mapping functions, which
-    open a connection of their own. It is never logged or printed."""
+    open a connection of their own. It is never logged or printed.
+
+    Every other setting the connection uses (`sslmode`, `sslrootcert`, `channel_binding`, ...) is
+    carried in the query, so the second connection is no less protected than the first: a URL that
+    kept only the host and the password would quietly drop TLS."""
     parameters = {
         item.keyword.decode(): item.val.decode() for item in connection.pgconn.info if item.val
     }
@@ -453,9 +460,14 @@ def owner_url_of(connection: AsyncConnection) -> str:
     host = parameters.get("host", "localhost")
     host = f"[{host}]" if ":" in host else host
     port = parameters.get("port", "5432")
+    query = "&".join(
+        f"{quote(key, safe='')}={quote(value, safe='')}"
+        for key, value in sorted(parameters.items())
+        if key not in _URL_PARTS
+    )
     return (
         f"postgresql://{user}:{password}@{host}:{port}/"
-        f"{quote(parameters.get('dbname', ''), safe='')}"
+        f"{quote(parameters.get('dbname', ''), safe='')}" + (f"?{query}" if query else "")
     )
 
 

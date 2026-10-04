@@ -21,7 +21,7 @@ from pathlib import Path
 from aox_agent_core.audit import GENESIS_HASH, AuditHead, AuditRecord, SQLAuditLog
 from aox_agent_core.errors import AuditIntegrityError
 
-from ai_gateway.policy import APPROVER_ROLE, GATEWAY_ROLE, LAB_APPROVER_ROLE
+from ai_gateway.policy import APPROVER_ROLE, GATEWAY_ROLE, LAB_APPROVER_ROLE, PURGER_ROLE
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 
@@ -91,6 +91,7 @@ _WRITTEN_BY = {
     "audit.gap": GATEWAY_ROLE,
     "approval.requested": GATEWAY_ROLE,
     "approval.consumed": GATEWAY_ROLE,
+    "approval.payload_purged": PURGER_ROLE,
 }
 """Which database role writes each kind of record. The approver role may append to the audit log
 (it writes its own decisions), so without this a holder of its credential could add a
