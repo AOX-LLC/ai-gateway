@@ -1,7 +1,7 @@
 import "server-only";
 import type { AuthedSession } from "../auth/authed";
 import { AuthError } from "../auth/authed";
-import { getApprovals, getCharts, getClock, getDecisions, getKpis } from "./index";
+import { getApprovals, getCharts, getClock, getDecisions, getKpis, getUsage } from "./index";
 import type { Range } from "./ranges";
 import type { Overview, Result } from "./types";
 
@@ -19,9 +19,9 @@ async function settle<T>(panel: string, read: () => Promise<T>): Promise<Result<
   }
 }
 
-/** The three panels' data. Each panel can fail on its own and says so; a missing session fails all. */
+/** The panels' data. Each panel can fail on its own and says so; a missing session fails all. */
 export async function getOverview(session: AuthedSession, range: Range): Promise<Overview> {
-  const [at, kpis, charts, decisions, approvals] = await Promise.all([
+  const [at, kpis, charts, decisions, approvals, usage] = await Promise.all([
     getClock(session).catch((error: unknown) => {
       if (error instanceof AuthError) throw error;
       console.error(`dashboard: the clock could not be read: ${error instanceof Error ? error.name : "error"}`);
@@ -31,6 +31,7 @@ export async function getOverview(session: AuthedSession, range: Range): Promise
     settle("charts", () => getCharts(session, range)),
     settle("decisions", () => getDecisions(session, { range })),
     settle("approvals", () => getApprovals(session)),
+    settle("usage", () => getUsage(session, range)),
   ]);
-  return { at, kpis, charts, decisions, approvals };
+  return { at, kpis, charts, decisions, approvals, usage };
 }

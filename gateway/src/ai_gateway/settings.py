@@ -16,6 +16,10 @@ class GatewaySettings(ServiceSettings):
     """Connection string for the least-privilege gateway_app role. Secret because it
     carries a password; never logged."""
 
+    argument_hash_key: SecretStr
+    """The secret key of the HMAC that hashes call arguments for decision records, telemetry and
+    audit records (`ai_gateway.hashing`). Required: a gateway without one does not start."""
+
     port: Annotated[int, Field(ge=1, le=65535)] = 4401
     pipeline_file: Path = Path("config/pipeline.toml")
     approval_roles_file: Path = Path("config/approval_roles.toml")
@@ -31,6 +35,12 @@ class GatewaySettings(ServiceSettings):
     """What the egress layer counts as data read, and how much of it a write may carry."""
     canaries_file: Path = Path("config/canaries.toml")
     """The canary values seeded in the data, as hashes (the canary layer)."""
+    classifier_file: Path = Path("config/classifier.toml")
+    """How the injection classifier judges: confidence, unit sizes, limits and cost guards."""
+    agent_core_config_file: Path = Path("config/agent-core.toml")
+    """agent-core's configuration for the classifier's model calls: the per-call budget and where
+    the recordings live. The mode (replay by default, which needs no key; record or live need
+    AGENT_CORE_ANTHROPIC_API_KEY) is AGENT_CORE_MODE."""
     session_idle_timeout_s: Annotated[float, Field(gt=0)] = 900.0
     login_failures_per_id: Annotated[int, Field(ge=1)] = 5
     """Failed logins for one token id, within the window, before that id is refused."""

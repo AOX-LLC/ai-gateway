@@ -113,6 +113,7 @@ class GatewayServer:
             definition=ToolDefinition(
                 description=resolved.tool.tool.description or "",
                 input_schema_json=json.dumps(resolved.tool.tool.input_schema, sort_keys=True),
+                output_schema_json=json.dumps(resolved.tool.tool.output_schema, sort_keys=True),
             ),
         )
 

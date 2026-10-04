@@ -19,10 +19,13 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from ai_gateway.auth.middleware import BearerAuthMiddleware
 from ai_gateway.auth.throttle import LoginThrottle, ThrottleConfig
 from ai_gateway.auth.verifier import TokenVerifier
+from ai_gateway.classifier.runtime import build_judge
+from ai_gateway.hashing import configure_hash_key
 from ai_gateway.pipeline.config import load_pipeline_config
 from ai_gateway.pipeline.crosscheck import check_policy_files
 from ai_gateway.pipeline.layers.allowlist import load_allowlist
 from ai_gateway.pipeline.layers.canary import load_canary_config
+from ai_gateway.pipeline.layers.classifier import load_judge_config
 from ai_gateway.pipeline.layers.egress import load_egress_config
 from ai_gateway.pipeline.layers.rate_limit import load_rate_limits
 from ai_gateway.pipeline.pins import load_tool_pins
@@ -66,6 +69,7 @@ class _McpEndpoint:
 def create_app(settings: GatewaySettings, events: EventSink | None = None) -> FastAPI:
     """Build the app. Configuration errors, such as a bad pipeline file, raise here,
     before the gateway accepts a single request."""
+    configure_hash_key(settings.argument_hash_key.get_secret_value().encode())
     audit = build_audit(settings)
     telemetry = build_telemetry(settings)
     event_sink: EventSink = events or LogEventSink()
@@ -74,6 +78,7 @@ def create_app(settings: GatewaySettings, events: EventSink | None = None) -> Fa
         event_sink = FanOutEventSink([("postgres", telemetry.sink)], event_sink)
     pipeline_config = load_pipeline_config(settings.pipeline_file, LAYER_ORDER)
     approvals = build_approvals(settings)
+    judge_config = load_judge_config(settings.classifier_file)
     pins = load_tool_pins(settings.tool_pins_file)
     allowlist = load_allowlist(settings.allowlist_file)
     rate_limits = load_rate_limits(settings.rate_limits_file)
@@ -87,6 +92,7 @@ def create_app(settings: GatewaySettings, events: EventSink | None = None) -> Fa
             else ()
         ),
     )
+    judge = build_judge(settings, judge_config, telemetry, pipeline_config)
     pipeline = Pipeline.build(
         pipeline_config,
         event_sink,
@@ -97,6 +103,7 @@ def create_app(settings: GatewaySettings, events: EventSink | None = None) -> Fa
         pins=pins,
         egress=load_egress_config(settings.egress_file),
         canaries=load_canary_config(settings.canaries_file),
+        judge=judge,
     )
     if telemetry is not None:
         telemetry.buffer.put(

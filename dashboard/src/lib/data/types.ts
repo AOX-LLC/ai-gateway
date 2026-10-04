@@ -92,6 +92,47 @@ export type Charts = {
   authTrend: TrendPoint[];
 };
 
+export type UsageMode = "replay" | "record" | "live";
+
+/** Calls and cost of one mode. Cost is the recorded cost: only `record` and `live` was billed. */
+export type ModeUsage = { calls: number; costUsd: number };
+
+/** One bucket of the usage chart. Billed and replayed cost are kept apart: they are never added. */
+export type UsagePoint = {
+  ts: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  /** Cost of `record` and `live` calls: real spend. */
+  billedCostUsd: number;
+  /** Cost the recordings carry for `replay` calls: nothing was charged. */
+  replayedCostUsd: number;
+};
+
+/** Model usage in the window: counts and cost only, never any text that was judged. */
+export type Usage = {
+  windowSeconds: number;
+  bucketSeconds: number;
+  start: string;
+  end: string;
+  totals: {
+    calls: number;
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens: number;
+    cacheWriteTokens: number;
+    /** Spend: `record` plus `live`. Replayed cost is not in it. */
+    billedCostUsd: number;
+    /** Cost carried by `replay` calls: not billed. */
+    replayedCostUsd: number;
+  };
+  byMode: Record<UsageMode, ModeUsage>;
+  /** Replay misses: the classifier had no recording, so the call was not judged. */
+  unrecorded: number;
+  series: UsagePoint[];
+};
+
 /** A panel's data, or the fact that it could not be read. The message is generic: what the database
  * said is logged on the server and never sent to the browser. */
 export type Result<T> = { ok: true; data: T } | { ok: false; error: string };
@@ -102,4 +143,5 @@ export type Overview = {
   charts: Result<Charts>;
   decisions: Result<DecisionsPage>;
   approvals: Result<Approvals>;
+  usage: Result<Usage>;
 };

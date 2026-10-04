@@ -52,6 +52,7 @@ LAYERS = [
     ("pinned_descriptions", "enforce"),
     ("egress", "enforce"),
     ("canary", "enforce"),
+    ("classifier", "enforce"),
     ("approval", "enforce"),
 ]
 """The demo pipeline: rate limiting in monitor mode, so the dashboard has "would block" to show."""
@@ -398,7 +399,7 @@ def _call(
             # The injection layers pass the demo's honest traffic (it has no attack for them yet).
             verdicts.extend(
                 (layer, "allow", None)
-                for layer in ("schema", "pinned_descriptions", "egress", "canary")
+                for layer in ("schema", "pinned_descriptions", "egress", "canary", "classifier")
             )
             if effect == "write" and rng.random() < 0.45:
                 blocked_by, deny_code = "approval", "approval_pending"

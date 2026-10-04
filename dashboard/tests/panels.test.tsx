@@ -137,9 +137,9 @@ describe("the approval queue", () => {
 
 describe("the not-active state", () => {
   it("says what is missing and when it starts, in words", () => {
-    const markup = html(<NotActive title="Tokens and cost: not active yet">Starts with the classifier.</NotActive>);
+    const markup = html(<NotActive title="Feature not switched on">Starts with the classifier.</NotActive>);
 
-    expect(markup).toContain("not active yet");
+    expect(markup).toContain("Feature not switched on");
     expect(markup).toContain('role="status"');
   });
 });

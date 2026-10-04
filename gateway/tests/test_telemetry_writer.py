@@ -216,3 +216,37 @@ async def test_cancelling_the_writer_flushes_what_is_left(
         tasks.cancel_scope.cancel()
 
     assert await _count(test_database_url, "requests") == 4
+
+
+async def test_an_unclassified_classifier_verdict_is_stored(
+    telemetry: None, buffer: TelemetryBuffer, writer: TelemetryWriter, test_database_url: str
+) -> None:
+    rows = _call_rows(1)
+    layers: dict[str, Any] = {
+        "layer": "classifier",
+        "hook": "after_call",
+        "mode": "enforce",
+        "verdict": "unclassified",
+        "code": "classifier_unrecorded",
+        "score": 2,
+    }
+    event = GatewayEvent(
+        action="gateway.tool_call",
+        actor_id=f"client:{uuid4()}",
+        subject_id="tickets__get_ticket",
+        payload={
+            "request_id": str(uuid4()),
+            "client_name": "harborline-support-bot",
+            "layers": [layers],
+            "duration_ms": 1.0,
+            "outcome": "forwarded",
+            "namespace": "tickets",
+        },
+        occurred_at=NOW,
+    )
+    buffer.put(*rows, *rows_for_event(event))
+
+    await writer.close()
+
+    assert writer.status().rejected_total == 0
+    assert await _count(test_database_url, "layer_verdicts") == 2

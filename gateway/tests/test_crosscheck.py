@@ -101,6 +101,7 @@ def test_the_gateway_does_not_start_when_the_allowlist_names_a_tool_nobody_has(
     )
     settings = GatewaySettings(
         database_url=SecretStr("postgresql://x:y@127.0.0.1:1/z"),
+        argument_hash_key=SecretStr("test-only-argument-hash-key-0123456789"),
         pipeline_file=ROOT / "config" / "pipeline.toml",
         allowlist_file=allowlist,
         rate_limits_file=ROOT / "config" / "rate_limits.toml",

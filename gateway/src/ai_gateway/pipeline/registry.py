@@ -2,13 +2,14 @@
 them, because the order is itself a security property.
 
 The layers, in order: scope → allowlist → rate_limit → schema → pinned_descriptions → egress →
-canary → (classifier, Phase 4c) → approval. Approval stays last before forwarding, so a human
+canary → classifier → approval. Approval stays last before forwarding, so a human
 approves exactly the call that runs, and a call the injection layers refuse never asks anyone.
 """
 
 from ai_gateway.pipeline.layers.allowlist import AllowlistLayer
 from ai_gateway.pipeline.layers.approval import ApprovalLayer
 from ai_gateway.pipeline.layers.canary import CanaryLayer
+from ai_gateway.pipeline.layers.classifier import ClassifierLayer
 from ai_gateway.pipeline.layers.egress import EgressLayer
 from ai_gateway.pipeline.layers.pinned import PinnedDescriptionsLayer
 from ai_gateway.pipeline.layers.rate_limit import RateLimitLayer
@@ -24,5 +25,6 @@ LAYER_ORDER: tuple[type[BaseLayer], ...] = (
     PinnedDescriptionsLayer,
     EgressLayer,
     CanaryLayer,
+    ClassifierLayer,
     ApprovalLayer,
 )

@@ -1,0 +1,15 @@
+# How the injection classifier judges. See gateway/src/ai_gateway/pipeline/layers/classifier.py.
+# Harborline Supply Co. is fictional.
+
+[classifier]
+min_confidence = "medium"       # a flagged unit refuses the call at this confidence or higher
+min_chars = 24                  # a value shorter than this, or with fewer words, is not judged
+min_words = 3
+max_unit_chars = 6000           # a longer value is cut into units of this size
+max_units = 40                  # more units than this in one call is refused, not partly judged
+concurrency = 8                 # model calls in flight at once
+timeout_s = 8.0                 # one call's limit; a call that times out fails closed
+cache_entries = 4096            # judged texts remembered (by a keyed hash), so none is judged twice
+max_calls_per_minute_per_client = 120   # model calls one client may cause a minute
+max_usd_per_hour = 2.00         # live spend ceiling for the whole gateway (replay costs are not billed)
+judge_arguments = "writes"      # "writes": judge a write's arguments too; "none": results only

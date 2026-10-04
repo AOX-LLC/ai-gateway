@@ -27,7 +27,7 @@ def test_spans_are_kept_for_seven_days_and_everything_else_for_thirty() -> None:
 
     assert by_table["spans"] == NOW - timedelta(days=7)
     assert {t: c for t, c in by_table.items() if t != "spans"} == dict.fromkeys(
-        ("requests", "layer_verdicts", "auth_failures"), NOW - timedelta(days=30)
+        ("requests", "layer_verdicts", "auth_failures", "model_usage"), NOW - timedelta(days=30)
     )
 
 
@@ -73,6 +73,13 @@ async def _seed(url: str, age_days: float, tag: int) -> None:
             (uuid4(), ts),
         )
         await connection.execute(
+            "INSERT INTO telemetry.model_usage (usage_id, request_id, ts, layer, purpose, model,"
+            " tier, mode, input_tokens, output_tokens, cost_usd, latency_ms, status)"
+            " VALUES (%s, %s, %s, 'classifier', 'tool_result', 'claude-haiku-4-5-20251001',"
+            " 'small', 'replay', 10, 1, 0.00001, 1, 'ok')",
+            (uuid4(), request_id, ts),
+        )
+        await connection.execute(
             "INSERT INTO telemetry.spans (trace_id, span_id, ts, name, duration_us, status)"
             " VALUES (%s, %s, %s, 'gateway.tool_call', 1, 'ok')",
             (f"{tag:032x}", f"{tag:016x}", ts),
@@ -82,7 +89,7 @@ async def _seed(url: str, age_days: float, tag: int) -> None:
 async def _counts(url: str) -> dict[str, int]:
     counts = {}
     async with await psycopg.AsyncConnection.connect(url) as connection:
-        for table in ("requests", "layer_verdicts", "auth_failures", "spans"):
+        for table in ("requests", "layer_verdicts", "auth_failures", "model_usage", "spans"):
             cursor = await connection.execute(f"SELECT count(*) FROM telemetry.{table}".encode())
             row = await cursor.fetchone()
             assert row is not None
@@ -99,11 +106,18 @@ async def test_old_rows_go_and_recent_rows_stay_with_each_tables_own_retention(
 
     deleted = await purge(purger_url, cutoffs(NOW, 7, 30))
 
-    assert deleted == {"requests": 3, "layer_verdicts": 3, "auth_failures": 3, "spans": 4}
+    assert deleted == {
+        "requests": 3,
+        "layer_verdicts": 3,
+        "auth_failures": 3,
+        "model_usage": 3,
+        "spans": 4,
+    }
     assert await _counts(test_database_url) == {
         "requests": 2,
         "layer_verdicts": 2,
         "auth_failures": 2,
+        "model_usage": 2,
         "spans": 1,
     }
 

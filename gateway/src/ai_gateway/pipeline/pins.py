@@ -9,9 +9,10 @@ The pins live in `config/tool_pins.toml`, in git, so a change to a description i
 reads:
 
     [tools."tickets__create_ticket"]
-    sha256 = "..."                 # of the canonical JSON of the name, description and input schema
+    sha256 = "..."                 # of the canonical JSON of the name, description and both schemas
     description = "Opens a ticket..."
     input_schema = '''{ ... }'''   # the schema as JSON, pretty-printed
+    output_schema = '''{ ... }'''  # the output schema (or null), the same way
 
 `gateway-admin`'s sibling script `scripts/generate_tool_pins.py` writes the file from the servers'
 own definitions. The file is read once at startup (re-pinning means a restart) and a mistake stops
@@ -32,11 +33,23 @@ class ToolPinsError(ValueError):
     pass
 
 
-def definition_sha256(name: str, description: str | None, input_schema: Mapping[str, Any]) -> str:
+def definition_sha256(
+    name: str,
+    description: str | None,
+    input_schema: Mapping[str, Any],
+    output_schema: Mapping[str, Any] | None = None,
+) -> str:
     """The hash a pin records: of the canonical JSON of the tool's exposed name, its description
-    and its input schema (keys sorted, no insignificant whitespace, UTF-8)."""
+    and its input and output schemas (keys sorted, no insignificant whitespace, UTF-8). The output
+    schema is part of what a client is told about the tool, and its field descriptions are text a
+    model reads, so a change to it is drift like a change to the description."""
     canonical = json.dumps(
-        {"name": name, "description": description or "", "inputSchema": input_schema},
+        {
+            "name": name,
+            "description": description or "",
+            "inputSchema": input_schema,
+            "outputSchema": output_schema,
+        },
         sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=False,
@@ -49,6 +62,7 @@ class ToolPin:
     description: str
     input_schema: Mapping[str, Any]
     sha256: str
+    output_schema: Mapping[str, Any] | None = None
 
 
 class ToolPins:
@@ -65,7 +79,7 @@ class ToolPins:
         return len(self._pins)
 
 
-_ENTRY_KEYS = frozenset({"sha256", "description", "input_schema"})
+_ENTRY_KEYS = frozenset({"sha256", "description", "input_schema", "output_schema"})
 
 
 def load_tool_pins(path: Path) -> ToolPins:
@@ -87,12 +101,15 @@ def parse_tool_pins(raw: Mapping[str, Any], where: str = "tool pins") -> ToolPin
     for name, entry in tools.items():
         if not isinstance(entry, Mapping) or set(entry) != _ENTRY_KEYS:
             raise ToolPinsError(f"{where}: {name!r} needs exactly {sorted(_ENTRY_KEYS)}")
-        description, schema_text, recorded = (
+        description, schema_text, recorded, output_text = (
             entry["description"],
             entry["input_schema"],
             entry["sha256"],
+            entry["output_schema"],
         )
-        if not all(isinstance(value, str) for value in (description, schema_text, recorded)):
+        if not all(
+            isinstance(value, str) for value in (description, schema_text, recorded, output_text)
+        ):
             raise ToolPinsError(f"{where}: {name!r} holds a value that is not text")
         try:
             schema = json.loads(schema_text)
@@ -100,34 +117,49 @@ def parse_tool_pins(raw: Mapping[str, Any], where: str = "tool pins") -> ToolPin
             raise ToolPinsError(f"{where}: the input schema of {name!r} is not JSON") from error
         if not isinstance(schema, dict):
             raise ToolPinsError(f"{where}: the input schema of {name!r} is not an object")
-        if definition_sha256(name, description, schema) != recorded:
+        try:
+            output_schema = json.loads(output_text)
+        except ValueError as error:
+            raise ToolPinsError(f"{where}: the output schema of {name!r} is not JSON") from error
+        if output_schema is not None and not isinstance(output_schema, dict):
+            raise ToolPinsError(f"{where}: the output schema of {name!r} is not an object or null")
+        if definition_sha256(name, description, schema, output_schema) != recorded:
             raise ToolPinsError(
                 f"{where}: the hash of {name!r} is not the hash of its own text: the description or"
                 " schema was edited without being pinned again (scripts/generate_tool_pins.py)"
             )
-        pins[name] = ToolPin(description=description, input_schema=schema, sha256=recorded)
+        pins[name] = ToolPin(
+            description=description,
+            input_schema=schema,
+            sha256=recorded,
+            output_schema=output_schema,
+        )
     return ToolPins(pins)
 
 
-def render_tool_pins(tools: Iterable[tuple[str, str | None, Mapping[str, Any]]]) -> str:
-    """The text of a pins file for these (exposed name, description, input schema) triples."""
+def render_tool_pins(
+    tools: Iterable[tuple[str, str | None, Mapping[str, Any], Mapping[str, Any] | None]],
+) -> str:
+    """The text of a pins file for these (name, description, input, output schema) tuples."""
     lines = [
-        "# The reviewed description and input schema of every tool the gateway offers, pinned.",
+        "# The reviewed description and schemas (input, output) of every tool the gateway offers.",
         "# A tool that is not here, or whose definition no longer matches, is hidden and refused",
         "# by the pinned_descriptions layer. Written by scripts/generate_tool_pins.py: review it.",
         "# Harborline Supply Co. is fictional.",
         "",
     ]
-    for name, description, schema in sorted(tools, key=lambda item: item[0]):
+    for name, description, schema, output in sorted(tools, key=lambda item: item[0]):
         text = description or ""
         schema_text = json.dumps(schema, indent=2, sort_keys=True, ensure_ascii=False)
-        if "'''" in schema_text:
+        output_text = json.dumps(output, indent=2, sort_keys=True, ensure_ascii=False)
+        if "'''" in schema_text or "'''" in output_text:
             raise ToolPinsError(f"the schema of {name!r} holds ''', which a TOML literal cannot")
         lines += [
             f"[tools.{json.dumps(name)}]",
-            f'sha256 = "{definition_sha256(name, text, schema)}"',
+            f'sha256 = "{definition_sha256(name, text, schema, output)}"',
             f"description = {json.dumps(text, ensure_ascii=False)}",
             f"input_schema = '''\n{schema_text}\n'''",
+            f"output_schema = '''\n{output_text}\n'''",
             "",
         ]
     return "\n".join(lines)

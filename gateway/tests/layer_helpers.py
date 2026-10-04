@@ -36,7 +36,7 @@ TOOL = "tickets__create_ticket"
 def pins_for(
     name: str = TOOL, description: str = DESCRIPTION, schema: dict[str, Any] | None = None
 ) -> ToolPins:
-    text = render_tool_pins([(name, description, schema or TICKET_SCHEMA)])
+    text = render_tool_pins([(name, description, schema or TICKET_SCHEMA, None)])
     import tomllib
 
     return parse_tool_pins(tomllib.loads(text))
@@ -63,6 +63,7 @@ def call(
     effect: str = "write",
     description: str = DESCRIPTION,
     schema: dict[str, Any] | None = None,
+    output_schema: dict[str, Any] | None = None,
 ) -> ToolCall:
     return ToolCall.create(
         name,
@@ -74,17 +75,26 @@ def call(
         definition=ToolDefinition(
             description=description,
             input_schema_json=json.dumps(schema or TICKET_SCHEMA, sort_keys=True),
+            output_schema_json=json.dumps(output_schema, sort_keys=True),
         ),
     )
 
 
 def catalog_tool(
-    name: str = TOOL, description: str = DESCRIPTION, schema: dict[str, Any] | None = None
+    name: str = TOOL,
+    description: str = DESCRIPTION,
+    schema: dict[str, Any] | None = None,
+    output_schema: dict[str, Any] | None = None,
 ) -> CatalogTool:
     return CatalogTool(
         namespace=name.split("__")[0],
         upstream_name=name.split("__")[1],
-        tool=Tool(name=name, description=description, input_schema=schema or TICKET_SCHEMA),
+        tool=Tool(
+            name=name,
+            description=description,
+            input_schema=schema or TICKET_SCHEMA,
+            output_schema=output_schema,
+        ),
     )
 
 

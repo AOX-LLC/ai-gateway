@@ -86,3 +86,15 @@
 .chart-data summary { cursor: pointer; color: var(--pui-text-secondary); padding: 2px 0; }
 .chart-data summary:focus-visible { outline: var(--pui-focus-width) solid var(--pui-focus-ring); outline-offset: 2px; }
 .chart-table-wrap { max-height: 240px; overflow: auto; margin-top: 8px; border: 1px solid var(--pui-border); border-radius: var(--pui-radius-sm); }
+
+/* Tokens and cost. Tiles sit inside the chart panels; they wrap to one column at phone width. */
+.usage-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr)); gap: 12px; margin: 0; }
+.usage-tile { display: flex; flex-direction: column; gap: 4px; min-width: 0; margin: 0; padding: 10px 12px; background: var(--pui-surface-muted); border: 1px solid var(--pui-border); border-radius: var(--pui-radius-sm); }
+.usage-tile dd { margin: 0; }
+.usage-value { font-family: var(--pui-font-display); font-size: 22px; line-height: 28px; font-weight: 500; font-variant-numeric: tabular-nums; color: var(--pui-text); overflow-wrap: break-word; }
+.usage-value .pui-kpi-unit { display: inline; }
+.usage-badge { margin-left: 8px; vertical-align: middle; font-family: var(--pui-font-sans); }
+.usage-modes { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--pui-border); }
+.usage-mode { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2px 12px; padding: 6px 0; border-bottom: 1px solid var(--pui-border); font-size: 12px; line-height: 16px; }
+.usage-mode-name { font-weight: 600; color: var(--pui-text); }
+.usage-mode-text { font-family: var(--pui-font-mono); font-variant-numeric: tabular-nums; color: var(--pui-text-secondary); }

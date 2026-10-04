@@ -1,0 +1,11 @@
+# agent-core's settings for the classifier's model calls (the gateway's own, merged over agent-core's
+# defaults). The mode is AGENT_CORE_MODE: replay (the default: committed recordings, no key), record
+# or live (both need AGENT_CORE_ANTHROPIC_API_KEY, which only agent-core reads).
+
+[replay]
+cassette_dir = "recordings"     # relative to this file
+
+[routing]
+# Never spend more than this on one judgement, retries included: a unit is short and the answer is
+# an enum. A call over it is refused, not sent.
+budget_usd_per_call = "0.01"

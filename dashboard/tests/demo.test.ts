@@ -34,14 +34,15 @@ describe("a demo stack", () => {
     await data.getDecisions(session, { range: "24h" });
     await data.getApprovals(session);
     await data.getCharts(session, "7d");
+    await data.getUsage(session, "7d");
     const at = await data.getClock(session);
 
     const queries = sent.filter((q) => /FROM\s/i.test(q));
-    expect(queries.length).toBeGreaterThanOrEqual(8);
+    expect(queries.length).toBeGreaterThanOrEqual(10);
     for (const query of queries) expect(query, query.slice(0, 80)).not.toMatch(/\bnow\(\)/i);
     // Every query that has a time window or an expiry takes it from the newest request.
     const windowed = queries.filter((q) => /make_interval|expires_at|AS now/.test(q));
-    expect(windowed.length).toBeGreaterThanOrEqual(8);
+    expect(windowed.length).toBeGreaterThanOrEqual(10);
     for (const query of windowed) expect(query, query.slice(0, 80)).toContain("max(ts) FROM telemetry.dash_requests");
     expect(at).toBe("2026-10-03T12:00:00.000000Z");
   });

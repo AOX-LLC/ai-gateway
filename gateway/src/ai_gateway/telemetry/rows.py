@@ -17,6 +17,7 @@ from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.trace import StatusCode
 from psycopg.types.json import Jsonb
 
+from ai_gateway.classifier.judge import UsageRecord
 from ai_gateway.seams.events import GatewayEvent
 from ai_gateway.telemetry import attributes
 from ai_gateway.telemetry.buffer import Row
@@ -109,7 +110,7 @@ def _layer_row(request_id: UUID, ordinal: int, ts: datetime, layer: Mapping[str,
             "layer": _text(layer, "layer", 63),
             "hook": _text(layer, "hook", 11),
             "mode": _text(layer, "mode", 7),
-            "verdict": _text(layer, "verdict", 11),
+            "verdict": _text(layer, "verdict", 12),
             "code": _text(layer, "code", 63),
             "tools_removed": _integer(layer, "tools_removed"),
             "duration_ms": _number(layer, "duration_ms"),
@@ -209,3 +210,27 @@ def _uuid_or_none(value: str | None) -> UUID | None:
         return UUID(value) if value else None
     except ValueError:
         return None
+
+
+def model_usage_row(record: "UsageRecord", ts: datetime) -> Row:
+    """A model call's books as a row: tokens, cost, mode and where it was made, never the text."""
+    return Row(
+        "model_usage",
+        {
+            "usage_id": uuid4(),
+            "request_id": record.request_id,
+            "ts": ts,
+            "layer": "classifier",
+            "purpose": record.purpose,
+            "model": record.model[:100] or "none",
+            "tier": record.tier,
+            "mode": record.mode,
+            "input_tokens": record.input_tokens,
+            "output_tokens": record.output_tokens,
+            "cache_read_tokens": record.cache_read_tokens,
+            "cache_write_tokens": record.cache_write_tokens,
+            "cost_usd": record.cost_usd,
+            "latency_ms": record.latency_ms,
+            "status": record.status,
+        },
+    )

@@ -48,7 +48,8 @@ Phase 1 implements `scope`. Phase 3 adds `allowlist`, `rate_limit` and `approval
 see [Allowlist and rate limits](#allowlist-and-rate-limits-phase-3c) and
 [Approvals](#approvals-phase-3b)); the login throttle in front of the pipeline is
 [Failed logins](#failed-logins-phase-3c). Phase 4b adds `schema`, `pinned_descriptions`, `egress`
-and `canary` (see [Injection layers](#injection-layers-phase-4b)); the classifier follows in 4c.
+and `canary` (see [Injection layers](#injection-layers-phase-4b)); Phase 4c adds `classifier` (see
+[The injection classifier](#the-injection-classifier-phase-4c)).
 
 ## The pipeline
 
@@ -844,7 +845,7 @@ are in this repository: a real deployment makes its own and keeps the list secre
 write a decision, so the payload-purge credential can reject or approve a pending request; the gate
 counts only an active approver's decision (a rejection included), so the effect is that a client's
 request is asked afresh, which a holder of the credential can repeat. A purge-only role in agent-core
-would end it. The pins cover the description and the input schema, not the output schema or titles.
+would end it. The pins cover the description and both schemas (4c added the output schema), not titles.
 Egress and canary scan at most 256 KiB of a call's arguments. A session that read more values than it
 is tracked for, or whose ledger was dropped for room, cannot write a value (`egress_state_lost`).
 The service logins' 90-day expiry is renewed by every `policy-setup`, so it does not force a
@@ -854,6 +855,40 @@ terminating proxy that does not forward the scheme it would point at `http://`.
 **Startup cross-check.** The allowlist, the rate limits and the approval roles are checked against the
 pins before the gateway accepts a request: a tool no pin names, an argument the pinned schema does not
 have, a range on a string, a value outside an enum, each stops startup, naming every mistake.
+
+### The injection classifier (Phase 4c)
+
+A small model reads the free text a call carries and says whether it is an injection. It runs through
+agent-core's `ModelClient` (`classifier/judge.py`, prompt in `classifier/prompt.py`), on the small
+tier, one call per **unit**: one prose value of a result (or of a write's arguments), cut at
+`max_unit_chars`. Identifiers, numbers and short values are not judged. The answer is an enum only
+(`clean` or `injection`, a confidence, a technique), so there is no free text to carry an attack back.
+Results of reads are judged after the upstream answers, so a client never receives one that carries an
+injection; a write's arguments are judged before approval, so a person is never asked to approve one.
+
+**Replay by default.** `AGENT_CORE_MODE` is `replay` unless set: the judgements come from the
+recordings in `config/recordings/`, so the whole stack runs with no API key and nothing is billed. A
+text with no recording is **unclassified**: the call goes on, the layer verdict is `unclassified`
+(never `allow`), and the scorecard counts it apart. That is a decision to keep the stack runnable
+without a key, not a safe default for a deployment: a deployment runs `live` (and then a provider
+error, a timeout or a budget refuses the call, `classifier_unavailable`). `scripts/record_classifier.py`
+records the corpus (`--count` says what that costs, `--verify` fails on a miss) and a test fails if
+any attack, benign look-alike, 09 story string or seeded write has no recording.
+
+**Guards.** A judged text is remembered by a keyed hash so none is judged twice; a client may cause
+`max_calls_per_minute_per_client` model calls a minute; live spend is capped at `max_usd_per_hour` for
+the whole gateway (so one client can use up the ceiling: the per-client cap is what limits that);
+more than `max_units` units in one call is refused (`classifier_oversize`), not partly judged.
+
+**Usage.** Each model call is a row in `telemetry.model_usage` (model, tier, mode, tokens, cost,
+latency, status), never the text or the answer. `mode` says whether the cost was billed: a `replay`
+row's cost is the recording's, and the dashboard labels it "replayed, not billed".
+
+**Argument hashes.** The hash of a call's arguments in decision records, telemetry and new audit
+records is an HMAC-SHA256 under `GATEWAY_ARGUMENT_HASH_KEY` (`init_env.py` generates it; the gateway
+will not start without one of at least 32 bytes that is not the placeholder), because a bare hash of
+a low-entropy argument can be guessed. agent-core's own approval payload hash is unchanged. Changing
+the key breaks the match between records made under different keys.
 
 ### Idle transactions (Phase 3c)
 
@@ -1203,8 +1238,10 @@ wrong-typed session before the database is touched, so a function added without 
 
 ### Panels and refresh
 
-Each panel has loading, empty, error and (for tokens and cost, which start with the injection
-classifier in Phase 4) not-active states, and status is always an icon and words, never colour alone.
+Each panel has loading, empty, error and stale states, and status is always an icon and words, never
+colour alone. The tokens and cost panels read `telemetry.dash_model_usage` (`lib/data/usage.ts`) and
+keep replayed cost apart from billed cost: a `replay` row is labelled "replayed, not billed" and is
+never added into a billed figure; calls replay had no recording for are counted as unclassified.
 The page is rendered on the server with the data, then refreshed every 15 seconds from `/api/live`
 while the tab is visible: it stops when the tab is hidden and refreshes at once on return after a gap,
 and a failed refresh keeps the last good data on screen with its age. The decisions are paged by

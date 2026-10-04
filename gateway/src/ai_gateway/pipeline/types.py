@@ -1,6 +1,5 @@
 """The request pipeline's vocabulary: layers, verdicts, and what they inspect."""
 
-import hashlib
 import json
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -11,6 +10,7 @@ from uuid import UUID
 
 from mcp.types import CallToolResult, Tool
 
+from ai_gateway.hashing import keyed_sha256
 from ai_gateway.text import printable
 
 POLICY_BLOCK_MESSAGE = "Request blocked by gateway policy."
@@ -52,6 +52,9 @@ class DenyCode(StrEnum):
     EGRESS_STATE_LOST = "egress_state_lost"
     CANARY_HIT = "canary_hit"
     CANARY_UNCHECKABLE = "canary_uncheckable"
+    CLASSIFIER_INJECTION = "classifier_injection"
+    CLASSIFIER_UNAVAILABLE = "classifier_unavailable"
+    CLASSIFIER_OVERSIZE = "classifier_oversize"
 
 
 class Disposition(StrEnum):
@@ -71,6 +74,9 @@ class Allow:
     score: int | None = None
     """A layer's own count for the record (matches found, violations), never content. Kept for an
     allowed call too, so a layer in monitor mode shows how close calls come to its limit."""
+    unclassified: bool = False
+    """The layer could not judge part of the call and let it go on (replay found no recording): the
+    record says `unclassified` with the code `classifier_unrecorded`, never `allow`."""
 
 
 @dataclass(frozen=True)
@@ -150,10 +156,17 @@ class ToolDefinition:
     description: str
     input_schema_json: str = field(repr=False)
     """Canonical JSON of the tool's input schema."""
+    output_schema_json: str = field(default="null", repr=False)
+    """Canonical JSON of the tool's output schema (`null` when it has none)."""
 
     @property
     def input_schema(self) -> dict[str, Any]:
         parsed: dict[str, Any] = json.loads(self.input_schema_json)
+        return parsed
+
+    @property
+    def output_schema(self) -> dict[str, Any] | None:
+        parsed: dict[str, Any] | None = json.loads(self.output_schema_json)
         return parsed
 
 
@@ -206,7 +219,9 @@ class ToolCall:
 
     @cached_property
     def arguments_sha256(self) -> str:
-        return hashlib.sha256(self.arguments_json.encode()).hexdigest()
+        """The keyed hash (HMAC-SHA256) of the arguments, for the decision record, the audit
+        write-ahead record and telemetry (see `ai_gateway.hashing`; the name predates the key)."""
+        return keyed_sha256(self.arguments_json)
 
 
 class BaseLayer:

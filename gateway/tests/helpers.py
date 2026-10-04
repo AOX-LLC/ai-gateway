@@ -18,7 +18,8 @@ from ai_gateway.app import create_app
 from ai_gateway.seams.events import MemoryEventSink
 from ai_gateway.settings import GatewaySettings
 
-PINS_FILE = Path(__file__).resolve().parents[2] / "config" / "tool_pins.toml"
+ROOT_CONFIG = Path(__file__).resolve().parents[2] / "config"
+PINS_FILE = ROOT_CONFIG / "tool_pins.toml"
 
 HANDBOOK_DOCUMENTS = Path(__file__).resolve().parents[2] / "servers" / "handbook" / "documents"
 """The handbook's Markdown documents: a plain repository folder, in no package or image."""
@@ -153,6 +154,7 @@ def run_gateway(
         "pinned_descriptions": "off",
         "egress": "off",
         "canary": "off",
+        "classifier": "off",
         **(layers or {}),
     }
     layer_lines = "".join(f'{name} = "{mode}"\n' for name, mode in modes.items())
@@ -177,12 +179,14 @@ def run_gateway(
     events = MemoryEventSink()
     settings = GatewaySettings(
         database_url=SecretStr(database_url),
+        argument_hash_key=SecretStr("test-only-argument-hash-key-0123456789"),
         pipeline_file=pipeline_file,
         approval_roles_file=roles_file,
         allowlist_file=allowlist_file,
         rate_limits_file=limits_file,
         tool_pins_file=pins_file,
         egress_file=egress_file,
+        classifier_file=ROOT_CONFIG / "classifier.toml",
         canaries_file=canaries_file,
         telemetry_database_url=(
             SecretStr(telemetry_database_url) if telemetry_database_url else None

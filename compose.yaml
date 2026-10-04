@@ -173,6 +173,11 @@ services:
       GATEWAY_APPROVAL_ROLES_FILE: /app/config/approval_roles.toml
       GATEWAY_ALLOWLIST_FILE: /app/config/allowlist.toml
       GATEWAY_RATE_LIMITS_FILE: /app/config/rate_limits.toml
+      # replay (the default) serves the committed recordings and needs no key. record or live need
+      # AGENT_CORE_ANTHROPIC_API_KEY in .env, which only agent-core reads (it is empty by default).
+      AGENT_CORE_MODE: ${AGENT_CORE_MODE:-replay}
+      AGENT_CORE_ANTHROPIC_API_KEY: ${AGENT_CORE_ANTHROPIC_API_KEY:-}
+      GATEWAY_ARGUMENT_HASH_KEY: ${GATEWAY_ARGUMENT_HASH_KEY:?set it in .env}
       GATEWAY_ALLOWED_HOSTS: ${GATEWAY_ALLOWED_HOSTS:-127.0.0.1:*,localhost:*}
       GATEWAY_LOG_LEVEL: ${GATEWAY_LOG_LEVEL:-INFO}
       # Spans and decision records are stored through this append-only role. If the database

@@ -9,9 +9,16 @@ MIGRATIONS_PACKAGE = __name__
 """Where the telemetry schema's numbered SQL migrations live, for mcp_common.migrate."""
 
 SCHEMA = "telemetry"
-TABLES = ("requests", "layer_verdicts", "auth_failures", "spans", "pipeline_configs")
+TABLES = (
+    "requests",
+    "layer_verdicts",
+    "auth_failures",
+    "spans",
+    "pipeline_configs",
+    "model_usage",
+)
 """Every table, in the order the writer inserts into them."""
-PURGEABLE_TABLES = ("requests", "layer_verdicts", "auth_failures", "spans")
+PURGEABLE_TABLES = ("requests", "layer_verdicts", "auth_failures", "spans", "model_usage")
 """The tables whose old rows the purge deletes; `pipeline_configs` is tiny and kept."""
 WRITER_ROLE = "telemetry_writer"
 READER_ROLE = "telemetry_reader"
