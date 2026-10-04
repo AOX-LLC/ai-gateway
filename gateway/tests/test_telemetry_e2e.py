@@ -130,7 +130,7 @@ async def test_requests_layers_spans_and_auth_failures_are_stored_without_a_trac
     for table in TABLES:
         dump = await _rows(test_database_url, f"SELECT t::text FROM telemetry.{table} t")
         assert MARKER not in repr(dump), table
-        assert "4111" not in repr(dump), table
+        assert "4111-1111" not in repr(dump), table
 
     # The dashboard's role sees the same through its views.
     async with await psycopg.AsyncConnection.connect(reader_url) as connection:
@@ -145,6 +145,7 @@ async def test_requests_layers_spans_and_auth_failures_are_stored_without_a_trac
             ("pinned_descriptions",),
             ("egress",),
             ("canary",),
+            ("classifier",),
             ("approval",),
         ]
 

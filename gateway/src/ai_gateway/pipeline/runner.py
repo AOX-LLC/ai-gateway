@@ -21,11 +21,13 @@ from opentelemetry.context import Context
 from opentelemetry.trace import Span
 from pydantic import JsonValue
 
+from ai_gateway.classifier.judge import Judge
 from ai_gateway.pipeline.alerts import Alerts
 from ai_gateway.pipeline.config import PipelineConfig
 from ai_gateway.pipeline.layers.allowlist import AllowlistLayer, AllowlistRule
 from ai_gateway.pipeline.layers.approval import ApprovalLayer
 from ai_gateway.pipeline.layers.canary import CanaryConfig, CanaryLayer
+from ai_gateway.pipeline.layers.classifier import ClassifierLayer
 from ai_gateway.pipeline.layers.egress import EgressConfig, EgressLayer
 from ai_gateway.pipeline.layers.pinned import PinnedDescriptionsLayer
 from ai_gateway.pipeline.layers.rate_limit import RateLimitLayer, RateLimits
@@ -34,6 +36,7 @@ from ai_gateway.pipeline.pins import ToolPins
 from ai_gateway.pipeline.registry import LAYER_ORDER
 from ai_gateway.pipeline.types import (
     POLICY_BLOCK_MESSAGE,
+    Allow,
     BaseLayer,
     CallContext,
     CatalogTool,
@@ -57,6 +60,10 @@ _tracer = trace.get_tracer("ai_gateway")
 # `traceparent` the client sent in `_meta`, and the call to the upstream carries the trace
 # context that is current when it is made; starting the gateway's spans in an empty context,
 # not under the SDK's, means a client cannot choose which trace an upstream call joins.
+
+
+UNRECORDED_CODE = "classifier_unrecorded"
+"""The code on an `unclassified` verdict: replay mode had no recording for a unit of text."""
 
 
 class UpstreamStatus(StrEnum):
@@ -89,7 +96,7 @@ class Blocked:
 
 CallOutcome = Forwarded | Blocked
 
-LayerVerdict = Literal["allow", "deny", "would_block", "off", "error"]
+LayerVerdict = Literal["allow", "deny", "would_block", "off", "error", "unclassified"]
 Hook = Literal["filter", "before_call", "after_call"]
 """Which step of the pipeline a verdict came from."""
 
@@ -168,6 +175,7 @@ class Pipeline:
         pins: ToolPins | None = None,
         egress: EgressConfig | None = None,
         canaries: CanaryConfig | None = None,
+        judge: Judge | None = None,
     ) -> "Pipeline":
         alerts = Alerts(audit)
 
@@ -186,6 +194,8 @@ class Pipeline:
                 return layer_class(egress)
             if issubclass(layer_class, CanaryLayer):
                 return layer_class(canaries, alerts)
+            if issubclass(layer_class, ClassifierLayer):
+                return layer_class(judge)
             return layer_class()
 
         layers = [make(layer_class) for layer_class in layer_order]
@@ -366,6 +376,20 @@ class Pipeline:
         if details is not None and verdict.approval_id is not None:
             details["approval_id"] = verdict.approval_id
 
+        if isinstance(verdict, Allow) and verdict.unclassified:
+            decisions.append(
+                LayerDecision(
+                    layer.name,
+                    hook,
+                    mode,
+                    "unclassified",
+                    UNRECORDED_CODE,
+                    None,
+                    elapsed_ms,
+                    verdict.score,
+                )
+            )
+            return None
         if not isinstance(verdict, Deny):
             decisions.append(
                 LayerDecision(

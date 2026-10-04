@@ -52,6 +52,9 @@ class DenyCode(StrEnum):
     EGRESS_STATE_LOST = "egress_state_lost"
     CANARY_HIT = "canary_hit"
     CANARY_UNCHECKABLE = "canary_uncheckable"
+    CLASSIFIER_INJECTION = "classifier_injection"
+    CLASSIFIER_UNAVAILABLE = "classifier_unavailable"
+    CLASSIFIER_OVERSIZE = "classifier_oversize"
 
 
 class Disposition(StrEnum):
@@ -71,6 +74,9 @@ class Allow:
     score: int | None = None
     """A layer's own count for the record (matches found, violations), never content. Kept for an
     allowed call too, so a layer in monitor mode shows how close calls come to its limit."""
+    unclassified: bool = False
+    """The layer could not judge part of the call and let it go on (replay found no recording): the
+    record says `unclassified` with the code `classifier_unrecorded`, never `allow`."""
 
 
 @dataclass(frozen=True)

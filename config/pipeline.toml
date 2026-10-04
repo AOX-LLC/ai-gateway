@@ -8,6 +8,7 @@ schema = "enforce"
 pinned_descriptions = "enforce"
 egress = "enforce"
 canary = "enforce"
+classifier = "enforce"
 approval = "enforce"
 
 [safety]
