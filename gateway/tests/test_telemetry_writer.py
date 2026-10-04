@@ -222,7 +222,7 @@ async def test_an_unclassified_classifier_verdict_is_stored(
     telemetry: None, buffer: TelemetryBuffer, writer: TelemetryWriter, test_database_url: str
 ) -> None:
     rows = _call_rows(1)
-    layers = {
+    layers: dict[str, Any] = {
         "layer": "classifier",
         "hook": "after_call",
         "mode": "enforce",
