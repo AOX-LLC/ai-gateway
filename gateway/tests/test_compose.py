@@ -1,5 +1,6 @@
 """The Compose file's network layout: what can reach the host and what can reach the outside."""
 
+import math
 from pathlib import Path
 from typing import Any
 
@@ -100,6 +101,27 @@ def test_the_dashboard_publishes_4400_on_loopback_and_runs_hardened(
     assert dashboard["security_opt"] == ["no-new-privileges:true"]
     assert dashboard["restart"] == "unless-stopped"
     assert dashboard["mem_limit"] == "144m", "1.5 x the 94 MiB measured peak (Phase 5c-3)"
+
+
+def test_the_long_running_services_are_limited_to_one_and_a_half_times_their_measured_peak(
+    compose: dict[str, Any],
+) -> None:
+    """Peaks from scripts/measure_memory_at_maxima.py (Phase 4d), limits in steps of 16 MiB. The
+    gateway had sat at its old limit of 176 MiB."""
+    peaks_mib = {
+        "gateway": 175.1,
+        "handbook": 138.1,
+        "ticketing": 83.1,
+        "crm": 83.6,
+        "approvals-purge": 72.3,
+        "telemetry-purge": 29.1,
+    }
+    floor = 64
+
+    for service, peak in peaks_mib.items():
+        wanted = max(math.ceil(peak * 1.5 / 16) * 16, floor)
+        assert compose["services"][service]["mem_limit"] == f"{wanted}m", service
+    assert compose["services"]["postgres"]["mem_limit"] == "256m", "the floor: peak 152 MiB"
 
 
 def test_next_telemetry_is_disabled_in_the_dashboard_service_and_image(
