@@ -10,6 +10,7 @@ that carries a login (the test tooling's) is used as it is.
 
 import argparse
 import getpass
+import json
 import os
 import sys
 from collections.abc import Mapping, Sequence
@@ -53,7 +54,8 @@ class Approvals:
     def __init__(self, database_url: str, roles_by_action: Mapping[str, str]) -> None:
         """`roles_by_action` is the role each write needs, from the file the requester cannot
         change: a request for any other action, or for another role, is refused."""
-        self.database = open_database(SecretStr(policy_url(database_url)))
+        # One connection: the login allows two, and the tool does one thing at a time.
+        self.database = open_database(SecretStr(policy_url(database_url)), max_connections=1)
         self.queue = approval_queue_on(
             self.database, policy=RoleApproverPolicy(roles_by_action=roles_by_action)
         )
@@ -61,8 +63,8 @@ class Approvals:
     async def principal(self) -> Principal:
         """Who is signed in: the active approver whose database login this session is."""
 
-        def read(session: Any) -> list[tuple[Any, ...]]:
-            rows: list[tuple[Any, ...]] = session.execute(
+        async def read(session: Any) -> list[tuple[Any, ...]]:
+            rows: list[tuple[Any, ...]] = await session.execute(
                 "SELECT id, roles, active FROM policy.approvers WHERE db_role = current_user"
             )
             return rows
@@ -77,20 +79,18 @@ class Approvals:
             id=f"human:{rows[0][0]}", kind=PrincipalKind.HUMAN, roles=frozenset(rows[0][1])
         )
 
-    async def arguments_json(self, request_id: UUID) -> str | None:
-        def read(session: Any) -> list[tuple[Any, ...]]:
-            rows: list[tuple[Any, ...]] = session.execute(
-                "SELECT arguments_json FROM policy.approval_arguments WHERE request_id = ?",
-                (str(request_id),),
-            )
-            return rows
-
-        rows = await self.database.run(read)
-        return str(rows[0][0]) if rows else None
-
     async def show(self, request_id: UUID) -> tuple[ApprovalRequest, str]:
+        """The request, and what a person is shown of it. The arguments are the request's own
+        stored payload; a purged one, or one that was never stored, cannot be shown (and can only
+        be rejected)."""
         request = await self.queue.get(request_id)
-        return request, render(request, await self.arguments_json(request_id)).text
+        if request.payload is None:
+            raise ApprovalNotShowableError(
+                "the arguments of this request were purged: it can only be rejected"
+                if request.payload_purged_at is not None
+                else "the arguments of this request were never stored: it can only be rejected"
+            )
+        return request, render(request, json.dumps(request.payload)).text
 
     async def decide(
         self, request_id: UUID, decision: Decision, reason: str | None
@@ -103,6 +103,14 @@ class Approvals:
         return await self.queue.resolve(
             request_id, decision=decision, principal=principal, reason=reason
         )
+
+
+async def _run(approvals: Approvals, args: argparse.Namespace) -> None:
+    """Run the command, then close the database the queue opened."""
+    try:
+        await args.handler(approvals, args)
+    finally:
+        await approvals.database.aclose()
 
 
 async def _whoami(approvals: Approvals, args: argparse.Namespace) -> None:
@@ -183,7 +191,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         sys.exit(f"gateway-approver: {_URL_ENV} is not set")
     try:
         roles = load_roles_by_action(Path(os.environ.get(_ROLES_ENV, _DEFAULT_ROLES_FILE)))
-        anyio.run(args.handler, Approvals(_sign_in(url), roles), args)
+        anyio.run(_run, Approvals(_sign_in(url), roles), args)
     except psycopg.OperationalError:
         # The server's message names the login and may say why; one line is enough, and no detail
         # of a failed sign-in is worth showing to whoever is typing.

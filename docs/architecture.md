@@ -443,10 +443,9 @@ use it to decide what a caller may do. Authorization is the gateway's scope chec
 
 ## Seams for later phases
 
-The seams that the shared `agent-core` library will fill (approval queue, audit log,
-tracing) follow its **pre-release, unmerged interfaces**. Those may shift before its v0.1.0
-release, so expect small adapter changes when it lands. This repository does not import
-it or copy its code.
+The seams that the shared `agent-core` library fills (approval queue, audit log, tracing) are
+filled: the gateway pins agent-core's first release, `v0.1.0`, by tag, and imports it. This
+repository copies none of its code.
 
 | Seam | Phase 1 | Later |
 | --- | --- | --- |
@@ -467,7 +466,7 @@ gateway and finds it in no column of any table.
 ### Audit (Phase 3)
 
 Every tool call is recorded in agent-core's append-only, hash-chained audit log, in the `policy`
-schema. agent-core is pinned by tag (`v0.1.0a3`, in `gateway/pyproject.toml`); the log and, from
+schema. agent-core is pinned by tag (`v0.1.0`, in `gateway/pyproject.toml`); the log and, from
 Phase 3b, the approval queue are its. This is not telemetry. Telemetry is best effort and tells the
 dashboard what happened; the audit log is the record of what the gateway did, and a write is not
 made without it.
@@ -516,40 +515,48 @@ always best effort. Audit is owned by the pipeline: the write-ahead step can ref
 the rest is a queue. Telemetry down with audit up, audit down with telemetry up, and both down are
 all tested.
 
-**Cost.** agent-core appends one event per transaction and serialises appends: about 22 ms each
-(p95 about 100 ms) when measured here, so 50 concurrent appends took 3.2 s. The recorder therefore
-writes the queue in batches of up to 100 in one transaction, using `SQLAuditLog.append_in`: 100
-events took about 150 ms. Only the write-ahead record waits for its own transaction.
+**Cost.** agent-core appends one event per transaction and serialises appends. Measured on this
+node on 2026-10-03 under v0.1.0 (`scripts/measure_audit_throughput.py`, 50 appends and 5 runs, the
+stack's own Postgres on a disk volume, a copy of the real one): one append at a time, median 16.8 ms
+(p95 55.6 ms); 50 appends at once took 0.78 s (median of 5; 3.2 s under a3, with a median of 22 ms and a
+p95 of about 100 ms for one); one `append_many` of 100 took 75 ms (about 150 ms under a3, with
+`append_in`). An approval's submit takes 20.9 ms (p95 72.7 ms), a repeat of an open one 5.4 ms (p95
+9.6 ms: the idempotent path a retry takes), and a cancel 19.4 ms. The recorder therefore still writes
+the queue in batches of up to 100 in one transaction, using `SQLAuditLog.append_many`. Only the
+write-ahead record waits for its own transaction. agent-core does not coalesce independent appends
+(it lists that as planned work), so the batching stays. The test Postgres in agent-core's own
+benchmark runs on tmpfs, so its numbers are lower than these.
 
-**Bounded waits.** agent-core runs each operation on the event loop's default thread pool, which
-also resolves names for psycopg and httpx, and a worker thread cannot be interrupted. Any role
-that can connect can hold an advisory lock, so the gateway keeps the audit log off that pool, on
-workers of its own (four for the write-ahead record, one for the batches), and counts the threads
-still running, including one whose caller gave up. A caller stops waiting at its limit (2 s for
-the write-ahead record, 15 s for a batch); the thread ends when the database's own limits end its
-transaction: a 2 s connect timeout, then lock, statement and transaction timeouts (1.5, 1.8 and
-1.9 s for the write-ahead record; 5, 8 and 12 s for the batches; the transaction timeout needs
-PostgreSQL 17). A write is refused at once when all four write-ahead workers are taken. This
-narrows the chance that a write refused for time is committed late; it does not remove it, since
-a thread that connects just before the limit can still commit after the request has moved on.
-A batch whose outcome is unknown (a timeout, or a connection lost after COMMIT) is checked against
-the records written since the last one known, by `record_id`, before it is retried, and its gap
-record is built once, so a retry does not store either twice.
+**Bounded waits.** agent-core's storage is async, on a psycopg connection pool. The gateway gives
+the audit log pools of its own (four connections for the write-ahead record, one for the batches),
+so a stalled audit log fills only them, and a write is refused at once when all four write-ahead
+connections are taken (`busy`). A caller stops waiting at its limit (2 s for the write-ahead record,
+15 s for a batch) and its connection is closed; what ends a statement the server is still running
+(a wait for the audit append lock, say) is the database's own limits: a 2 s connect timeout, then
+lock, statement and transaction timeouts (1.5, 1.8 and 1.9 s for the write-ahead record; 5, 8 and 12 s
+for the batches; the transaction timeout needs PostgreSQL 17). This narrows the chance that a write
+refused for time is committed late; it does not remove it, since a statement that starts just before
+the limit can still commit after the request has moved on. A batch whose outcome is unknown (a
+timeout, or a connection lost after COMMIT) is checked against the records written since the last
+one known, by `record_id`, before it is retried, and its gap record is built once, so a retry does
+not store either twice.
 
 ### Roles, and the approval guard
 
 | Role | Can |
 | --- | --- |
 | `policy_gateway` (the gateway) | read and append the audit log; create approval requests (pending only) and consume an approved one (not one whose approver has been removed: it may ask whether an approver is still active, and nothing else about them) |
-| `policy_approver` (a group: nobody logs in as it; each approver's own login is a member, see [Approver identity](#approver-identity-phase-5c-1)) | read and append the audit log (a login writes the audit event of its decision); decide a pending request; read the approvers and the stored arguments |
+| `policy_approver` (a group: nobody logs in as it; each approver's own login is a member, see [Approver identity](#approver-identity-phase-5c-1)) | read and append the audit log (a login writes the audit event of its decision); decide a pending request (only as the principal the owner mapped to its login, see below); read the approvers and the stored arguments |
 | `policy_auditor` | read the audit log and which login is which approver, and nothing else (never the arguments or the approvers' names) |
+| `policy_payload_purger` (one login, `approvals-purge`) | a member of the approver role with no `SET`, one connection; it purges stored arguments after 7 days and is mapped to a principal that is not an approver, so no decision it writes is used |
 
-The gateway can insert a request's arguments (`approval_arguments`) and never read them back; only
-the approver reads them.
+A write's arguments are stored with its request (`include_payload`), where the approver reads them;
+the auditor and the dashboard's reader cannot. The gateway role can read the arguments of its own
+requests (it must, to return an open one; it had them to begin with).
 
-agent-core v0.1.0a3 ships the two roles and the guard itself. Its installer (`gateway-admin
-policy-setup` runs it every time: it is idempotent and upgrades an a2 schema in place, keeping every
-row) creates the tables in the `policy` schema for a *requester* role (`policy_gateway`) and an
+agent-core v0.1.0 ships the two roles and the guard itself. Its installer (`gateway-admin
+policy-setup` runs it every time: it is idempotent and upgrades an older schema in place, keeping
+every row and every audit record, and no anchor stops verifying) creates the tables in the `policy` schema for a *requester* role (`policy_gateway`) and an
 *approver* role (`policy_approver`), grants each only its layout (the requester may update `status`,
 `consumed_at` and `closed_at`; the approver the decision columns), and installs a guard trigger that
 allows only these changes, using the database's own clock and role membership:
@@ -604,28 +611,33 @@ that is forwarded; a read never asks.
    slot; past either limit a call is answered "pending" at once and the client retries.
 3. **Approved:** the approval is consumed, once, and the call goes on to the audit write-ahead and
    the upstream. The gateway first checks that the request was made by *this* client, and agent-core
-   a3's consume checks the tool, the arguments and the requester again. One approval authorises one run.
+   agent-core's consume checks the tool, the arguments and the requester again. One approval authorises one run.
 4. **No decision yet:** the client gets the pending result and retries the same call; the retry
    finds the same request and holds again. **Rejected:** the rejection stands until the request
    expires, so a retry does not ask again. **Expired:** the next call asks afresh.
 5. **The queue cannot be used** (no policy database, a dead database, arguments over 64 KiB):
    the write is refused. The layer fails closed.
 
-**One pending request per intent.** Identical concurrent calls from a client share one pending
-request. That is the database's doing, not a check followed by an insert: a partial unique index on
-`(requested_by, action, payload_sha256)` over `pending` requests (`policy_approvals_one_pending`)
-makes the second of two simultaneous submissions fail, and it then finds the first's. The index
-cannot cover approved requests: agent-core a3 never closes one that runs out unused, so it would
-block the same write for good. The gate closes that gap itself: after it makes a request it looks
-for an approved one for the same intent and, if there is one, withdraws its own and uses the
-approved one. An approver therefore cannot get two runs from one approval; the one remaining window
-is a person approving the new request in the instant before it is withdrawn, which is logged. A
-used approval is closed and the next identical call asks again. `policy-setup` stops, naming the
-requests, if a volume from before the index holds two pending ones for one intent. A repeat
-that matches the client, tool and payload but differs in role, lifetime or delegates is a conflict
-(refused, and nothing is reused), never a reuse; changing an approval setting therefore takes
-effect once the old requests expire. *Replace the index and the conflict check with
-agent-core a5's, which enforces the same rule in the library.*
+**One open request per intent.** Identical calls from a client share one request. That is agent-core's
+`submit`, which is idempotent: while a request for the same client, tool and arguments is open
+(pending, or approved and not yet used) it returns that one and asks nobody again, and a unique
+index over open requests makes it hold when calls race. An approved request that runs out unused is
+closed as expired by the next submit, so it never blocks the same write for good, and a used one is
+closed, so the next identical call asks again. A repeat that differs in role, lifetime, delegates or
+summary is `ApprovalConflictError`, never a reuse: the gate refuses it (`unavailable`, logged), so
+changing an approval setting takes effect once the old requests expire.
+
+Three things stay the gateway's. **A rejection stands until it expires**: agent-core counts a rejected
+request as finished, so the gate looks for one first and a retry does not ask the approvers again.
+**The summary is a pure function of the tool and its arguments** (`approval_summary`: the tool and a
+short digest, no client name, no time, no argument text), because a different summary on a repeat is
+a conflict; a test sends two retries from differently named clients and requires the identical
+text. And **a request the previous release left open** differs from this one in its summary and in
+having no stored payload, the only conflict the gate repairs: if nobody has decided it, it is
+withdrawn and asked afresh (logged); if a person approved it, it is used as it is, since consuming
+checks the tool, the arguments and the requester. An upgrade is therefore best done with no write
+pending; the open requests of the old release cannot be shown to an approver, who can only reject
+them.
 
 `expire_due()` runs once a minute and stores `expired` on requests past their lifetime; reads treat
 such a request as expired whether or not it has run.
@@ -640,11 +652,17 @@ arguments are a new request; another client's request is never found, and a dire
 it is refused.
 
 **The arguments are kept, once.** So that a person approves what the call really says, the full
-arguments of a write awaiting approval are stored in `policy.approval_arguments`. It is the one
-exception to "never store arguments". The gateway role can insert them (only `request_id` and `arguments_json`, so it cannot set when they
-are purged) and cannot read them; the approver role reads them; the auditor and the dashboard's reader cannot. They are never in an audit
-record or in telemetry, and `policy.purge_approval_arguments()` (run hourly by the gateway; only the
-gateway role may call it) deletes them 7 days after they were stored.
+arguments of a write awaiting approval are stored with the request, in its payload, and its
+`payload_sha256` binds them (agent-core refuses to read a request whose stored payload does not match
+its hash). It is the one exception to "never store arguments". They are never in an audit record or in
+telemetry. `approvals-purge` (its own Compose service and login, hourly) calls agent-core's
+`purge_payloads` for requests that finished more than 7 days ago (consumed, rejected, cancelled or
+expired; never one still open): the payload goes, the hash stays, and one `approval.payload_purged`
+audit record names each request, written by the purge's own login, which `audit-verify` accepts from
+that login alone. A purged request reads as purged, not as never stored, and can only be rejected.
+The purge must run as the approver side (agent-core's rule), so its login is a member of the approver
+role: it is mapped to a principal that `policy.approvers` does not list, which is why no decision it
+writes is used by the gate or accepted by verification.
 
 **`gateway-approver`** (`docker compose run --rm approver list | show | approve | reject | whoami`)
 is a person's tool, and it takes no name: who is deciding is read from the database session (the
@@ -669,13 +687,14 @@ fails a `gateway.*` record, an `audit.gap`, an `approval.requested`, an `approva
 `approver.*` record that the gateway role did not write, and an `approval.resolved` that no approver's
 login (or, in a log from before the logins, the approver role) wrote: the approver role may append to
 the audit log, and without this a holder of its credential could add records the gateway never wrote
-under a chain that still verifies. A decision written by a login must also be that approver's: a
-decision record written by `aiden`'s login that says `human:tyler` decided fails, and so does a
-second decision on one request. The shared approver role's decisions are accepted only before the
-first `approver.*` record (they are from before the logins). What is not checked is the approvals
-row: `resolved_by`, and the display name the dashboard shows from it, are what the deciding tool
-put there until agent-core a7's guard binds them to the login; the gate refuses an approval whose
-`resolved_by` does not agree with the audit record, but nothing else reads the two together.
+under a chain that still verifies. It also fails a second decision on one request, and an
+`approval.payload_purged` that the purge's login did not write. The shared approver role's decisions
+are accepted only before the first `approver.*` record (they are from before the logins).
+
+Whose decision it says it is, is no longer read back from the log: with login binding on (below) the
+database refuses a decision whose `resolved_by` is not the principal mapped to the login that made
+it, so `audit-verify` no longer compares the two. The gate still refuses an approval whose audit
+record was not written by an active approver's login holding the role the request needed.
 
 What is *not* here: the approval is consumed before the audit write-ahead, so a write refused because
 the audit log is down has used up its approval (the client asks again). `scripts/auto_approver.py`
@@ -685,16 +704,36 @@ approves for the scenario and the simulator; it is test tooling, outside the gat
 ### Approver identity (Phase 5c-1)
 
 Each approver has a database login of their own, and the tool reads who they are from it. The
-audit trigger sets `db_role := current_user` on every record, so a decision is recorded with the
-login that wrote it, whatever the tool claims; `approvers.db_role` maps the login to the person.
+audit trigger sets `db_role := current_user` (and, from agent-core's audit schema 4, `db_login :=
+session_user`) on every record, so a decision is recorded with the login that wrote it, whatever the
+tool claims; `approvers.db_role` maps the login to the person.
+
+**Ids are opaque.** An approver id is `appr_` and ten random characters, made by `approver-add`; the
+login is `policy_approver_<id>` and the principal `human:<id>`. The audit log and agent-core's login
+mapping are append-only and cannot be erased, so nothing written to them may be a person's name: the
+name goes in `--name` and lives in `policy.approvers.display_name` only. `approver-add` refuses an id
+that is not of that shape (the one exception is `lab-approver`, which is not a person and is made by
+`policy-setup`).
+
+**Login binding.** `policy-setup` installs agent-core's guard with `bind_resolved_by=True` and, as
+the owner, maps each active approver's login to its principal (`agent_core_approver_logins`, which
+only the owner, connected as itself, can write; `approver-add` maps a new login and `approver-remove`
+ends its mapping). The guard then judges `session_user` and refuses a decision whose `resolved_by`
+is not the principal mapped to it: by the library, by plain SQL and after a `SET ROLE` (a login has
+no `SET` on the group or on another login). A login with no mapping can read the queue and never
+decide. A mapping is for good: the login and the principal are never mapped again, even after the
+mapping ends, and it is by the role's OID, so a login made again could not decide. Rotating a login
+whose role is gone is therefore refused (remove the approver and add them again), and the lab
+approver's role is kept (shut, with no membership, when its password is unset) rather than dropped
+and made again. A setup that cannot map an active approver says so in the log and goes on.
 
 | Command (`gateway-admin`, as the owner) | Does |
 | --- | --- |
-| `approver-add <id> --name N [--role R]` | Records the approver and makes `policy_approver_<id>` (`.` and `-` become `_`; ids are at most 40 characters). Prints the login and a generated password **once**; nothing the gateway runs keeps it (but it is on the
+| `approver-add [<id>] --name N [--role R]` | Records the approver (a new, opaque id unless the id of an existing one is given) and makes `policy_approver_<id>`, and maps it. Prints the id, the login and a generated password **once**; nothing the gateway runs keeps it (but it is on the
 admin container's stdout, which a non-default Docker log driver may keep, and `-e APPROVER_PASSWORD`
 is visible through `docker inspect`: prefer the prompt). Adding an active approver again only updates the name and roles. |
-| `approver-rotate <id>` | A new password, shown once; the old one stops working and the open sessions end. Makes the login again if its role is missing. |
-| `approver-remove <id>` | Ends the sessions and drops the login. The row stays, inactive and marked removed. |
+| `approver-rotate <id>` | A new password, shown once; the old one stops working and the open sessions end. Refused if the login's role is gone (its mapping cannot be made again). |
+| `approver-remove <id>` | Ends the sessions, ends the mapping and drops the login. The row stays, inactive and marked removed. |
 | `approver-list` | Each approver, their roles, state and login. |
 
 A login is `LOGIN` with no other attribute, `CONNECTION LIMIT 2`, a password valid for 90 days
@@ -707,14 +746,13 @@ could `SET ROLE` to it and write as it) and any table privilege granted to it di
 and there is no shared approver password: `POLICY_APPROVER_DB_PASSWORD` is gone. The tool signs in
 with `APPROVER_LOGIN` and `APPROVER_PASSWORD` (or asks), never from `.env`.
 
-`policy.approvers` is the map of who is who, shaped for agent-core a7's guard to bind `resolved_by`
-to the deciding login: one row per approver principal (`human:<id>`), one login per row, unique both
+`policy.approvers` is the map of who is who, which feeds agent-core's login mapping: one row per approver principal (`human:<id>`), one login per row, unique both
 ways; only the owner writes it (no other role can insert, update or delete); a row is never deleted,
 its login never changes once set, and a removed approver stays removed, so an id and a login are
 never given to anyone else. A trigger enforces the last three (delete, truncate, change of id or
 login, un-removing); the owner can disable triggers, as it can for the audit log's. `audit-verify`
 reads the login map through a view of this table, so the map is as trustworthy as the owner: the
-owner can rewrite the table and the map with it. What the hash chain does hold is the
+owner can rewrite the table and the map with it (agent-core's own mapping is the one the guard uses). What the hash chain does hold is the
 `approver.added` records, which name each login.
 
 **Audited.** `approver.added`, `.updated`, `.rotated` and `.removed` are appended to the audit log

@@ -5,6 +5,8 @@ hash-chained audit log and a human-approval queue, on Postgres. This package cre
 schema and three roles, and adapts them to the gateway's needs.
 """
 
+import secrets
+import string
 from urllib.parse import quote, unquote, urlencode, urlsplit, urlunsplit
 
 from aox_agent_core.approvals import ApproverPolicy, SQLApprovalQueue
@@ -20,8 +22,15 @@ decides through a login of their own that is a member of it (`approver-add`), an
 approver through the lab role below."""
 APPROVER_LOGIN_PREFIX = "policy_approver_"
 """A person's database login is this and their approver id, with `.` and `-` made `_`."""
-APPROVER_ID_MAX_LENGTH = 40
-"""Longest id `approver-add` takes: a role name is at most 63 bytes, and the prefix is 16."""
+APPROVER_ID_PREFIX = "appr_"
+APPROVER_ID_SUFFIX_LENGTH = 10
+APPROVER_ID_PATTERN = rf"{APPROVER_ID_PREFIX}[a-z0-9]{{{APPROVER_ID_SUFFIX_LENGTH}}}"
+"""An approver id is opaque: `appr_` and ten random characters, made by `approver-add`, never a
+person's name. The id names the login (`policy_approver_<id>`) and the principal (`human:<id>`), and
+both are written for good: the audit log and agent-core's login mapping are append-only, so a name
+there could never be erased. The person's name lives only in `policy.approvers.display_name`."""
+APPROVER_ID_MAX_LENGTH = len(APPROVER_ID_PREFIX) + APPROVER_ID_SUFFIX_LENGTH
+"""A role name is at most 63 bytes, and the login prefix is 16."""
 APPROVER_LOGIN_VALID_DAYS = 90
 """A login's password stops working this long after it was set; `approver-rotate` sets a new one."""
 APPROVER_LOGIN_CONNECTION_LIMIT = 2
@@ -52,14 +61,24 @@ gateway's own waits are 1.5 s: a stuck session must not hold it for long."""
 
 AUDIT_TABLE = "agent_core_audit"
 APPROVALS_TABLE = "agent_core_approvals"
-ARGUMENTS_TABLE = "approval_arguments"
-"""The full arguments of a write that awaits approval, for the approver only: the one place the
-gateway keeps arguments, and the one exception to "never store arguments"."""
 APPROVERS_TABLE = "approvers"
 DASHBOARD_VIEW = "dash_approvals"
 """The approval requests as the dashboard may see them: no arguments, no reasons."""
-ARGUMENTS_PURGE_FUNCTION = "purge_approval_arguments"
-ARGUMENTS_RETENTION_DAYS = 7
+PAYLOAD_RETENTION_DAYS = 7
+"""How long a finished request keeps the arguments a person was shown. After it, `approvals-purge`
+removes them (agent-core's `purge_payloads`); the request keeps its hash."""
+PURGER_ROLE = "policy_payload_purger"
+"""The login `approvals-purge` connects as. agent-core lets only the approver side purge a payload,
+so it is a member of the approver role, and it is mapped to a principal that is not an approver
+(`policy.approvers` does not list it): it can purge and cannot make a decision anyone uses."""
+PURGER_PRINCIPAL = "service:payload-purger"
+
+
+def new_approver_id() -> str:
+    """A fresh opaque approver id."""
+    alphabet = string.ascii_lowercase + string.digits
+    suffix = "".join(secrets.choice(alphabet) for _ in range(APPROVER_ID_SUFFIX_LENGTH))
+    return APPROVER_ID_PREFIX + suffix
 
 
 def approver_login_name(approver_id: str) -> str:

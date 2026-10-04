@@ -1,19 +1,22 @@
 """The approval gate: a write waits for a person, and runs only on an approval made for it.
 
-For a write the gateway finds this client's request for exactly this tool and these arguments, or
-submits one; holds for a decision for 45 s; and answers "pending" if there is none yet, so the
-client retries the same call. When a person has approved, the approval is consumed, once, right
-before the call is forwarded, after the gateway has checked that this client is the one who asked
-(agent-core a3's consume checks it too; the gate's own check is a second one, and fails the call
-with a log line of its own).
+For a write the gateway submits a request for exactly this tool and these arguments (agent-core's
+submit is idempotent: while a request for the same client, tool and arguments is open, pending or
+approved and not yet used, it returns that one), unless a person has already rejected it and the
+rejection has not expired; holds for a decision for 45 s; and answers "pending" if there is none
+yet, so the client retries the same call. When a person has approved, the approval is consumed,
+once, right before the call is forwarded, after the gateway has checked that this client is the
+one who asked (agent-core's consume checks it too; the gate's own check is a second one, and
+fails the call with a log line of its own).
 
-The full arguments are stored for the approver in `policy.approval_arguments` (the gateway can
-insert them and never read them back) so that a person approves what the call really says. That
-is the one place the gateway keeps arguments; they are purged after 7 days and never go to the
-audit log or telemetry.
+The arguments a person approves are stored with the request itself (`include_payload`), so the
+approver sees what the call really says and the request's hash binds it. It is the one place the
+gateway keeps arguments; `approvals-purge` removes them 7 days after the request finished, and they
+never go to the audit log or telemetry.
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 from collections.abc import Callable, Mapping
@@ -30,14 +33,11 @@ from aox_agent_core.approvals import (
     SQLApprovalQueue,
     approval_payload_hash,
 )
-from aox_agent_core.errors import AgentCoreError, ApprovalExpiredError
-from psycopg.errors import UniqueViolation
+from aox_agent_core.errors import AgentCoreError, ApprovalConflictError, ApprovalExpiredError
 
 from ai_gateway.pipeline.types import CallContext, ToolCall
-from ai_gateway.policy import ACTIVE_APPROVERS_VIEW, ARGUMENTS_PURGE_FUNCTION, SCHEMA
-from ai_gateway.policy.database import BoundedPostgresDatabase
+from ai_gateway.policy import ACTIVE_APPROVERS_VIEW
 from ai_gateway.seams.approvals import ApprovalDecision, ApprovalOutcome
-from ai_gateway.text import printable
 
 logger = logging.getLogger(__name__)
 
@@ -51,15 +51,25 @@ MAX_HOLDS_PER_CLIENT = 4
 MAX_ARGUMENT_BYTES = 65_536
 PURGE_EVERY_S = 3600.0
 EXPIRE_EVERY_S = 60.0
+_LEFT_BY_AN_OLDER_GATEWAY = frozenset({"summary", "payload"})
+"""What an open request left by the previous release differs in: it wrote a client-named summary
+and kept the arguments in a table of its own, not in the request."""
 
 
 def _now_text() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
-class ApprovalConflictError(Exception):
-    """An open request matches this call's requester, tool and payload but not its role, lifetime
-    or delegates: it is not reused, and nothing is approved."""
+def approval_summary(action: str, arguments: Mapping[str, Any]) -> str:
+    """The summary of a request, a pure function of the tool and its arguments.
+
+    agent-core treats a repeat of an open request with another summary as a conflict, so the summary
+    must not depend on who asks, when, or how the gateway is set up: two retries of one call give
+    the identical text. It carries no argument text (the approver reads the stored payload, which
+    the request's hash binds), only a short digest to tell calls apart in a list."""
+    canonical = json.dumps(arguments, sort_keys=True, separators=(",", ":"))
+    digest = hashlib.sha256(canonical.encode()).hexdigest()[:12]
+    return f"{action} {digest}"
 
 
 def _payload(call: ToolCall) -> dict[str, Any]:
@@ -99,7 +109,7 @@ class PostgresApprovalGate:
         except Exception as error:  # the queue must never turn into a 500 or an open door
             reason = (
                 f"{type(error).__name__}: {error}"
-                if isinstance(error, AgentCoreError | ApprovalConflictError)
+                if isinstance(error, AgentCoreError)
                 else (type(error).__name__)
             )
             logger.error("approval for request %s unavailable (%s)", ctx.request_id, reason)
@@ -195,58 +205,39 @@ class PostgresApprovalGate:
     ) -> ApprovalRequest | None:
         """This call's open request, or a new one; identical concurrent calls share one.
 
-        The sharing is the database's, not a check followed by an insert: a partial unique index on
-        (requester, action, payload hash) over pending requests (`setup.py`) makes the second of two
-        simultaneous submissions fail, and it then finds the first's request.
-        REPLACE WITH AGENT-CORE A5'S INDEX, which enforces the same rule in the library.
+        The sharing is agent-core's: a unique index over open requests (pending, or approved and
+        not yet used) makes `submit` idempotent, so a repeat returns the open request and asks
+        nobody again. Two things stay the gateway's: a rejection stands until it expires (agent-core
+        treats a rejected request as finished, so a retry would ask the approvers again), and a
+        conflict, a repeat that differs in role, lifetime, delegates or summary, is never reused.
 
-        A repeat that matches the requester, tool and payload but differs in role, lifetime or
-        delegates is a conflict, not a reuse (ApprovalConflictError)."""
-        for _ in range(3):
-            request = await self._find(requester.id, payload_hash)
-            if request is not None:
-                self._same_intent(call, request)
-                return request
+        The one conflict worth repairing is a request an older gateway left open: it differs only in
+        its summary (and, from a gateway that did not store the payload, the payload). If nobody has
+        decided it, it is withdrawn and asked afresh; if a person approved it, it is used as it is,
+        since consuming checks the tool, the arguments and the requester, not the summary."""
+        rejected = await self._find_rejected(requester.id, payload_hash)
+        if rejected is not None:
+            return rejected
+        for attempt in range(2):
             try:
-                created = await self._submit(ctx, call, requester, payload)
-            except UniqueViolation:
-                # An open request for this intent exists: the next find returns it. If it is only
-                # past its lifetime (stored as pending until the sweep), store that and try again.
-                await self.expire_due(Principal(id="service:gateway", kind=PrincipalKind.SERVICE))
-                continue
-            if created is None:
-                return None
-            # The index covers pending requests only. If an approved one for this intent appeared
-            # since the lookup (a person approved the older request while this call was making a
-            # new one), the new one is withdrawn and the approved one is used: one approval, one
-            # run, never two requests a person could approve for one intent.
-            approved = await self._find_approved(requester.id, payload_hash, besides=created.id)
-            if approved is None:
-                return created
-            try:
-                await self._queue.cancel(created.id, principal=requester)
-            except AgentCoreError:
-                logger.error("a request for one intent was approved twice at once: %s", created.id)
-            self._same_intent(call, approved)
-            return approved
-        raise ApprovalConflictError("an open request for this call could be neither found nor made")
-
-    def _same_intent(self, call: ToolCall, request: ApprovalRequest) -> None:
-        lifetime = (request.expires_at - request.created_at).total_seconds()
-        differs = [
-            name
-            for name, different in (
-                ("role", request.required_role != self._roles_by_action.get(call.exposed_name)),
-                ("delegates", bool(request.delegates)),
-                ("lifetime", lifetime != self._ttl_s),
-            )
-            if different
-        ]
-        if differs:
-            raise ApprovalConflictError(
-                f"request {request.id} is for this call but its {', '.join(differs)} differ"
-                " (a changed approval setting takes effect once the old request expires)"
-            )
+                return await self._submit(ctx, call, requester, payload)
+            except ApprovalConflictError as conflict:
+                if not set(conflict.differs) <= _LEFT_BY_AN_OLDER_GATEWAY:
+                    raise
+                existing = await self._queue.get(conflict.existing)
+                if existing.status is ApprovalStatus.APPROVED:
+                    return existing
+                if existing.status is not ApprovalStatus.PENDING or attempt:
+                    raise
+                logger.warning(
+                    "withdrawing request %s, left open by an older gateway (%s), to ask afresh",
+                    existing.id,
+                    ", ".join(conflict.differs),
+                )
+                await self._queue.cancel(
+                    existing.id, principal=requester, reason="asked afresh after an upgrade"
+                )
+        return None
 
     async def _decided_by_an_active_approver(self, request: ApprovalRequest) -> bool:
         """The decision was written by the login of an approver who is still active and holds the
@@ -258,8 +249,8 @@ class PostgresApprovalGate:
         approved but nobody has used yet, at once, not at the next setup. A decision made through
         the shared approver role, before the logins, does not count: the client asks again."""
 
-        def read(session: Any) -> list[tuple[Any, ...]]:
-            rows: list[tuple[Any, ...]] = session.execute(
+        async def read(session: Any) -> list[tuple[Any, ...]]:
+            rows: list[tuple[Any, ...]] = await session.execute(
                 "SELECT 1 FROM policy.agent_core_audit e"  # noqa: S608 - fixed names
                 f" JOIN policy.{ACTIVE_APPROVERS_VIEW} a ON a.db_role = e.db_role"
                 " WHERE e.action = 'approval.resolved' AND e.subject_id = ?"
@@ -272,40 +263,21 @@ class PostgresApprovalGate:
 
         return bool(await self._database.run(read))
 
-    async def _find_approved(
-        self, requested_by: str, payload_hash: str, *, besides: UUID
-    ) -> ApprovalRequest | None:
-        def read(session: Any) -> list[tuple[Any, ...]]:
-            rows: list[tuple[Any, ...]] = session.execute(
+    async def _find_rejected(self, requested_by: str, payload_hash: str) -> ApprovalRequest | None:
+        """This client's newest unexpired rejected request for this tool and these arguments. A
+        rejection stands until it expires, so a retry of a rejected call does not ask again."""
+
+        async def read(session: Any) -> list[tuple[Any, ...]]:
+            rows: list[tuple[Any, ...]] = await session.execute(
                 "SELECT id FROM policy.agent_core_approvals"
-                " WHERE requested_by = ? AND payload_sha256 = ? AND status = 'approved'"
-                " AND expires_at > ? AND id <> ? ORDER BY created_at LIMIT 1",
-                (requested_by, payload_hash, _now_text(), str(besides)),
-            )
-            return rows
-
-        rows = await self._database.run(read)
-        return await self._queue.get(UUID(str(rows[0][0]))) if rows else None
-
-    async def _find(self, requested_by: str, payload_hash: str) -> ApprovalRequest | None:
-        """This client's newest unexpired request for this tool and these arguments that is still
-        pending, approved or rejected. A rejection stands until it expires, so a retry of a
-        rejected call does not ask again."""
-
-        def read(session: Any) -> list[tuple[Any, ...]]:
-            rows: list[tuple[Any, ...]] = session.execute(
-                "SELECT id FROM policy.agent_core_approvals"
-                " WHERE requested_by = ? AND payload_sha256 = ?"
-                " AND status IN ('pending', 'approved', 'rejected') AND expires_at > ?"
-                " ORDER BY (status = 'approved') DESC, created_at DESC LIMIT 1",
+                " WHERE requested_by = ? AND payload_sha256 = ? AND status = 'rejected'"
+                " AND expires_at > ? ORDER BY created_at DESC LIMIT 1",
                 (requested_by, payload_hash, _now_text()),
             )
             return rows
 
         rows = await self._database.run(read)
-        if not rows:
-            return None
-        return await self._queue.get(UUID(str(rows[0][0])))
+        return await self._queue.get(UUID(str(rows[0][0]))) if rows else None
 
     async def _submit(
         self, ctx: CallContext, call: ToolCall, requester: Principal, payload: dict[str, Any]
@@ -320,45 +292,17 @@ class PostgresApprovalGate:
                 "no approver role is set for %s: a write nobody may approve", call.exposed_name
             )
             return None
-        # No delegates: only this client may use the approval it asked for.
-        request = await self._queue.submit(
+        # No delegates: only this client may use the approval it asked for. The payload is stored
+        # with the request, so a person is shown exactly what its hash binds.
+        return await self._queue.submit(
             action=call.exposed_name,
-            summary=printable(f"{call.exposed_name} for client {ctx.client.name}", 500),
+            summary=approval_summary(call.exposed_name, call.arguments),
             payload=payload,
             requested_by=requester,
             required_role=role,
             ttl_seconds=self._ttl_s,
+            include_payload=True,
         )
-        # Without its arguments nobody can be shown what to approve, and the approver's tool
-        # refuses such a request: an orphan stays pending until it expires.
-        await self._database.run(
-            lambda session: session.execute(
-                "INSERT INTO policy.approval_arguments (request_id, arguments_json) VALUES (?, ?)",
-                (str(request.id), text),
-            ),
-            write=True,
-        )
-        return request
-
-
-async def purge_arguments_forever(
-    database: BoundedPostgresDatabase, interval_s: float = PURGE_EVERY_S
-) -> None:
-    """Delete stored arguments past their retention, now and then. Failing to is logged: the
-    next round tries again."""
-    while True:
-        try:
-            await database.run(
-                lambda session: session.execute(
-                    f"SELECT {SCHEMA}.{ARGUMENTS_PURGE_FUNCTION}()", ()
-                ),
-                write=True,
-            )
-        except asyncio.CancelledError:
-            raise
-        except Exception as error:
-            logger.warning("purging approval arguments failed (%s)", type(error).__name__)
-        await anyio.sleep(interval_s)
 
 
 async def expire_due_forever(

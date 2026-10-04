@@ -21,7 +21,7 @@ from pathlib import Path
 from aox_agent_core.audit import GENESIS_HASH, AuditHead, AuditRecord, SQLAuditLog
 from aox_agent_core.errors import AuditIntegrityError
 
-from ai_gateway.policy import APPROVER_ROLE, GATEWAY_ROLE, LAB_APPROVER_ROLE
+from ai_gateway.policy import APPROVER_ROLE, GATEWAY_ROLE, LAB_APPROVER_ROLE, PURGER_ROLE
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 
@@ -91,6 +91,7 @@ _WRITTEN_BY = {
     "audit.gap": GATEWAY_ROLE,
     "approval.requested": GATEWAY_ROLE,
     "approval.consumed": GATEWAY_ROLE,
+    "approval.payload_purged": PURGER_ROLE,
 }
 """Which database role writes each kind of record. The approver role may append to the audit log
 (it writes its own decisions), so without this a holder of its credential could add a
@@ -103,23 +104,18 @@ gateway role: agent-core refuses an append from the role that owns the table."""
 def _check_provenance(
     record: AuditRecord, logins: Mapping[str, str], *, shared_role_may_decide: bool
 ) -> None:
-    """Who may have written the record, and for a decision, whose it says it is.
+    """Who may have written the record.
 
-    A decision is written by an approver's own login (`logins` maps each login to the approver it
-    is), by the lab approver, or, in a log from before the logins, by the shared approver role. A
-    decision by a login must name that login's approver: whoever holds the login can append to the
-    log, so a decision claiming to be someone else's is caught here."""
+    A decision is written by an approver's own login (`logins` knows each one), by the lab
+    approver, or, in a log from before the logins, by the shared approver role. Whose decision it
+    says it is, is the database's to refuse: with login binding on (agent-core's guard) a decision
+    whose `resolved_by` is not the principal mapped to the login that made it never reaches the log,
+    so this check no longer reads `resolved_by` against the login."""
     action, db_role = record.action, record.db_role
     if db_role is None:  # from before audit schema 3
         return
     if action == "approval.resolved":
-        if db_role in logins:
-            if record.actor_id != f"human:{logins[db_role]}":
-                raise AuditIntegrityError(
-                    f"record {record.seq} ({action}) was written by the login of approver"
-                    f" {logins[db_role]} but is a decision by {record.actor_id}"
-                )
-        elif db_role == APPROVER_ROLE and shared_role_may_decide:
+        if db_role in logins or (db_role == APPROVER_ROLE and shared_role_may_decide):
             pass
         elif db_role != LAB_APPROVER_ROLE:
             raise AuditIntegrityError(

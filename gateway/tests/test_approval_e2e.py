@@ -121,10 +121,9 @@ async def test_a_write_waits_for_a_person_runs_once_when_approved_and_leaves_no_
     assert MARKER not in json.dumps(records)
     assert MARKER.upper() not in json.dumps(records)
     assert MARKER not in json.dumps([e.payload for e in gateway.events.events])
-    # The one place the arguments are kept: for the approver.
-    async with await psycopg.AsyncConnection.connect(policy_url(policy_approver_url)) as connection:
-        cursor = await connection.execute("SELECT arguments_json FROM approval_arguments")
-        assert MARKER in json.dumps(await cursor.fetchall())
+    # The one place the arguments are kept: with the request, for the approver.
+    stored = await _approver(policy_approver_url).get(request_id)
+    assert MARKER in json.dumps(stored.payload)
 
 
 async def test_a_rejected_write_never_runs_and_the_client_is_told_so(

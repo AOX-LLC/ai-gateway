@@ -24,7 +24,7 @@ from ai_gateway.pipeline.layers.allowlist import load_allowlist
 from ai_gateway.pipeline.layers.rate_limit import load_rate_limits
 from ai_gateway.pipeline.registry import LAYER_ORDER
 from ai_gateway.pipeline.runner import Pipeline
-from ai_gateway.policy.approvals import expire_due_forever, purge_arguments_forever
+from ai_gateway.policy.approvals import expire_due_forever
 from ai_gateway.policy.audit import PostgresAuditRecorder
 from ai_gateway.policy.runtime import build_approvals, build_audit
 from ai_gateway.proxy.catalog import Catalog
@@ -140,7 +140,6 @@ def create_app(settings: GatewaySettings, events: EventSink | None = None) -> Fa
                 if isinstance(audit, PostgresAuditRecorder):
                     await task_group.start(audit.run)
                 if approvals is not None:
-                    task_group.start_soon(purge_arguments_forever, approvals[1])
                     task_group.start_soon(expire_due_forever, approvals[0])
                 async with session_manager.run():
                     try:

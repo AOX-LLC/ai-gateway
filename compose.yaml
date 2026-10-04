@@ -114,6 +114,7 @@ services:
       GATEWAY_MIGRATE_DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       POLICY_GATEWAY_DB_PASSWORD: ${POLICY_GATEWAY_DB_PASSWORD:?set it in .env}
       POLICY_AUDITOR_DB_PASSWORD: ${POLICY_AUDITOR_DB_PASSWORD:?set it in .env}
+      POLICY_PURGER_DB_PASSWORD: ${POLICY_PURGER_DB_PASSWORD:?set it in .env}
       # Empty (the default): there is no lab approver role. Set it to create one for the lab profile.
       POLICY_LAB_APPROVER_DB_PASSWORD: ${POLICY_LAB_APPROVER_DB_PASSWORD:-}
     depends_on:
@@ -140,6 +141,23 @@ services:
       TELEMETRY_RETENTION_DAYS: ${TELEMETRY_RETENTION_DAYS:-30}
     depends_on:
       telemetry-setup:
+        condition: service_completed_successfully
+
+  # Removes the arguments of finished approval requests 7 days after they finished, hourly, as a
+  # login of its own: agent-core lets only the approver side purge a stored payload, so the gateway
+  # never holds that right. The login is mapped to a principal that is not an approver.
+  approvals-purge:
+    build: *gateway-build
+    image: ai-gateway-gateway
+    command: ["approvals-purge", "--every", "3600"]
+    restart: unless-stopped
+    <<: *hardening
+    networks: [backend]
+    mem_limit: 96m
+    environment:
+      POLICY_PURGER_DATABASE_URL: postgresql://policy_payload_purger:${POLICY_PURGER_DB_PASSWORD:?set it in .env}@postgres:5432/${POSTGRES_DB}
+    depends_on:
+      policy-setup:
         condition: service_completed_successfully
 
   gateway:
@@ -363,7 +381,7 @@ services:
         condition: service_healthy
 
   # A person's tool for writes that wait for approval. Each approver has a database login of their
-  # own (`docker compose run --rm admin approver-add <id> --name "..."` prints it once), and the tool
+  # own (`docker compose run --rm admin approver-add --name "..."` prints it once), and the tool
   # reads who they are from that login: there is no --as to claim. Sign in with
   #   docker compose run --rm -e APPROVER_LOGIN -e APPROVER_PASSWORD approver list
   # or leave the two variables out to be asked. The URL below names the database and no login: no

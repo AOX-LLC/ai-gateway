@@ -276,3 +276,20 @@ def test_force_replaces_a_looser_file_with_a_private_one(example: Path, tmp_path
 
     assert stat.S_IMODE(output.stat().st_mode) == 0o600
     assert not [v for v in _values(output).values() if v.startswith("change-me")]
+
+
+def test_the_model_key_is_in_the_example_empty_under_the_one_name_agent_core_reads(
+    tmp_path: Path,
+) -> None:
+    """Live model calls take AGENT_CORE_ANTHROPIC_API_KEY (agent-core never reads
+    ANTHROPIC_API_KEY). It ships empty, and init_env does not make one up: a random value would look
+    like a key and fail at the first live call."""
+    example = (REPO_ROOT / ".env.example").read_text()
+    assert _values(REPO_ROOT / ".env.example")["AGENT_CORE_ANTHROPIC_API_KEY"] == ""
+    assert not re.search(r"^ANTHROPIC_API_KEY=", example, re.M), "never that name"
+
+    target = tmp_path / ".env"
+    result = _run("--example", str(REPO_ROOT / ".env.example"), "--output", str(target))
+
+    assert result.returncode == 0, result.stderr
+    assert _values(target)["AGENT_CORE_ANTHROPIC_API_KEY"] == ""

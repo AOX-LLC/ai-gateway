@@ -11,13 +11,13 @@ holds beyond its layout.
 """
 
 import logging
+import sys
 from dataclasses import dataclass
 
 import anyio
 from aox_agent_core.errors import ConfigError
 from aox_agent_core.storage import InstallReport, install_postgres_schema
 from psycopg import AsyncConnection, sql
-from psycopg.errors import UniqueViolation
 
 from ai_gateway.policy import (
     ACTIVE_APPROVERS_VIEW,
@@ -25,9 +25,6 @@ from ai_gateway.policy import (
     APPROVER_LOGINS_VIEW,
     APPROVER_ROLE,
     APPROVERS_TABLE,
-    ARGUMENTS_PURGE_FUNCTION,
-    ARGUMENTS_RETENTION_DAYS,
-    ARGUMENTS_TABLE,
     AUDIT_TABLE,
     AUDITOR_ROLE,
     DASHBOARD_VIEW,
@@ -36,10 +33,19 @@ from ai_gateway.policy import (
     LAB_APPROVER_ROLE,
     POLICY_IDLE_IN_TRANSACTION_MS,
     PROVISIONING_LOCK,
+    PURGER_PRINCIPAL,
+    PURGER_ROLE,
     ROLES,
     SCHEMA,
 )
-from ai_gateway.policy.approver_logins import managed_logins, sync_approver_logins
+from ai_gateway.policy.approver_logins import (
+    approver_principal,
+    bind_active_approvers,
+    bind_login,
+    harden_login,
+    managed_logins,
+    sync_approver_logins,
+)
 from ai_gateway.telemetry import READER_ROLE
 from mcp_common.roles import (
     advisory_lock,
@@ -52,6 +58,10 @@ from mcp_common.roles import (
 
 logger = logging.getLogger(__name__)
 
+INSTALLER_NO_DECISIONS_MESSAGE = "close_unaudited_approvals needs"
+"""The start of agent-core's error when it will not cancel unaudited approvals because no current
+approver has decided anything (see `_install`)."""
+
 _SETUP_LOCK = PROVISIONING_LOCK
 
 
@@ -60,7 +70,10 @@ class PolicyPasswords:
     gateway: str
     auditor: str
     lab_approver: str | None = None
-    """Set only for a lab stack: creates the lab approver role. Unset, the role is dropped."""
+    """Set only for a lab stack: creates the lab approver role. Unset, the role cannot log in."""
+    payload_purger: str | None = None
+    """The password of the payload purge's login. Unset, the login cannot log in and old arguments
+    are not removed (the purge service refuses to start without it)."""
 
 
 async def setup_policy(owner_url: str, passwords: PolicyPasswords) -> None:
@@ -99,12 +112,23 @@ async def setup_policy(owner_url: str, passwords: PolicyPasswords) -> None:
         await _clear_layout_grants(connection)
         await _install(owner_url)
         await _ensure_approval_tables(connection)
-        await _ensure_one_pending_index(connection)
+        await _drop_the_gateways_own_unique_index(connection)
         await grant_policy_access(connection)
         await sync_approver_logins(connection)
         await _set_up_lab_role(connection, passwords.lab_approver)
+        await _set_up_purger(connection, passwords.payload_purger)
+        # Binding goes on last: every active approver's login is mapped first, so nobody who could
+        # decide a moment ago is locked out. From here the database refuses a decision whose
+        # `resolved_by` is not the principal mapped to the login that made it.
+        await bind_active_approvers(connection)
+        await _install(owner_url, bind=True)
         await restrict_database_access(
-            connection, [*ROLES, *([LAB_APPROVER_ROLE] if passwords.lab_approver else [])]
+            connection,
+            [
+                *ROLES,
+                *([LAB_APPROVER_ROLE] if passwords.lab_approver else []),
+                *([PURGER_ROLE] if passwords.payload_purger else []),
+            ],
         )
 
 
@@ -157,7 +181,7 @@ async def _ensure_approver_group(connection: AsyncConnection) -> None:
     await reset_role(connection, APPROVER_ROLE)
 
 
-async def _install(owner_url: str) -> None:
+async def _install(owner_url: str, *, bind: bool | None = None) -> None:
     """Install or upgrade agent-core's tables and guard. The installer is synchronous (agent-core's
     drivers are), so it runs on a thread. An approved, unused request that no approver's decision
     approves (plain SQL could make one under a2, and a decision by an approver who has since been
@@ -177,20 +201,36 @@ async def _install(owner_url: str) -> None:
             requester_role=GATEWAY_ROLE,
             approver_role=APPROVER_ROLE,
             close_unaudited_approvals=close,
+            bind_resolved_by=bind,
         )
 
     try:
         report = await anyio.to_thread.run_sync(lambda: install(close=True))
     except ConfigError as error:
-        if "close_unaudited_approvals needs" not in str(error):
+        # agent-core raises a plain ConfigError for this, so the case is told by its message: a
+        # test pins the text against the installed tag, so a change shows when the tag moves, not
+        # in production (where the error simply stops setup, as any other would).
+        if INSTALLER_NO_DECISIONS_MESSAGE not in str(error):
             raise
         if await _approved_without_an_explained_decision(owner_url):
             raise  # an approval no approver's decision made: that is what setup exists to stop
         report = await anyio.to_thread.run_sync(lambda: install(close=False))
-        logger.warning(
-            "approved requests were left as they are: the only decisions behind them are by"
-            " approvers who have been removed, and the gateway will not use them: %s",
-            ", ".join(report.unaudited_approvals),
+        left = ", ".join(report.unaudited_approvals)
+        if not report.unaudited_approvals:
+            raise RuntimeError(
+                "the installer refused to cancel approvals whose approvers were removed, but then"
+                " listed none: not guessing what to leave as it is"
+            ) from error
+        # Loud: an error, not a warning, and on stderr as well as in the log, because this leaves
+        # approved requests in place that nobody who may still approve ever approved.
+        logger.error(
+            "LEFT AS THEY ARE, NOT CANCELLED: approved requests whose only decisions are by"
+            " approvers who have been removed (the gateway will not use them; they expire): %s",
+            left,
+        )
+        print(
+            f"policy-setup: left approved requests of removed approvers as they are: {left}",
+            file=sys.stderr,
         )
     if report.closed_approvals:
         logger.warning(
@@ -201,6 +241,11 @@ async def _install(owner_url: str) -> None:
     for grant in report.outside_layout:
         if grant.role not in (AUDITOR_ROLE, READER_ROLE):
             logger.warning("held outside agent-core's layout, to revoke if unused: %s", grant)
+    if bind and report.unmapped_logins:
+        logger.error(
+            "login binding is on and these logins have no mapping, so they cannot decide: %s",
+            ", ".join(report.unmapped_logins),
+        )
     logger.info("agent-core's audit and approval tables are installed in schema %s", SCHEMA)
 
 
@@ -211,24 +256,15 @@ _GRANTS = {
     # (`created_at` is the database's): only these two columns.
     # And it may ask whether the person behind an approval is still an approver, and nothing more
     # about them: a removed approver's approval is not used.
-    GATEWAY_ROLE: (
-        (ARGUMENTS_TABLE, "INSERT (request_id, arguments_json)"),
-        (ACTIVE_APPROVERS_VIEW, "SELECT"),
-    ),
-    APPROVER_ROLE: ((ARGUMENTS_TABLE, "SELECT"), (APPROVERS_TABLE, "SELECT")),
+    GATEWAY_ROLE: ((ACTIVE_APPROVERS_VIEW, "SELECT"),),
+    APPROVER_ROLE: ((APPROVERS_TABLE, "SELECT"),),
     # Arguments are never in the audit trail. The auditor also sees which login is which approver
     # (not the approvers' names), so `audit-verify` can check who wrote a decision.
     AUDITOR_ROLE: ((AUDIT_TABLE, "SELECT"), (APPROVER_LOGINS_VIEW, "SELECT")),
 }
-_OWN_TABLES = (ARGUMENTS_TABLE, APPROVERS_TABLE, APPROVER_LOGINS_VIEW, ACTIVE_APPROVERS_VIEW)
+_OWN_TABLES = (APPROVERS_TABLE, APPROVER_LOGINS_VIEW, ACTIVE_APPROVERS_VIEW)
 
 _APPROVAL_TABLES = f"""
-CREATE TABLE IF NOT EXISTS {ARGUMENTS_TABLE} (
-    request_id TEXT PRIMARY KEY REFERENCES {APPROVALS_TABLE} (id),
-    arguments_json TEXT NOT NULL CHECK (length(arguments_json) <= 65536),
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS {ARGUMENTS_TABLE}_created ON {ARGUMENTS_TABLE} (created_at);
 CREATE TABLE IF NOT EXISTS {APPROVERS_TABLE} (
     id TEXT PRIMARY KEY CHECK (id ~ '^[a-z][a-z0-9._-]{{0,62}}$'),
     display_name TEXT NOT NULL CHECK (length(display_name) BETWEEN 1 AND 100),
@@ -274,24 +310,12 @@ CREATE INDEX IF NOT EXISTS policy_approvals_find
 ON {APPROVALS_TABLE} (requested_by, payload_sha256, created_at DESC)
 """  # the gate looks a request up by client and argument hash on every write
 
-_ONE_PENDING_REQUEST = f"""
-CREATE UNIQUE INDEX policy_approvals_one_pending
-ON {APPROVALS_TABLE} (requested_by, action, payload_sha256)
-WHERE status = 'pending'
-"""  # REPLACE WITH AGENT-CORE A5'S INDEX
-# Pending only. An approved request that expires unused is never closed by agent-core a3 (its sweep
-# closes pending ones only), so one in the index would block the same write for good. The gate
-# closes the gap that leaves (a new request made while an approved one exists) itself.
-
-_PURGE_FUNCTION = f"""
-CREATE OR REPLACE FUNCTION {ARGUMENTS_PURGE_FUNCTION}() RETURNS bigint
-LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
-    WITH purged AS (
-        DELETE FROM {SCHEMA}.{ARGUMENTS_TABLE}
-        WHERE created_at < now() - interval '{ARGUMENTS_RETENTION_DAYS} days' RETURNING 1
-    ) SELECT count(*) FROM purged
-$$
-"""  # noqa: S608 - fixed names and no input: a function body, not a query
+_RETIRE_THE_ARGUMENTS_TABLE = """
+DROP FUNCTION IF EXISTS purge_approval_arguments();
+DROP TABLE IF EXISTS approval_arguments
+"""  # the arguments are stored with the request now (agent-core's include_payload) and purged by
+# `approvals-purge`; the table and its hourly purge are gone. What it held was kept 7 days at most,
+# and a request still open when it goes cannot be shown to an approver (it can only be rejected).
 
 _DASHBOARD_VIEW = f"""
 CREATE OR REPLACE VIEW {DASHBOARD_VIEW} AS
@@ -340,11 +364,7 @@ async def _ensure_approval_tables(connection: AsyncConnection) -> None:
             sql.SQL("SET LOCAL search_path TO {}").format(sql.Identifier(SCHEMA))
         )
         await connection.execute(_APPROVAL_TABLES.encode())
-        await connection.execute(_PURGE_FUNCTION.encode())
-        # Created and closed to PUBLIC in the one transaction: it runs with its owner's rights.
-        await connection.execute(
-            f"REVOKE ALL ON FUNCTION {ARGUMENTS_PURGE_FUNCTION}() FROM PUBLIC".encode()
-        )
+        await connection.execute(_RETIRE_THE_ARGUMENTS_TABLE.encode())
         await connection.execute(_FIND_INDEX.encode())
         await connection.execute(_RESOLVED_INDEX.encode())
         await connection.execute(_DASHBOARD_VIEW.encode())
@@ -355,40 +375,17 @@ async def _ensure_approval_tables(connection: AsyncConnection) -> None:
         await connection.execute(_DASHBOARD_GRANT.encode())
 
 
-async def _ensure_one_pending_index(connection: AsyncConnection) -> None:
-    """At most one pending request per client, tool and payload, enforced by the database.
-
-    An earlier version of this index also covered approved requests; it is replaced. If the
-    volume already holds two pending requests for one intent (identical concurrent calls made them
-    before the index existed), setup stops and says which: it cannot cancel them itself, since
-    only the requester role may, and nothing is guessed about which to keep."""
-    await connection.execute(
-        sql.SQL("DROP INDEX IF EXISTS {}.policy_approvals_one_open").format(sql.Identifier(SCHEMA))
-    )
-    await connection.execute(
-        sql.SQL("DROP INDEX IF EXISTS {}.policy_approvals_one_pending").format(
-            sql.Identifier(SCHEMA)
-        )
-    )
-    try:
-        async with connection.transaction():
-            await connection.execute(
-                sql.SQL("SET LOCAL search_path TO {}").format(sql.Identifier(SCHEMA))
+async def _drop_the_gateways_own_unique_index(connection: AsyncConnection) -> None:
+    """One open request per client, tool and payload is agent-core's now (a unique index over open
+    requests, which `submit` relies on). The gateway's earlier index over pending ones is redundant
+    and is dropped. If the volume holds duplicate open requests the installer has already stopped
+    and listed them (it never closes them silently)."""
+    for name in ("policy_approvals_one_pending", "policy_approvals_one_open"):
+        await connection.execute(
+            sql.SQL("DROP INDEX IF EXISTS {}.{}").format(
+                sql.Identifier(SCHEMA), sql.Identifier(name)
             )
-            await connection.execute(_ONE_PENDING_REQUEST.encode())
-    except UniqueViolation:
-        cursor = await connection.execute(
-            f"SELECT array_agg(id ORDER BY created_at) FROM {SCHEMA}.{APPROVALS_TABLE}"  # noqa: S608
-            " WHERE status = 'pending' GROUP BY requested_by, action, payload_sha256"
-            " HAVING count(*) > 1 LIMIT 10".encode()
         )
-        groups = [", ".join(map(str, row[0])) for row in await cursor.fetchall()]
-        raise RuntimeError(
-            "policy-setup cannot make pending approval requests unique: these groups of requests"
-            " are for the same client, tool and payload (up to 10 groups): "
-            + "; ".join(f"[{group}]" for group in groups)
-            + ". Cancel all but one in each group as the requester role, then run it again."
-        ) from None
 
 
 async def grant_policy_access(connection: AsyncConnection) -> None:
@@ -421,16 +418,6 @@ async def grant_policy_access(connection: AsyncConnection) -> None:
                         sql.SQL(privileges), schema, sql.Identifier(table), name
                     )
                 )
-        # The purge runs with its owner's rights, so who may call it is the whole control.
-        purge = sql.SQL("{}.{}()").format(schema, sql.Identifier(ARGUMENTS_PURGE_FUNCTION))
-        await connection.execute(sql.SQL("REVOKE ALL ON FUNCTION {} FROM PUBLIC").format(purge))
-        for role in ROLES:
-            verb = (
-                "GRANT EXECUTE ON FUNCTION {} TO {}"
-                if role == GATEWAY_ROLE
-                else ("REVOKE ALL ON FUNCTION {} FROM {}")
-            )
-            await connection.execute(sql.SQL(verb).format(purge, sql.Identifier(role)))
 
 
 async def _clear_layout_grants(connection: AsyncConnection) -> None:
@@ -461,6 +448,7 @@ _MEMBERSHIPS = (
     " JOIN pg_roles member ON member.oid = m.member"
     " JOIN pg_roles grantor ON grantor.oid = m.grantor WHERE parent.rolname = ANY(%s)"
     " AND member.rolname <> %s"  # the lab approver's membership is set up deliberately, below
+    " AND member.rolname <> %s"  # and so is the payload purger's
     # An active approver's login stays a member of the approver role (and only that): it is what
     # lets them decide, and agent-core's installer counts a decision only while its writer is one.
     # `sync_approver_logins` makes sure the membership is the right kind.
@@ -470,34 +458,49 @@ _MEMBERSHIPS = (
 
 async def _set_up_lab_role(connection: AsyncConnection, password: str | None) -> None:
     """The lab approver: a login role that is a member of the approver role, so it has exactly the
-    approver's powers, and nothing else. Without a password it does not exist."""
+    approver's powers, and nothing else. Without a password it cannot log in.
+
+    The role is kept, not dropped and made again: agent-core maps a login to its principal for good
+    (by the role's OID, and a login is never mapped twice), so a lab role that was made again
+    could never decide. It is reset instead: its sessions end, what it owns or was granted goes,
+    every membership is revoked, and it is made what it should be."""
     name = sql.Identifier(LAB_APPROVER_ROLE)
-    # Rebuilt every time, not reset: a grant, a table privilege or a role made a member of it by
-    # hand disappears with it, and its running sessions end. The role holds nothing worth keeping.
     if await _role_exists(connection, LAB_APPROVER_ROLE):
+        await connection.execute(sql.SQL("ALTER ROLE {} NOLOGIN").format(name))
         await connection.execute(
             "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = %s",
             (LAB_APPROVER_ROLE,),
         )
         await connection.execute(sql.SQL("DROP OWNED BY {}").format(name))
-        await connection.execute(sql.SQL("DROP ROLE {}").format(name))
+        await reset_role(connection, LAB_APPROVER_ROLE)
+        # And no role is a member of it: that member would inherit its powers (the role used to be
+        # dropped, which took such memberships with it).
+        cursor = await connection.execute(
+            "SELECT member.rolname, grantor.rolname FROM pg_auth_members m"
+            " JOIN pg_roles parent ON parent.oid = m.roleid"
+            " JOIN pg_roles member ON member.oid = m.member"
+            " JOIN pg_roles grantor ON grantor.oid = m.grantor WHERE parent.rolname = %s",
+            (LAB_APPROVER_ROLE,),
+        )
+        for member, grantor in await cursor.fetchall():
+            await connection.execute(
+                sql.SQL("REVOKE {} FROM {} GRANTED BY {} CASCADE").format(
+                    name, sql.Identifier(member), sql.Identifier(grantor)
+                )
+            )
     approvers = sql.SQL("{}.{}").format(sql.Identifier(SCHEMA), sql.Identifier(APPROVERS_TABLE))
     if not password:
-        # Its decisions stay attributed to it; nobody can decide through a role that is not there.
+        # Its decisions stay attributed to it; nobody can decide through a login that is shut.
         await connection.execute(
             sql.SQL("UPDATE {} SET active = false WHERE db_role = %s").format(approvers),
             (LAB_APPROVER_ROLE,),
         )
         return
     await ensure_role(connection, password, LAB_APPROVER_ROLE, POLICY_IDLE_IN_TRANSACTION_MS)
-    await reset_role(connection, LAB_APPROVER_ROLE)
-    # Inheritance is how it connects and decides; without SET it cannot `SET ROLE` to the group and
-    # write records as the shared role.
-    await connection.execute(
-        sql.SQL("GRANT {} TO {} WITH INHERIT TRUE, SET FALSE").format(
-            sql.Identifier(APPROVER_ROLE), name
-        )
-    )
+    # The same hardening as a person's login: an expiring password, a connection limit, the one
+    # membership of the approver role (inheriting, without `SET`, so it cannot write records as the
+    # shared role) and no grant of its own.
+    await harden_login(connection, LAB_APPROVER_ROLE)
     # The login is the identity: a decision it writes is recorded under this role, so the approver
     # record that names it is made here and `approver-add` refuses the id.
     await connection.execute(
@@ -508,7 +511,32 @@ async def _set_up_lab_role(connection: AsyncConnection, password: str | None) ->
         ).format(approvers),
         (LAB_APPROVER_ID, "Lab approver (automatic)", ["approver"], LAB_APPROVER_ROLE),
     )
+    await bind_login(connection, LAB_APPROVER_ROLE, approver_principal(LAB_APPROVER_ID))
     logger.warning("the lab approver role exists: it decides requests as the approver role")
+
+
+async def _set_up_purger(connection: AsyncConnection, password: str | None) -> None:
+    """The payload purge's login. agent-core lets only the approver side purge a stored payload, so
+    it is a member of the approver role (inheriting, without `SET`), made one connection at a time.
+
+    It is not an approver: it is mapped to a principal `policy.approvers` does not list, so the
+    gateway will not use a decision it writes and `audit-verify` refuses one. Like the lab role it
+    is kept, not dropped and made again (a mapping is for good, by the role's OID), and without the
+    password it cannot log in."""
+    name = sql.Identifier(PURGER_ROLE)
+    if await _role_exists(connection, PURGER_ROLE):
+        await connection.execute(sql.SQL("ALTER ROLE {} NOLOGIN").format(name))
+        await connection.execute(
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = %s",
+            (PURGER_ROLE,),
+        )
+        await connection.execute(sql.SQL("DROP OWNED BY {}").format(name))
+        await reset_role(connection, PURGER_ROLE)
+    if not password:
+        return
+    await ensure_role(connection, password, PURGER_ROLE, POLICY_IDLE_IN_TRANSACTION_MS)
+    await harden_login(connection, PURGER_ROLE, connection_limit=1)
+    await bind_login(connection, PURGER_ROLE, PURGER_PRINCIPAL)
 
 
 async def _role_exists(connection: AsyncConnection, role: str) -> bool:
@@ -519,7 +547,13 @@ async def _role_exists(connection: AsyncConnection, role: str) -> bool:
 async def _memberships(connection: AsyncConnection) -> list[tuple[str, str, str]]:
     cursor = await connection.execute(
         _MEMBERSHIPS,
-        (list(ROLES), LAB_APPROVER_ROLE, APPROVER_ROLE, await managed_logins(connection)),
+        (
+            list(ROLES),
+            LAB_APPROVER_ROLE,
+            PURGER_ROLE,
+            APPROVER_ROLE,
+            await managed_logins(connection),
+        ),
     )
     return [(str(a), str(b), str(c)) for a, b, c in await cursor.fetchall()]
 

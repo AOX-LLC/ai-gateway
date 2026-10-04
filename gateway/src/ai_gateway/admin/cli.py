@@ -22,7 +22,13 @@ from psycopg.errors import InsufficientPrivilege, UndefinedTable
 from pydantic import SecretStr
 
 from ai_gateway.auth.tokens import IssuedToken, generate_token
-from ai_gateway.policy import APPROVER_LOGINS_VIEW, SCHEMA, audit_log_on, policy_url
+from ai_gateway.policy import (
+    APPROVER_LOGINS_VIEW,
+    SCHEMA,
+    audit_log_on,
+    new_approver_id,
+    policy_url,
+)
 from ai_gateway.policy.anchors import (
     AnchorFileError,
     append_anchor,
@@ -161,8 +167,18 @@ def _parser() -> argparse.ArgumentParser:
         help="register a person who may approve writes and make their database login"
         f" (needs {_GATEWAY_URL_ENV})",
     )
-    approver_add.add_argument("id", help="lowercase letters, digits, . _ -")
-    approver_add.add_argument("--name", required=True, help="who they are, for the log")
+    approver_add.add_argument(
+        "id",
+        nargs="?",
+        default=None,
+        help="an existing approver's opaque id (appr_ and ten characters), to change their name or"
+        " roles; leave it out to make a new approver, whose id is generated",
+    )
+    approver_add.add_argument(
+        "--name",
+        required=True,
+        help="who they are: kept in the approvers table only, never in a login or an id",
+    )
     approver_add.add_argument("--role", action="append", default=None, help="default: approver")
     approver_add.set_defaults(handler=_approver_add)
     approver_rotate = commands.add_parser(
@@ -304,6 +320,7 @@ async def _policy_setup(database_url: str, _: argparse.Namespace) -> None:
             gateway=os.environ["POLICY_GATEWAY_DB_PASSWORD"],
             auditor=os.environ["POLICY_AUDITOR_DB_PASSWORD"],
             lab_approver=os.environ.get("POLICY_LAB_APPROVER_DB_PASSWORD") or None,
+            payload_purger=os.environ.get("POLICY_PURGER_DB_PASSWORD") or None,
         ),
     )
     print("policy schema is set up")
@@ -326,6 +343,7 @@ def _print_login(action: str, provisioned: Provisioned) -> None:
         return
     # The one time the password is shown: stdout only, never a log, and nothing keeps it.
     print(f"approver {provisioned.approver_id} {action}")
+    print(f"id        {provisioned.approver_id}")
     print(f"login     {provisioned.login}")
     print(f"password  {provisioned.password}")
     print("The password is shown once and kept nowhere. Give it to the person directly.")
@@ -333,22 +351,33 @@ def _print_login(action: str, provisioned: Provisioned) -> None:
 
 async def _approver_add(database_url: str, args: argparse.Namespace) -> None:
     audit = _gateway_audit_log()
-    async with await AsyncConnection.connect(database_url, autocommit=True) as db:
-        provisioned = await add_approver(db, audit, args.id, args.name, args.role or ["approver"])
+    try:
+        async with await AsyncConnection.connect(database_url, autocommit=True) as db:
+            provisioned = await add_approver(
+                db, audit, args.id or new_approver_id(), args.name, args.role or ["approver"]
+            )
+    finally:
+        await audit.database.aclose()
     _print_login("registered", provisioned)
 
 
 async def _approver_rotate(database_url: str, args: argparse.Namespace) -> None:
     audit = _gateway_audit_log()
-    async with await AsyncConnection.connect(database_url, autocommit=True) as db:
-        provisioned = await rotate_approver(db, audit, args.id)
+    try:
+        async with await AsyncConnection.connect(database_url, autocommit=True) as db:
+            provisioned = await rotate_approver(db, audit, args.id)
+    finally:
+        await audit.database.aclose()
     _print_login("has a new password", provisioned)
 
 
 async def _approver_remove(database_url: str, args: argparse.Namespace) -> None:
     audit = _gateway_audit_log()
-    async with await AsyncConnection.connect(database_url, autocommit=True) as db:
-        await remove_approver(db, audit, args.id)
+    try:
+        async with await AsyncConnection.connect(database_url, autocommit=True) as db:
+            await remove_approver(db, audit, args.id)
+    finally:
+        await audit.database.aclose()
     print(f"approver {args.id} removed: no login, no sessions; past decisions still name them")
 
 
@@ -373,9 +402,12 @@ async def _audit_anchor(database_url: str, args: argparse.Namespace) -> None:
         if args.file.exists() or args.file.is_symlink():
             raise
         existing = []  # no file yet: the first anchor
-    verified = await verify_with_anchors(
-        log, existing, approver_logins=await _approver_logins(database_url)
-    )
+    try:
+        verified = await verify_with_anchors(
+            log, existing, approver_logins=await _approver_logins(database_url)
+        )
+    finally:
+        await log.database.aclose()
     anchor = append_anchor(args.file, verified)  # the head that was verified, not a fresh one
     print(f"anchored record {anchor.seq} ({anchor.record_hash[:12]}...) in {args.file}")
 
@@ -398,12 +430,15 @@ async def _audit_verify(database_url: str, args: argparse.Namespace) -> None:
     log = _audit_log(database_url)
     anchors = read_anchors(args.anchors) if args.anchors else []
     lab_decisions: list[int] = []
-    head = await verify_with_anchors(
-        log,
-        anchors,
-        lab_decisions=lab_decisions,
-        approver_logins=await _approver_logins(database_url),
-    )
+    try:
+        head = await verify_with_anchors(
+            log,
+            anchors,
+            lab_decisions=lab_decisions,
+            approver_logins=await _approver_logins(database_url),
+        )
+    finally:
+        await log.database.aclose()
     print(f"ok: {head.seq} records chain correctly and match {len(anchors)} anchors")
     if lab_decisions:
         print(

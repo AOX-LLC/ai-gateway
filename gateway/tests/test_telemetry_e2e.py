@@ -64,7 +64,7 @@ async def _stored(url: str, table: str, at_least: int) -> None:
     """Wait for the background writer to have stored at least `at_least` rows of a table."""
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline:
-        count = await _scalar(url, f"SELECT count(*) FROM telemetry.{table}")  # noqa: S608
+        count = await _scalar(url, f"SELECT count(*) FROM telemetry.{table}")
         if isinstance(count, int) and count >= at_least:
             return
         await anyio.sleep(0.05)
@@ -128,7 +128,7 @@ async def test_requests_layers_spans_and_auth_failures_are_stored_without_a_trac
 
     # Nothing of the argument, or of the result that echoes it, is in any column of any table.
     for table in TABLES:
-        dump = await _rows(test_database_url, f"SELECT t::text FROM telemetry.{table} t")  # noqa: S608
+        dump = await _rows(test_database_url, f"SELECT t::text FROM telemetry.{table} t")
         assert MARKER not in repr(dump), table
         assert "4111" not in repr(dump), table
 

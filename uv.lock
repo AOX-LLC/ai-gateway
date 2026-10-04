@@ -40,7 +40,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aox-agent-core", extras = ["postgres"], git = "https://github.com/AOX-LLC/agent-core?tag=v0.1.0a3" },
+    { name = "aox-agent-core", extras = ["postgres"], git = "https://github.com/AOX-LLC/agent-core?tag=v0.1.0" },
     { name = "fastapi", specifier = ">=0.142,<1" },
     { name = "httpx2", specifier = ">=2.13,<3" },
     { name = "mcp", specifier = "==2.2.0" },
@@ -152,8 +152,8 @@ wheels = [
 
 [[package]]
 name = "aox-agent-core"
-version = "0.1.0a3"
-source = { git = "https://github.com/AOX-LLC/agent-core?tag=v0.1.0a3#e5368dc6bc25ad927fb341ccd616454859406d84" }
+version = "0.1.0"
+source = { git = "https://github.com/AOX-LLC/agent-core?tag=v0.1.0#518072bebe51b90bd375a9fe587b0a5a3d7bfb30" }
 dependencies = [
     { name = "anthropic" },
     { name = "opentelemetry-api" },
@@ -162,7 +162,7 @@ dependencies = [
 
 [package.optional-dependencies]
 postgres = [
-    { name = "psycopg", extra = ["binary"] },
+    { name = "psycopg", extra = ["binary", "pool"] },
 ]
 
 [[package]]
@@ -1810,6 +1810,9 @@ wheels = [
 [package.optional-dependencies]
 binary = [
     { name = "psycopg-binary", marker = "implementation_name != 'pypy'" },
+]
+pool = [
+    { name = "psycopg-pool" },
 ]
 
 [[package]]

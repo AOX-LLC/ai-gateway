@@ -5,8 +5,8 @@ set -euo pipefail
 . "$(dirname "$0")/mask.sh"
 # The demo approver is registered below for this run only, under an id of its own (an id is never
 # reused), and removed, login and all, when the run ends.
-APPROVER_ID="harborline-demo-$(date -u +%Y%m%d%H%M%S)"
-trap 'rm -f demo.json; docker compose run --rm -T admin approver-remove "$APPROVER_ID" >/dev/null 2>&1 || true' EXIT
+APPROVER_ID=""
+trap 'rm -f demo.json; [ -z "$APPROVER_ID" ] || docker compose run --rm -T admin approver-remove "$APPROVER_ID" >/dev/null 2>&1 || true' EXIT
 docker compose run --rm -T admin seed-demo > demo.json
 SUPPORT=$(python3 -c 'import json; print(json.load(open("demo.json"))["harborline-support-bot"])')
 mask "$SUPPORT"
@@ -18,8 +18,11 @@ mask "$DECOY"
 # approver approves for it (scripts/auto_approver.py, test tooling that needs the two switches:
 # --approve-as below, and LAB_AUTO_APPROVE=yes in the environment, which CI sets on this step and
 # nothing else does; run it by hand with LAB_AUTO_APPROVE=yes in front).
-ADDED=$(docker compose run --rm -T admin approver-add "$APPROVER_ID" \
+# The id is generated and opaque (the login and the mapping are written for good, so no name goes in
+# them); the demo approver's name lives in the approvers table only.
+ADDED=$(docker compose run --rm -T admin approver-add \
   --name "Harborline demo approver (fictional, demo data)")
+APPROVER_ID=$(sed -n 's/^id  *//p' <<<"$ADDED")
 LOGIN=$(sed -n 's/^login  *//p' <<<"$ADDED")
 PASSWORD=$(sed -n 's/^password  *//p' <<<"$ADDED")
 mask "$PASSWORD"

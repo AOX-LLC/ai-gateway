@@ -16,13 +16,17 @@ import re
 import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from urllib.parse import quote
 
+import anyio
 from aox_agent_core.audit import AuditEvent, SQLAuditLog
+from aox_agent_core.errors import ConfigError
+from aox_agent_core.storage import bind_approver_login, unbind_approver_login
 from psycopg import AsyncConnection, sql
 from pydantic import JsonValue
 
 from ai_gateway.policy import (
-    APPROVER_ID_MAX_LENGTH,
+    APPROVER_ID_PATTERN,
     APPROVER_LOGIN_CONNECTION_LIMIT,
     APPROVER_LOGIN_VALID_DAYS,
     APPROVER_ROLE,
@@ -38,12 +42,17 @@ from mcp_common.roles import advisory_lock, ensure_role, existing_roles
 
 logger = logging.getLogger(__name__)
 
-_ID = re.compile(rf"[a-z][a-z0-9._-]{{0,{APPROVER_ID_MAX_LENGTH - 1}}}")
+_ID = re.compile(APPROVER_ID_PATTERN)
 _ROLE = re.compile(r"[a-z][a-z0-9_.-]{0,63}")
 _ACTOR = "admin"
 """Who the provisioning events say acted. The admin CLI is not authenticated beyond the owner's
 credential, so this names the tool, not a person."""
 _APPROVERS = sql.SQL("{}.{}").format(sql.Identifier(SCHEMA), sql.Identifier(APPROVERS_TABLE))
+LOGIN_MAP_TABLE = "agent_core_approver_logins"
+"""agent-core's login-to-principal table. With binding on, the database refuses a decision whose
+`resolved_by` is not the principal mapped here to the login that made it. Only the owner writes it,
+and a login or a principal is never mapped twice, even after a mapping ends."""
+_LOGIN_MAP = sql.SQL("{}.{}").format(sql.Identifier(SCHEMA), sql.Identifier(LOGIN_MAP_TABLE))
 
 
 class ApproverLoginError(Exception):
@@ -120,6 +129,15 @@ async def _add_approver(
             f"approver {approver_id} was not added ({type(error).__name__}: the audit log or the"
             " approvers table refused it); no login was kept"
         ) from error
+    # Last, and after the row: a mapping is for good, so one is made only for an approver who
+    # exists. If it fails (the login must be a member of the approver role and nothing else), the
+    # approver is recorded without it, cannot decide, and `policy-setup` maps it once it can.
+    try:
+        await bind_login(connection, login, approver_principal(approver_id))
+    except ApproverLoginError as error:
+        raise ApproverLoginError(
+            f"approver {approver_id} was added but cannot decide yet: {error}"
+        ) from error
     return Provisioned(approver_id, login, password)
 
 
@@ -133,6 +151,17 @@ async def _rotate_approver(
         raise ApproverLoginError(f"no active approver {approver_id!r}")
     if not row.db_role:
         raise ApproverLoginError(f"approver {approver_id} has no login yet: run approver-add")
+    if not await existing_roles(connection, [row.db_role]):
+        # Making the login again would give it a new OID, which its mapping (for good, and for the
+        # old role) would not cover: it could never decide. Say so rather than make a dead login.
+        cursor = await connection.execute(
+            sql.SQL("SELECT 1 FROM {} WHERE login = %s").format(_LOGIN_MAP), (row.db_role,)
+        )
+        if await cursor.fetchone() is not None:
+            raise ApproverLoginError(
+                f"the login role {row.db_role} is gone, and its mapping to the approver cannot be"
+                " made again: remove approver {approver_id} and add them under a new id"
+            )
     password = new_password()
     await _record(audit, "approver.rotated", approver_id, {"login": row.db_role})
     await _create_login(connection, row.db_role, password)
@@ -158,6 +187,9 @@ async def _remove_approver(
         (approver_id,),
     )
     if row.db_role and row.db_role != LAB_APPROVER_ROLE:
+        await unbind_login(
+            connection, row.db_role
+        )  # before the role goes: it is never mapped again
         await _drop_login(connection, row.db_role)
     try:
         await _record(audit, "approver.removed", approver_id, {"login": row.db_role or ""})
@@ -228,7 +260,9 @@ async def sync_approver_logins(connection: AsyncConnection) -> list[str]:
                 )
             continue
         if is_active:
-            await _normalise_login(connection, role)
+            await _normalise_login(
+                connection, role, connection_limit=APPROVER_LOGIN_CONNECTION_LIMIT
+            )
             active.append(role)
         else:
             await connection.execute(sql.SQL("ALTER ROLE {} NOLOGIN").format(sql.Identifier(role)))
@@ -264,12 +298,13 @@ async def _login_rows(connection: AsyncConnection) -> list[tuple[str, str, bool]
 
 
 def _check_id(approver_id: str) -> None:
+    _check_not_reserved(approver_id)
     if not _ID.fullmatch(approver_id):
         raise ApproverLoginError(
-            "an approver id is lowercase letters, digits, . _ -, starting with a letter,"
-            f" at most {APPROVER_ID_MAX_LENGTH} characters"
+            "an approver id is opaque: 'appr_' and ten lowercase letters or digits, made by"
+            " approver-add. A person's name goes in --name, never in the id: the id is written to"
+            " the audit log and to the login mapping, which cannot be erased"
         )
-    _check_not_reserved(approver_id)
 
 
 def _check_not_reserved(approver_id: str) -> None:
@@ -319,14 +354,30 @@ async def _refuse_name_clash(
 
 async def _create_login(connection: AsyncConnection, login: str, password: str) -> None:
     await ensure_role(connection, password, login, POLICY_IDLE_IN_TRANSACTION_MS)
+    await harden_login(connection, login)
+
+
+async def harden_login(
+    connection: AsyncConnection,
+    login: str,
+    *,
+    connection_limit: int = APPROVER_LOGIN_CONNECTION_LIMIT,
+) -> None:
+    """What every login in the approver role gets, a person's or a service's (the lab approver, the
+    payload purge): a password that stops working after 90 days, a connection limit, no attribute
+    that bypasses a check, the one membership and no other, and no table privilege of its own.
+    `policy-setup` runs it for each of them every time, which is also what renews the expiry of the
+    two services' logins (it runs on every `docker compose up`)."""
     expires = (datetime.now(UTC) + timedelta(days=APPROVER_LOGIN_VALID_DAYS)).isoformat()
     await connection.execute(
         sql.SQL("ALTER ROLE {} VALID UNTIL {}").format(sql.Identifier(login), sql.Literal(expires))
     )
-    await _normalise_login(connection, login)
+    await _normalise_login(connection, login, connection_limit=connection_limit)
 
 
-async def _normalise_login(connection: AsyncConnection, login: str) -> None:
+async def _normalise_login(
+    connection: AsyncConnection, login: str, *, connection_limit: int
+) -> None:
     """The login's attributes, its one membership and nothing else: no attribute that bypasses a
     check, a connection limit, membership of the approver role with inheritance, without `SET ROLE`
     and without the right to grant it on, no other role, no role that is a member of it (that
@@ -337,7 +388,7 @@ async def _normalise_login(connection: AsyncConnection, login: str) -> None:
         sql.SQL(
             "ALTER ROLE {} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS"
             " CONNECTION LIMIT {}"
-        ).format(name, sql.Literal(APPROVER_LOGIN_CONNECTION_LIMIT))
+        ).format(name, sql.Literal(connection_limit))
     )
     await connection.execute(
         sql.SQL("REVOKE ALL ON ALL TABLES IN SCHEMA {} FROM {}").format(
@@ -402,6 +453,103 @@ async def _drop_login(connection: AsyncConnection, login: str) -> None:
     await _end_sessions(connection, login)
     await connection.execute(sql.SQL("DROP OWNED BY {}").format(name))
     await connection.execute(sql.SQL("DROP ROLE {}").format(name))
+
+
+def approver_principal(approver_id: str) -> str:
+    """The principal an approver's decisions are recorded under (`resolved_by`)."""
+    return f"human:{approver_id}"
+
+
+_URL_PARTS = frozenset({"user", "password", "host", "port", "dbname"})
+
+
+def owner_url_of(connection: AsyncConnection) -> str:
+    """The URL the owner's connection was made with, for agent-core's own mapping functions, which
+    open a connection of their own. It is never logged or printed.
+
+    Every other setting the connection uses (`sslmode`, `sslrootcert`, `channel_binding`, ...) is
+    carried in the query, so the second connection is no less protected than the first: a URL that
+    kept only the host and the password would quietly drop TLS."""
+    parameters = {
+        item.keyword.decode(): item.val.decode() for item in connection.pgconn.info if item.val
+    }
+    user = quote(parameters.get("user", ""), safe="")
+    password = quote(parameters.get("password", ""), safe="")
+    host = parameters.get("host", "localhost")
+    host = f"[{host}]" if ":" in host else host
+    port = parameters.get("port", "5432")
+    query = "&".join(
+        f"{quote(key, safe='')}={quote(value, safe='')}"
+        for key, value in sorted(parameters.items())
+        if key not in _URL_PARTS
+    )
+    return (
+        f"postgresql://{user}:{password}@{host}:{port}/"
+        f"{quote(parameters.get('dbname', ''), safe='')}" + (f"?{query}" if query else "")
+    )
+
+
+async def bind_login(connection: AsyncConnection, login: str, principal: str) -> None:
+    """Map a login to the one principal it may record as `resolved_by`, unless it already is.
+
+    Run as the owner. A mapping that cannot work is an error, not something to paper over: one that
+    has ended, or one made for another role of the same name (the role was dropped and made again,
+    so its OID changed), can never be replaced, because a login or a principal is never mapped
+    twice. The approver has to be removed and added again under a new id."""
+    cursor = await connection.execute(
+        sql.SQL(
+            "SELECT m.login_oid, m.removed_at IS NOT NULL, m.principal, r.oid"
+            " FROM {} m LEFT JOIN pg_roles r ON r.rolname = m.login WHERE m.login = %s"
+        ).format(_LOGIN_MAP),
+        (login,),
+    )
+    mapped = await cursor.fetchone()
+    if mapped is not None:
+        mapped_oid, ended, mapped_principal, role_oid = mapped
+        if ended or role_oid != mapped_oid or mapped_principal != principal:
+            raise ApproverLoginError(
+                f"the login {login} was mapped to {mapped_principal} for another role or has been"
+                " unmapped, and a login is never mapped twice: remove the approver and add them"
+                " again under a new id"
+            )
+        return
+    owner_url = owner_url_of(connection)
+    try:
+        await anyio.to_thread.run_sync(
+            lambda: bind_approver_login(owner_url, login=login, principal=principal, schema=SCHEMA)
+        )
+    except ConfigError as error:
+        raise ApproverLoginError(f"could not map {login} to {principal}: {error}") from error
+
+
+async def unbind_login(connection: AsyncConnection, login: str) -> None:
+    """End a login's mapping, if it has an active one. It is never mapped again."""
+    cursor = await connection.execute(
+        sql.SQL("SELECT 1 FROM {} WHERE login = %s AND removed_at IS NULL").format(_LOGIN_MAP),
+        (login,),
+    )
+    if await cursor.fetchone() is None:
+        return
+    owner_url = owner_url_of(connection)
+    await anyio.to_thread.run_sync(
+        lambda: unbind_approver_login(owner_url, login=login, schema=SCHEMA)
+    )
+
+
+async def bind_active_approvers(connection: AsyncConnection) -> list[str]:
+    """Map every active approver's login that has no mapping yet, and say which could not be
+    mapped. Run by `policy-setup` before binding is switched on, so an upgraded volume's approvers
+    can keep deciding."""
+    failed: list[str] = []
+    for approver_id, login, active in await _login_rows(connection):
+        if not active or not await existing_roles(connection, [login]):
+            continue
+        try:
+            await bind_login(connection, login, approver_principal(approver_id))
+        except ApproverLoginError as error:
+            logger.error("approver %s cannot decide: %s", approver_id, error)
+            failed.append(approver_id)
+    return failed
 
 
 async def _record(

@@ -74,7 +74,7 @@ class FakeSession:
         self.log = log
         self.pending: list[AuditEvent] = []
 
-    def execute(self, sql: str, params: tuple[Any, ...]) -> list[tuple[Any, ...]]:
+    async def execute(self, sql: str, params: tuple[Any, ...]) -> list[tuple[Any, ...]]:
         """The recorder's one read: the payloads of the newest records after a sequence number."""
         (after_seq,) = params
         return [
@@ -91,14 +91,7 @@ class FakeDatabase:
 
     async def run(self, work: Any, *, write: bool = False) -> Any:
         await self.log._maybe_fail()
-        session = FakeSession(self.log)
-        result = work(session)
-        if write:
-            self.log.committed.extend(session.pending)
-            self.log.batches.append(list(session.pending))
-            if self.log.mode == "fail_after_commit":
-                raise ConnectionError("the connection was lost after COMMIT")
-        return result
+        return await work(FakeSession(self.log))
 
 
 class FakeLog:
@@ -124,9 +117,15 @@ class FakeLog:
         await self._maybe_fail()
         self.committed.append(event)
 
-    def append_in(self, session: FakeSession, event: AuditEvent) -> Any:
-        session.pending.append(event)
-        return SimpleNamespace(seq=len(self.committed) + len(session.pending))
+    async def append_many(self, events: list[AuditEvent]) -> list[Any]:
+        """One transaction: all of the events, or none."""
+        await self._maybe_fail()
+        first = len(self.committed) + 1
+        self.committed.extend(events)
+        self.batches.append(list(events))
+        if self.mode == "fail_after_commit":
+            raise ConnectionError("the connection was lost after COMMIT")
+        return [SimpleNamespace(seq=first + index) for index in range(len(events))]
 
     async def _maybe_fail(self) -> None:
         if self.mode == "fail":
@@ -326,21 +325,21 @@ async def test_drops_counted_while_a_batch_is_in_flight_are_reported_by_a_later_
     recorder = _recorder(log, spool_size=3, batch_size=100)
     for _ in range(5):
         recorder.record(_decision(request_id=str(uuid4())))  # 2 dropped
-    real_run = log.database.run
+    real_append_many = log.append_many
 
     arrived = False
 
-    async def run_and_drop_meanwhile(work: Any, *, write: bool = False) -> Any:
+    async def append_and_drop_meanwhile(events: list[AuditEvent]) -> Any:
         nonlocal arrived
         if not arrived:
             arrived = True
             for _ in range(3):  # new calls arrive while the first batch is being written
                 recorder.record(_decision(request_id=str(uuid4())))
-        return await real_run(work, write=write)
+        return await real_append_many(events)
 
-    log.database.run = run_and_drop_meanwhile  # type: ignore[method-assign]
+    log.append_many = append_and_drop_meanwhile  # type: ignore[method-assign]
     await recorder.close()
-    log.database.run = real_run  # type: ignore[method-assign]
+    log.append_many = real_append_many  # type: ignore[method-assign]
     await recorder.close()
 
     gaps = [e for e in log.committed if e.action == "audit.gap"]

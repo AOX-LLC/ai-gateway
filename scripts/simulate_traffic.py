@@ -23,8 +23,11 @@ printed.
 
 --verify expects the rate limits and the login throttle to be empty when the run starts, because
 what happens to a call depends on the calls before it: start the gateway afresh before each run
-(scripts/run_harborline_check.sh does). It also expects the run to be quick: the lockout of the
-decoy's token lasts a minute, so --verify and --duration cannot be used together.
+(scripts/run_harborline_check.sh does). A --duration is fine with it: the login throttle's window
+and lockout are a minute, so the decoy's wrong secrets are sent back to back (the 401s, then the
+429s) wherever they fall in the plan, and what the gateway answers does not depend on the pace.
+The one limit is the crm__list_deals bucket, which refills after an hour: keep a verified run
+shorter than that.
 
 --verify reads the dashboard's views as the telemetry_reader role (TELEMETRY_READER_DATABASE_URL)
 and compares what the gateway stored with what was sent, exactly. With POLICY_AUDITOR_DATABASE_URL
@@ -152,6 +155,30 @@ def build_plan(seed: int, calls: int, *, writes: bool = True) -> list[Step]:
             case = rng.choices(AUTH_CASES, weights=AUTH_WEIGHTS)[0]
             plan.append(Step("auth_failure", None, auth_case=case))
     return apply_layers(plan)
+
+
+def burst_wrong_secrets(plan: Sequence[Step]) -> list[Step]:
+    """The order the steps are sent in: every wrong secret together, where the first one was.
+
+    The login throttle counts failures for one token id inside a 60 s window and then refuses the
+    id for 60 s. Spread over a long run, wrong secrets would never reach the limit (or the lockout
+    would end between them), so the 401s and 429s the plan marked would not be what the gateway
+    answers. Sent back to back, in the plan's own order, the first THROTTLE_PER_ID are 401s and
+    the rest 429s at any pace, which is what `apply_layers` marked. Nothing else about the plan
+    moves."""
+    wrong = [
+        step for step in plan if step.kind == "auth_failure" and step.auth_case == "wrong_secret"
+    ]
+    ordered: list[Step] = []
+    placed = False
+    for step in plan:
+        if step in wrong:
+            if not placed:
+                ordered.extend(wrong)
+                placed = True
+            continue
+        ordered.append(step)
+    return ordered
 
 
 def apply_layers(plan: Sequence[Step]) -> list[Step]:
@@ -314,11 +341,14 @@ async def _run(args: argparse.Namespace, plan: list[Step], tokens: dict[str, str
         clients = {SUPPORT: support, OPS: ops}
         for client in clients.values():
             await client.list_tools()
-        for number, step in enumerate(plan, start=1):
+        in_a_burst = False
+        for number, step in enumerate(burst_wrong_secrets(plan), start=1):
             await _send(args.url, step, clients, tokens)
             if number % 50 == 0:
                 print(f"  {number}/{len(plan)} sent")
-            if delay:
+            # The wrong secrets go back to back (see burst_wrong_secrets); the pause is the rest's.
+            in_a_burst = step.kind == "auth_failure" and step.auth_case == "wrong_secret"
+            if delay and not in_a_burst:
                 await anyio.sleep(delay * rng.uniform(0.5, 1.5))
 
 
@@ -490,11 +520,6 @@ def main(argv: Sequence[str] | None = None) -> None:
     args = _parser().parse_args(argv)
     if args.calls < 1:
         sys.exit("simulate_traffic: --calls must be at least 1")
-    if args.verify and args.duration:
-        sys.exit(
-            "simulate_traffic: --verify expects the run to be quick (the login lockout lasts a"
-            " minute); use --duration without --verify"
-        )
     if not args.no_writes and not args.approve_as:
         sys.exit("simulate_traffic: writes wait for a person; use --approve-as or --no-writes")
     plan = build_plan(args.seed, args.calls, writes=not args.no_writes)
