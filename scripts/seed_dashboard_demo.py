@@ -135,6 +135,7 @@ def config_fingerprint(layers: list[tuple[str, str]]) -> str:
         "layers": dict(layers),
         "allow_floor_override": False,
         "allow_unaudited_writes": False,
+        "validate_results": True,
     }
     return hashlib.sha256(json.dumps(source, sort_keys=True).encode()).hexdigest()
 

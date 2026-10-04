@@ -564,3 +564,20 @@ async def test_cancellation_is_not_swallowed_while_a_record_is_being_written() -
 
     assert scope.cancelled_caught
     assert outcomes == []
+
+
+def test_result_validation_is_a_setting_of_the_pipeline_file_and_part_of_its_fingerprint() -> None:
+    from ai_gateway.pipeline.config import PipelineConfigError, parse_pipeline_config
+    from ai_gateway.pipeline.registry import LAYER_ORDER
+
+    off = parse_pipeline_config({}, LAYER_ORDER)
+    on = parse_pipeline_config({"schema": {"validate_results": True}}, LAYER_ORDER)
+
+    assert off.validate_results is True, "on unless the file says otherwise"
+    assert on.sha256 == off.sha256
+    legacy = parse_pipeline_config({"schema": {"validate_results": False}}, LAYER_ORDER)
+    assert legacy.validate_results is False
+    assert legacy.sha256 != off.sha256
+    for bad in ({"schema": {"validate_results": "yes"}}, {"schema": {"nope": 1}}, {"schema": 3}):
+        with pytest.raises(PipelineConfigError):
+            parse_pipeline_config(bad, LAYER_ORDER)

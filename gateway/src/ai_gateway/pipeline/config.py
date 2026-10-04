@@ -7,6 +7,9 @@
     allow_floor_override = false
     allow_unaudited_writes = false   # a write is refused when its audit record cannot be written
 
+    [schema]
+    validate_results = true          # a result's structured content fits the pinned output schema
+
 Every mistake stops the gateway from starting rather than quietly weakening it: an
 unknown layer name, an unknown mode, an unknown key, or a floor layer weakened without
 the override flag. A layer the file does not mention runs in enforce mode.
@@ -26,7 +29,8 @@ from ai_gateway.pipeline.types import BaseLayer, LayerMode
 
 logger = logging.getLogger(__name__)
 
-_TOP_LEVEL_KEYS = frozenset({"layers", "safety"})
+_TOP_LEVEL_KEYS = frozenset({"layers", "safety", "schema"})
+_SCHEMA_KEYS = frozenset({"validate_results"})
 _SAFETY_KEYS = frozenset({"allow_floor_override", "allow_unaudited_writes"})
 
 
@@ -43,6 +47,8 @@ class PipelineConfig:
     """Fingerprint of the effective configuration, stamped on every decision record."""
     allow_unaudited_writes: bool = False
     """A write is forwarded even when its audit record cannot be written."""
+    validate_results: bool = True
+    """The schema layer checks a result's structured content against the pinned output schema."""
 
     @property
     def enabled_layers(self) -> list[str]:
@@ -74,6 +80,12 @@ def parse_pipeline_config(
     if allow_unaudited_writes:
         logger.warning("writes are allowed without an audit record (allow_unaudited_writes)")
 
+    schema = _table(raw, "schema")
+    _reject_unknown_keys(schema.keys(), _SCHEMA_KEYS, "[schema]")
+    validate_results = schema.get("validate_results", True)
+    if not isinstance(validate_results, bool):
+        raise PipelineConfigError("[schema] validate_results must be true or false")
+
     configured_modes = _table(raw, "layers")
     known_layers = {layer.name: layer for layer in layer_order}
     _reject_unknown_keys(configured_modes.keys(), known_layers.keys(), "[layers]")
@@ -88,6 +100,7 @@ def parse_pipeline_config(
         "layers": modes,
         "allow_floor_override": allow_floor_override,
         "allow_unaudited_writes": allow_unaudited_writes,
+        "validate_results": validate_results,
     }
     fingerprint = hashlib.sha256(
         json.dumps(fingerprint_source, sort_keys=True).encode()
@@ -97,6 +110,7 @@ def parse_pipeline_config(
         allow_floor_override=allow_floor_override,
         sha256=fingerprint,
         allow_unaudited_writes=allow_unaudited_writes,
+        validate_results=validate_results,
     )
 
 
