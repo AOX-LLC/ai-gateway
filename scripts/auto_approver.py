@@ -62,9 +62,15 @@ async def auto_approving(approver_id: str | None) -> AsyncGenerator[AutoApproval
                     result.refused += 1
             await anyio.sleep(POLL_S)
 
-    async with anyio.create_task_group() as tasks:
-        tasks.start_soon(loop)
-        try:
-            yield result
-        finally:
-            tasks.cancel_scope.cancel()
+    try:
+        async with anyio.create_task_group() as tasks:
+            tasks.start_soon(loop)
+            try:
+                yield result
+            finally:
+                tasks.cancel_scope.cancel()
+    finally:
+        # The queue's connection pool is closed, not left to reconnect in the background: a pool
+        # left open once held the process (and the scenario script) up after the work was done.
+        with anyio.CancelScope(shield=True):
+            await approvals.database.aclose()
