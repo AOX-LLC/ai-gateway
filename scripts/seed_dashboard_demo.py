@@ -734,12 +734,16 @@ async def seed_approvals(
     from pydantic import SecretStr
 
     from ai_gateway.approver.cli import Approvals
+    from ai_gateway.hashing import configure_hash_key
     from ai_gateway.pipeline.types import CallContext, ClientIdentity, ToolCall
     from ai_gateway.policy import approval_queue_on, policy_url
     from ai_gateway.policy.approvals import PostgresApprovalGate
     from ai_gateway.policy.database import BoundedPostgresDatabase
     from ai_gateway.policy.roles import load_roles_by_action
 
+    # The calls below are built here with the gateway's code, which hashes their arguments under the
+    # gateway's key: the same one, from the same .env.
+    configure_hash_key(env["GATEWAY_ARGUMENT_HASH_KEY"].encode())
     roles = load_roles_by_action(Path(args.roles_file))
     app_url = database_url(env, "gateway_app", "GATEWAY_APP_DB_PASSWORD", args.host, args.port)
     with psycopg.connect(app_url) as connection:
