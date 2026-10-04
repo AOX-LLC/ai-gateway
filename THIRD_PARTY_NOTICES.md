@@ -10,15 +10,24 @@ The dashboard self-hosts these three families (nothing is fetched from a font se
 
 | Family | Files | Copyright | Licence text |
 | --- | --- | --- | --- |
-| IBM Plex Sans | `dashboard/src/fonts/ibm-plex-sans/*.woff2` (400, 400 italic, 500, 600) | Copyright © 2017 IBM Corp. | `dashboard/src/fonts/ibm-plex-sans/OFL.txt` |
-| IBM Plex Mono | `dashboard/src/fonts/ibm-plex-mono/*.woff2` (400, 500) | Copyright © 2017 IBM Corp. | `dashboard/src/fonts/ibm-plex-mono/OFL.txt` |
+| IBM Plex Sans | `dashboard/src/fonts/ibm-plex-sans/*.woff2` (Regular, Italic, Medium, SemiBold; Latin 1 subset) | Copyright © 2017 IBM Corp. | `dashboard/src/fonts/ibm-plex-sans/OFL.txt` |
+| IBM Plex Mono | `dashboard/src/fonts/ibm-plex-mono/*.woff2` (Regular, Medium; Latin 1 subset) | Copyright © 2017 IBM Corp. | `dashboard/src/fonts/ibm-plex-mono/OFL.txt` |
 | Space Grotesk | `dashboard/src/fonts/space-grotesk/*.woff2` (500, 600) | Copyright 2020 The Space Grotesk Project Authors (https://github.com/floriankarsten/space-grotesk) | `dashboard/src/fonts/space-grotesk/OFL.txt` |
 
 The Plex texts are IBM's own `LICENSE.txt` (https://github.com/IBM/plex) and the Space Grotesk text is the project's `OFL.txt`, fetched on 2026-10-03. The dashboard image carries the three texts, and the Tabler Icons MIT text, under `/app/licenses/`, so they travel with the font files.
 
-**Provenance.** The eight `.woff2` files came to this repository through the AOX Portfolio UI design system. Each is **byte-identical** (SHA-256 compared on 2026-10-03) to the file of the same name in the npm packages `@fontsource/ibm-plex-sans`, `@fontsource/ibm-plex-mono` and `@fontsource/space-grotesk`, version 5.3.0 (`latin` subset, WOFF2). They are therefore the upstream fonts as converted and subset to Latin by Fontsource; AOX has not changed them further.
+**Provenance.** The six IBM Plex `.woff2` files are IBM's own released files, unmodified, with IBM's own file names (`IBMPlexSans-{Regular,Italic,Medium,SemiBold}-Latin1.woff2` and `IBMPlexMono-{Regular,Medium}-Latin1.woff2`). They come from the `fonts/split/woff2/` folder of IBM's npm packages `@ibm/plex-sans` 1.1.0 and `@ibm/plex-mono` 2.5.0 (https://github.com/ibm/plex, licence `OFL-1.1`), and IBM's `LICENSE.txt` from each package sits beside them as `OFL.txt`. IBM publishes the Latin 1 subset itself, so nothing was converted or subset by AOX or by a third party, and the Reserved Font Name "Plex" is not in question. SHA-256 of each file, as shipped:
 
-**Reserved Font Name, an open question.** IBM's `LICENSE.txt` begins `Copyright © 2017 IBM Corp. with Reserved Font Name "Plex"`; the licence copy inside the Fontsource packages omits that clause. Under OFL 1.1 a Modified Version may not use a Reserved Font Name, and subsetting can count as modification. These files keep the name "IBM Plex" and are used unmodified from what Fontsource publishes, but whether a Latin subset is permitted under the name has not been settled with IBM or a lawyer. If it matters for a given use (for example redistributing the fonts rather than serving them), check it first, or replace the Plex files with IBM's own releases. Space Grotesk declares no Reserved Font Name. This is not legal advice.
+| File | SHA-256 |
+| --- | --- |
+| `IBMPlexSans-Regular-Latin1.woff2` | `b5ad7bd39f996144915f0ad9849a90183b27d8c28ad97ed98af5b1bebc51f6b1` |
+| `IBMPlexSans-Italic-Latin1.woff2` | `0a06b98143f3453b81f3c396241a01c6c4cff84c1a77bf0c75b18bd603018506` |
+| `IBMPlexSans-Medium-Latin1.woff2` | `b5610af04d0d4b5a14a621d96d974b993e945a065db1a8861918f69ef9321934` |
+| `IBMPlexSans-SemiBold-Latin1.woff2` | `fff0ab3a88b0b4aa0b693e4f0201359a15183b08e3fa5696d1918d8f0ade8ad5` |
+| `IBMPlexMono-Regular-Latin1.woff2` | `e8993d946649b9d01abb1ed06d574b19d8ea3e66b5c3948602db335c44c18e56` |
+| `IBMPlexMono-Medium-Latin1.woff2` | `41201b658a328b9d00368215c2f1102770f80b15952ab82631e4006255e6365d` |
+
+The Latin 1 subset covers every non-ASCII character the dashboard's source uses (the middle dot, the em dash and the ellipsis); a test checks the file list. The Space Grotesk files are the Fontsource 5.3.0 `latin` subset (byte-identical to `@fontsource/space-grotesk`); Space Grotesk declares no Reserved Font Name. This is not legal advice.
 
 ## Icons: Tabler Icons (MIT)
 
