@@ -57,6 +57,10 @@ from mcp.shared.exceptions import MCPError
 from auto_approver import auto_approving
 
 DEFAULT_SEED = 20261002
+DEFAULT_READ_TIMEOUT_S = 60.0
+"""How long a client waits for the gateway to answer one request. An approved write waits for the
+approver (1 to 2 s at rest, more on a loaded machine); the HTTP client's own 5 s default failed a
+run on one slow write, so this is longer and `--read-timeout` sets it."""
 SUPPORT, OPS = "harborline-support-bot", "harborline-ops-bot"
 DECOY = "harborline-decoy-bot"
 """A client with no scopes whose token the wrong-secret attempts use: the failed-login throttle
@@ -335,8 +339,8 @@ async def _run(args: argparse.Namespace, plan: list[Step], tokens: dict[str, str
     rng = random.Random(args.seed + 1)  # noqa: S311 - the pacing, apart from the plan
     delay = args.duration / len(plan) if args.duration and plan else 0.0
     async with (
-        _session(args.url, tokens[SUPPORT]) as support,
-        _session(args.url, tokens[OPS]) as ops,
+        _session(args.url, tokens[SUPPORT], args.read_timeout) as support,
+        _session(args.url, tokens[OPS], args.read_timeout) as ops,
     ):
         clients = {SUPPORT: support, OPS: ops}
         for client in clients.values():
@@ -358,8 +362,11 @@ async def _run_approved(args: argparse.Namespace, plan: list[Step], tokens: dict
 
 
 class _Session:
-    def __init__(self, url: str, token: str) -> None:
-        self._http = httpx2.AsyncClient(headers={"Authorization": f"Bearer {token}"})
+    def __init__(self, url: str, token: str, read_timeout: float) -> None:
+        self._http = httpx2.AsyncClient(
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=httpx2.Timeout(5.0, read=read_timeout),
+        )
         self._client = Client(streamable_http_client(url, http_client=self._http), mode="legacy")
 
     async def __aenter__(self) -> Client:
@@ -371,8 +378,8 @@ class _Session:
         await self._http.__aexit__(*exc)  # type: ignore[arg-type]
 
 
-def _session(url: str, token: str) -> _Session:
-    return _Session(url, token)
+def _session(url: str, token: str, read_timeout: float = DEFAULT_READ_TIMEOUT_S) -> _Session:
+    return _Session(url, token, read_timeout)
 
 
 async def _send(url: str, step: Step, clients: dict[str, Client], tokens: dict[str, str]) -> None:
@@ -512,6 +519,13 @@ def _parser() -> argparse.ArgumentParser:
         help="approve the writes as this registered approver (test tooling; needs"
         " LAB_AUTO_APPROVE=yes and POLICY_APPROVER_DATABASE_URL). Without it, run with --no-writes",
     )
+    parser.add_argument(
+        "--read-timeout",
+        type=float,
+        default=DEFAULT_READ_TIMEOUT_S,
+        metavar="SECONDS",
+        help="how long to wait for the gateway to answer a request (default %(default)s)",
+    )
     parser.add_argument("--verify", action="store_true", help="check the stored telemetry")
     return parser
 
@@ -522,6 +536,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         sys.exit("simulate_traffic: --calls must be at least 1")
     if not args.no_writes and not args.approve_as:
         sys.exit("simulate_traffic: writes wait for a person; use --approve-as or --no-writes")
+    if args.read_timeout <= 0:
+        sys.exit("simulate_traffic: --read-timeout must be positive")
     plan = build_plan(args.seed, args.calls, writes=not args.no_writes)
     tokens = _tokens(args)
     mix = Counter(step.kind for step in plan)
