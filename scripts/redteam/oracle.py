@@ -67,6 +67,14 @@ def clean_up(owner_url: str, since: datetime, planted_id: str, marker: str) -> i
     return len(ids)
 
 
+def db_now(owner_url: str) -> datetime:
+    """The database's clock, the start of a run that plants nothing."""
+    with psycopg.connect(owner_url) as connection:
+        row = connection.execute("SELECT now()").fetchone()
+    assert row is not None
+    return row[0]  # type: ignore[no-any-return]
+
+
 def plant_ticket(owner_url: str, account_id: str, subject: str, text: str) -> tuple[str, datetime]:
     """Insert the planted ticket as a customer's message would arrive. Returns its id and the
     database's clock just before it (the start of the run)."""

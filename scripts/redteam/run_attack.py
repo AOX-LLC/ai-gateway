@@ -35,7 +35,7 @@ import psycopg
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from redteam.attack_format import Attack, load_attack
-from redteam.oracle import Landed, clean_up, plant_ticket, read_landed
+from redteam.oracle import Landed, clean_up, db_now, plant_ticket, read_landed
 from redteam.scripted_client import CallRecord, play
 
 PORT_RANGE = range(4400, 4500)
@@ -129,16 +129,20 @@ def judge(
                 )
     writes = [(s, i) for s, i in calls if s.tool == "tickets__create_ticket"]
     if mode == "enforce":
-        if landed.subjects or landed.exported:
+        # What lands is what the file lets through: its allowed writes, and never an export.
+        allowed = sum(step.expected_enforce(i).outcome == "allowed" for step, i in writes)
+        if len(landed.subjects) != allowed or landed.exported:
             failures.append(
-                f"the oracle found {len(landed.subjects)} tickets,"
-                f" {landed.customer_values} customer values and {landed.canaries} canaries"
-                " landed; nothing should"
+                f"the oracle found {len(landed.subjects)} attack tickets,"
+                f" {landed.customer_values} customer values and {landed.canaries} canaries landed;"
+                f" expected {allowed} tickets and no export"
             )
     else:
-        if not landed.exported:
+        if landed.exported != attack.hostile:
             failures.append(
                 "the oracle saw no export in a monitor run: it cannot be trusted to see one"
+                if attack.hostile
+                else "the oracle saw an export in an honest run"
             )
         if len(landed.subjects) != len(writes):
             failures.append(
@@ -155,8 +159,10 @@ async def _run(args: argparse.Namespace) -> int:
         sys.exit("run_attack: set GATEWAY_TOKEN and TELEMETRY_READER_DATABASE_URL")
     owner = _owner_url()
     _check_ports(owner, reader, args.url)
-    planted, since = plant_ticket(
-        owner, attack.plant.account_id, attack.plant.subject, attack.plant.text
+    planted, since = (
+        plant_ticket(owner, attack.plant.account_id, attack.plant.subject, attack.plant.text)
+        if attack.plant
+        else ("", db_now(owner))
     )
     try:
         if args.approve_as:

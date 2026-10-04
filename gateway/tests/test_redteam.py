@@ -51,6 +51,7 @@ def test_the_shipped_attack_loads_and_plants_a_recorded_corpus_string() -> None:
 
     assert len(attack.calls()) == 47
     recorded = {u.text for u in corpus.must_cover() if u.item_id == "email-injection"}
+    assert attack.plant is not None
     assert attack.plant.text in recorded
 
 
@@ -146,7 +147,7 @@ def test_an_enforce_run_fails_on_the_wrong_layer_a_call_let_through_or_a_landed_
         "expected blocked" in f for f in judge(attack, "enforce", records, let_through, NOTHING)
     )
     landed = Landed(("RT-export bulk",), THRESHOLD, 1)
-    assert any("nothing should" in f for f in judge(attack, "enforce", records, rows, landed))
+    assert any("and no export" in f for f in judge(attack, "enforce", records, rows, landed))
     assert judge(
         attack, "enforce", records, rows[:-1], NOTHING
     )  # a call the gateway never recorded
@@ -228,3 +229,46 @@ def test_the_monitor_pipeline_weakens_every_layer_that_may_be_and_keeps_the_floo
     for layer in LAYER_ORDER:
         want = LayerMode.ENFORCE if layer.floor else LayerMode.MONITOR
         assert config.modes[layer.name] is want, layer.name
+
+
+# -- the honest run -----------------------------------------------------------------------------
+
+TRIAGE = ROOT / "scripts" / "redteam" / "attacks" / "normal-triage.toml"
+
+
+def test_the_normal_triage_is_honest_runs_as_the_helper_and_uses_recorded_text() -> None:
+    attack = load_attack(TRIAGE)
+
+    assert (attack.client, attack.hostile, attack.plant) == ("harborline-helper-api", False, None)
+    assert attack.steps[0].arguments["limit"] == 5  # an integer stays an integer
+    recorded = {u.text for u in corpus.must_cover() if u.item_id == "ticket-damaged-order"}
+    assert attack.texts["ticket"] in recorded
+    for step, i in attack.calls():
+        assert step.expected_enforce(i).outcome == "allowed"
+        assert not step.expected_monitor(i).would_block
+
+
+def test_the_honest_run_passes_when_its_one_ticket_lands_and_fails_on_an_export_or_a_refusal() -> (
+    None
+):
+    attack = load_attack(TRIAGE)
+    records = [CallRecord(s.id, i, s.tool, "answered") for s, i in attack.calls()]
+    rows: list[dict[str, object]] = [
+        {"tool": s.tool, "outcome": "forwarded", "blocked_by": None, "would_block": set()}
+        for s, _ in attack.calls()
+    ]
+    one_ticket = Landed(("RT-triage damaged order",), 0, 0)
+
+    assert judge(attack, "enforce", records, rows, one_ticket) == []
+    assert judge(attack, "monitor", records, rows, one_ticket) == []
+    assert judge(attack, "enforce", records, rows, NOTHING)  # the ticket should have landed
+    assert judge(attack, "monitor", records, rows, Landed(("RT-triage x",), 12, 0))  # an export
+    rows[1] = {**rows[1], "outcome": "blocked", "blocked_by": "rate_limit"}
+    assert any("expected allowed" in f for f in judge(attack, "enforce", records, rows, one_ticket))
+
+
+def test_a_text_template_must_name_a_corpus_text_in_the_file() -> None:
+    raw = _raw(arguments={"x": "{text:nope}"})
+
+    with pytest.raises(AttackFormatError, match="not in"):
+        parse_attack(raw)

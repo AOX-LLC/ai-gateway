@@ -39,9 +39,13 @@ expected of the gateway in each of the two runs the acceptance test makes:
 
 Argument templates: `{i}` the iteration (with a format, `{i:05d}`), `{planted}` the planted ticket's
 id, `{marker}`, `{step}` the step's id, `{values:N}` the next N customer values (emails and phone
-numbers) that earlier results carried, in the order read, and `{canary}` the first canary-shaped
-code an earlier result carried. A template that cannot be filled stops the run: the attack never
+numbers) that earlier results carried, in the order read, `{canary}` the first canary-shaped code an
+earlier result carried, and `{text:name}` a string named in the file's `[texts]` table (a recorded
+corpus string, so replay has it). A template that cannot be filled stops the run: the attack never
 guesses.
+
+`hostile = false` marks an honest run (a normal triage): nothing in it should be stopped, and the
+oracle should find no export in either run. `[plant]` is optional.
 
 Every iteration of every step must be covered by exactly one `enforce` range and one `monitor`
 range, so no call goes unjudged. Harborline Supply Co. is fictional.
@@ -49,7 +53,7 @@ range, so no call goes unjudged. Harborline Supply Co. is fictional.
 
 import re
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -67,8 +71,8 @@ LAYERS = frozenset(
     }
 )
 TOKENS = re.compile(r"\{(\w+)(?::([^{}]*))?\}")
-KNOWN_TOKENS = frozenset({"i", "planted", "marker", "step", "values", "canary"})
-_TOP = frozenset({"id", "title", "client", "marker", "plant", "step"})
+KNOWN_TOKENS = frozenset({"i", "planted", "marker", "step", "values", "canary", "text"})
+_TOP = frozenset({"id", "title", "client", "marker", "hostile", "plant", "texts", "step"})
 _PLANT = frozenset({"account_id", "subject", "text_from"})
 _STEP = frozenset({"id", "tool", "arguments", "repeat", "enforce", "monitor"})
 _ENFORCE = frozenset({"first", "last", "outcome", "blocked_by"})
@@ -99,7 +103,7 @@ class Monitor:
 class Step:
     id: str
     tool: str
-    arguments: dict[str, str]
+    arguments: dict[str, str | int | bool]
     repeat: int
     enforce: tuple[Enforce, ...]
     monitor: tuple[Monitor, ...]
@@ -124,8 +128,10 @@ class Attack:
     title: str
     client: str
     marker: str
-    plant: Plant
+    plant: Plant | None
     steps: tuple[Step, ...]
+    hostile: bool = True
+    texts: dict[str, str] = field(default_factory=dict)
 
     def calls(self) -> list[tuple[Step, int]]:
         """Every call in order: (step, iteration)."""
@@ -142,12 +148,13 @@ def load_attack(path: Path) -> Attack:
 
 def parse_attack(raw: dict[str, Any], where: str = "attack") -> Attack:
     _keys(raw, _TOP, where)
-    for key in ("id", "title", "client", "marker", "plant", "step"):
+    for key in ("id", "title", "client", "marker", "step"):
         if key not in raw:
             raise AttackFormatError(f"{where}: {key} is missing")
     if not re.fullmatch(r"[A-Za-z][A-Za-z0-9-]{2,30}", str(raw["marker"])):
         raise AttackFormatError(f"{where}: marker must be letters, digits and dashes")
-    steps = tuple(_step(entry, where) for entry in raw["step"])
+    texts = {str(name): _corpus_text(ref, where) for name, ref in raw.get("texts", {}).items()}
+    steps = tuple(_step(entry, where, texts) for entry in raw["step"])
     if not steps or len({s.id for s in steps}) != len(steps):
         raise AttackFormatError(f"{where}: steps need unique ids")
     return Attack(
@@ -155,8 +162,10 @@ def parse_attack(raw: dict[str, Any], where: str = "attack") -> Attack:
         str(raw["title"]),
         str(raw["client"]),
         str(raw["marker"]),
-        _plant(raw["plant"], where),
+        _plant(raw["plant"], where) if "plant" in raw else None,
         steps,
+        bool(raw.get("hostile", True)),
+        texts,
     )
 
 
@@ -166,28 +175,35 @@ def _keys(table: dict[str, Any], allowed: frozenset[str], where: str) -> None:
         raise AttackFormatError(f"{where}: unknown keys {sorted(unknown)}")
 
 
-def _plant(raw: dict[str, Any], where: str) -> Plant:
-    _keys(raw, _PLANT, f"{where} [plant]")
-    source = raw["text_from"]
+def _corpus_text(source: dict[str, Any], where: str) -> str:
     items = tomllib.loads((CORPUS / source["file"]).read_text(encoding="utf-8"))["item"]
     found = [item["text"] for item in items if item["id"] == source["id"]]
     if len(found) != 1:
         raise AttackFormatError(f"{where}: no corpus item {source}")
-    return Plant(str(raw["account_id"]), str(raw["subject"]), found[0])
+    return str(found[0])
 
 
-def _step(raw: dict[str, Any], where: str) -> Step:
+def _plant(raw: dict[str, Any], where: str) -> Plant:
+    _keys(raw, _PLANT, f"{where} [plant]")
+    return Plant(str(raw["account_id"]), str(raw["subject"]), _corpus_text(raw["text_from"], where))
+
+
+def _step(raw: dict[str, Any], where: str, texts: dict[str, str]) -> Step:
     _keys(raw, _STEP, f"{where} step")
     step_id = str(raw["id"])
     here = f"{where} step {step_id}"
     repeat = int(raw.get("repeat", 1))
     if repeat < 1:
         raise AttackFormatError(f"{here}: repeat must be at least 1")
-    arguments = {str(k): str(v) for k, v in raw.get("arguments", {}).items()}
+    arguments = dict(raw.get("arguments", {}))
     for value in arguments.values():
-        for name, _ in TOKENS.findall(value):
+        if not isinstance(value, str):
+            continue
+        for name, spec in TOKENS.findall(value):
             if name not in KNOWN_TOKENS:
                 raise AttackFormatError(f"{here}: unknown template {{{name}}}")
+            if name == "text" and spec not in texts:
+                raise AttackFormatError(f"{here}: {{text:{spec}}} is not in [texts]")
     enforce = tuple(_enforce(e, repeat, here) for e in raw.get("enforce", []))
     monitor = tuple(_monitor(m, repeat, here) for m in raw.get("monitor", []))
     _covers(enforce, repeat, here, "enforce")

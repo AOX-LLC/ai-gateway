@@ -2,7 +2,8 @@
 # The acceptance test of Phase 4: a planted ticket tells an assistant to export every customer, and a
 # scripted worst-case client does it. Run from the repository root with the stack up (fictional demo
 # data only; LAB_AUTO_APPROVE=yes, which plays the human who approves everything, so it is the layers
-# that must stop the attack and not a person). Prints no secret and no customer value.
+# that must stop the attack and not a person). Prints no secret and no customer value. Each run
+# also makes an honest triage as the helper API client of the 09 demo, which no layer may stop.
 #
 #   run A  every layer enforcing: each call goes as the attack file says, the layer that stopped a
 #          call is the one it names (read back from telemetry), and the independent oracle, which reads
@@ -25,6 +26,8 @@ trap 'rm -f demo.json; [ -z "$APPROVER_ID" ] || docker compose run --rm -T admin
 docker compose run --rm -T admin seed-demo > demo.json
 SUPPORT=$(python3 -c 'import json; print(json.load(open("demo.json"))["harborline-support-bot"])')
 mask "$SUPPORT"
+HELPER=$(python3 -c 'import json; print(json.load(open("demo.json"))["harborline-helper-api"])')
+mask "$HELPER"
 ADDED=$(docker compose run --rm -T admin approver-add \
   --name "Harborline red-team demo approver (fictional, demo data)")
 APPROVER_ID=$(sed -n 's/^id  *//p' <<<"$ADDED")
@@ -59,11 +62,14 @@ wait_for_gateway() {
 settle() { wait_for_gateway; sleep "${SETTLE_S:-10}"; }
 
 ATTACK=scripts/redteam/attacks/export-every-customer.toml
+TRIAGE=scripts/redteam/attacks/normal-triage.toml
 export LAB_AUTO_APPROVE=yes
 
 echo "== run A: every layer enforcing =="
 docker compose up -d --force-recreate --wait gateway > /dev/null
 settle
+GATEWAY_TOKEN="$HELPER" uv run scripts/redteam/run_attack.py "$TRIAGE" --mode enforce \
+  --approve-as "$APPROVER_ID"
 GATEWAY_TOKEN="$SUPPORT" uv run scripts/redteam/run_attack.py "$ATTACK" --mode enforce \
   --approve-as "$APPROVER_ID"
 
@@ -71,6 +77,8 @@ echo "== run B: the layers that can be weakened in monitor mode =="
 GATEWAY_PIPELINE_FILE_IN_CONTAINER=/app/config/pipeline.monitor.toml \
   docker compose up -d --force-recreate --wait gateway > /dev/null
 settle
+GATEWAY_TOKEN="$HELPER" uv run scripts/redteam/run_attack.py "$TRIAGE" --mode monitor \
+  --approve-as "$APPROVER_ID"
 GATEWAY_TOKEN="$SUPPORT" uv run scripts/redteam/run_attack.py "$ATTACK" --mode monitor \
   --approve-as "$APPROVER_ID"
 

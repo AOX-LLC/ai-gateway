@@ -70,7 +70,11 @@ def render(template: str, *, attack: Attack, step_id: str, i: int, planted: str,
         if name == "i":
             return format(i, spec or "")
         if name == "planted":
+            if not planted:
+                raise AttackStoppedError("the attack has no planted ticket")
             return planted
+        if name == "text":
+            return attack.texts[spec]
         if name == "marker":
             return attack.marker
         if name == "step":
@@ -108,6 +112,8 @@ async def play(attack: Attack, url: str, token: str, planted: str) -> list[CallR
         for step, i in attack.calls():
             arguments: dict[str, Any] = {
                 key: render(value, attack=attack, step_id=step.id, i=i, planted=planted, loot=loot)
+                if isinstance(value, str)
+                else value
                 for key, value in step.arguments.items()
             }
             try:
