@@ -11,5 +11,6 @@ concurrency = 8                 # model calls in flight at once
 timeout_s = 8.0                 # one call's limit; a call that times out fails closed
 cache_entries = 4096            # judged texts remembered (by a keyed hash), so none is judged twice
 max_calls_per_minute_per_client = 120   # model calls one client may cause a minute
-max_usd_per_hour = 2.00         # live spend ceiling for the whole gateway (replay costs are not billed)
+max_usd_per_hour = 2.00         # billed spend ceiling for the whole gateway (a replayed call costs nothing)
+max_usd_per_hour_per_client = 0.50   # one client's share of it: a client that has spent it is refused, the others are not
 judge_arguments = "writes"      # "writes": judge a write's arguments too; "none": results only

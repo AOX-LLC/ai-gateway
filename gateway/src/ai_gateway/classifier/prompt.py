@@ -10,6 +10,7 @@ free text back.
 """
 
 import re
+import unicodedata
 from typing import Any, Literal
 
 from aox_agent_core import PromptRef
@@ -57,13 +58,19 @@ class Judgement(BaseModel):
     ]
 
 
-_DELIMITER_LINES = re.compile(r"^(BEGIN|END)[ \t]*$", re.MULTILINE)
+_LINE_BREAKS = re.compile(r"\r\n|[\r\u0085\u2028\u2029]")
+_DELIMITERS = frozenset({"BEGIN", "END"})
 
 
 def prepare(text: str) -> str:
-    """The text as the model is shown it: delimiter lines removed, so the text cannot close the
-    block it sits in."""
-    return _DELIMITER_LINES.sub("", text)
+    """The text as the model is shown it: delimiter lines emptied, so the text cannot close the
+    block it sits in. A line is a delimiter however it is spelled: any line break (a carriage
+    return, a Unicode line or paragraph separator), any whitespace around it, full-width letters.
+    The other lines, and the empty line that stays, are exactly as written."""
+    lines = _LINE_BREAKS.sub("\n", text).split("\n")
+    return "\n".join(
+        "" if unicodedata.normalize("NFKC", line).strip() in _DELIMITERS else line for line in lines
+    )
 
 
 def _strings(value: Any) -> list[str]:
