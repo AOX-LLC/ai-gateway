@@ -196,3 +196,51 @@ def test_the_layers_mark_steps_by_what_came_before_them(sim) -> None:  # type: i
     assert marked[burst + 2].blocked_by == "allowlist", "the support bot's urgent ticket"
     assert marked[burst + 3].blocked_by == "", "the ops bot's is for a person to decide"
     assert [step.auth_reason for step in marked[-7:]] == [""] * 5 + ["throttled"] * 2
+
+
+def _answers_of_a_throttle(sent: list, seconds_between: float, sim) -> list[int]:  # type: ignore[no-untyped-def,type-arg]
+    """What the login throttle (5 failures for one token id in 60 s, then a 60 s lockout) answers to
+    each wrong secret when the steps are sent `seconds_between` apart (a burst's steps are not)."""
+    answers: list[int] = []
+    failures: list[float] = []
+    locked_until = float("-inf")
+    clock = 0.0
+    previous_was_wrong = False
+    for step in sent:
+        wrong = step.kind == "auth_failure" and step.auth_case == "wrong_secret"
+        if previous_was_wrong and wrong:
+            pass  # back to back
+        else:
+            clock += seconds_between
+        previous_was_wrong = wrong
+        if not wrong:
+            continue
+        if clock < locked_until:
+            answers.append(429)
+            continue
+        failures = [at for at in failures if clock - at < 60.0] + [clock]
+        answers.append(401)
+        if len(failures) >= sim.THROTTLE_PER_ID:
+            locked_until = clock + 60.0
+    return answers
+
+
+@pytest.mark.parametrize("seconds_between", [0.0, 0.3, 30.0, 600.0])
+def test_the_decoys_wrong_secrets_get_the_marked_answers_at_any_pace(  # type: ignore[no-untyped-def]
+    sim, seconds_between: float
+) -> None:
+    plan = sim.build_plan(7, 400, writes=True)
+    expected = [
+        429 if step.auth_reason == "throttled" else 401
+        for step in plan
+        if step.kind == "auth_failure" and step.auth_case == "wrong_secret"
+    ]
+    assert expected.count(429) > 0, "the plan goes past the limit"
+
+    sent = sim.burst_wrong_secrets(plan)
+
+    assert sorted(map(str, sent)) == sorted(map(str, plan)), "the same steps, reordered only"
+    assert _answers_of_a_throttle(sent, seconds_between, sim) == expected
+    if seconds_between >= 30.0:
+        # Without the burst, a slow run never reaches the limit and the marks are wrong.
+        assert _answers_of_a_throttle(list(plan), seconds_between, sim) != expected
