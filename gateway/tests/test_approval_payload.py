@@ -5,6 +5,7 @@ from datetime import timedelta
 from typing import Any
 from uuid import UUID
 
+import anyio
 import psycopg
 import pytest
 from aox_agent_core.approvals import Decision, approval_payload_hash
@@ -268,3 +269,93 @@ async def test_the_purge_login_is_hardened_like_an_approvers_and_stays_so(
 
         cursor = await connection.execute(_SERVICE_LOGIN_FACTS, (PURGER_ROLE,))
         assert await cursor.fetchone() == expected, "put back by the next setup"
+
+
+async def _reject_in_plain_sql(login_url_: str, request_id: str, principal: str) -> None:
+    async with await psycopg.AsyncConnection.connect(
+        policy_url(login_url_), autocommit=True
+    ) as login:
+        await login.execute(
+            b"UPDATE agent_core_approvals SET status = 'rejected', decision = 'reject',"
+            b" resolved_by = %s, resolved_at = to_char(now() AT TIME ZONE 'UTC',"
+            b' \'YYYY-MM-DD"T"HH24:MI:SS.US"Z"\') WHERE id = %s',
+            (principal, request_id),
+        )
+
+
+async def test_a_rejection_by_the_purge_login_is_not_honoured_and_the_client_asks_afresh(
+    policy: None, test_database_url: str, policy_gateway_url: str, policy_auditor_url: str
+) -> None:
+    """The guard lets the purge login (an approver-role member) write a rejection under its own
+    mapped principal. The gate counts a rejection only from an active approver holding the role,
+    or the purge credential could refuse every client's writes until each request expired."""
+    await _setup_with_purger(test_database_url, policy_gateway_url, policy_auditor_url)
+    gate, ctx, call = _gate(policy_gateway_url, hold_s=0), _context(), _call()
+    request_id = (await gate.decide(ctx, call)).approval_id or ""
+
+    await _reject_in_plain_sql(
+        login_url(test_database_url, PURGER_ROLE, PURGER_PASSWORD),
+        request_id,
+        "service:payload-purger",
+    )
+
+    again = await gate.decide(ctx, call)
+    assert again.outcome is ApprovalOutcome.PENDING, "not reported as rejected: asked afresh"
+    assert again.approval_id != request_id
+
+
+async def test_a_rejection_that_arrives_during_the_hold_from_the_purge_login_is_not_honoured(
+    policy: None, test_database_url: str, policy_gateway_url: str, policy_auditor_url: str
+) -> None:
+    await _setup_with_purger(test_database_url, policy_gateway_url, policy_auditor_url)
+    gate, ctx, call = _gate(policy_gateway_url, hold_s=3, poll_s=0.05), _context(), _call()
+    purger_url = login_url(test_database_url, PURGER_ROLE, PURGER_PASSWORD)
+
+    async def reject_when_asked() -> None:
+        for _ in range(100):
+            rows = await _rows(
+                policy_url(test_database_url),
+                "SELECT id FROM agent_core_approvals WHERE status = 'pending'",
+            )
+            if rows:
+                await _reject_in_plain_sql(purger_url, str(rows[0][0]), "service:payload-purger")
+                return
+            await anyio.sleep(0.05)
+
+    async with anyio.create_task_group() as tasks:
+        tasks.start_soon(reject_when_asked)
+        decision = await gate.decide(ctx, call)
+
+    assert decision.outcome is ApprovalOutcome.UNAVAILABLE, "not told the call was rejected"
+
+
+async def test_a_rejection_by_an_approver_without_the_requests_role_is_not_honoured(
+    policy: None, make_approver: MakeApprover, policy_gateway_url: str
+) -> None:
+    from tests.conftest import INTERN
+
+    intern_url = await make_approver(INTERN, ["reader"])
+    gate, ctx, call = _gate(policy_gateway_url, hold_s=0), _context(), _call()
+    request_id = (await gate.decide(ctx, call)).approval_id or ""
+
+    await _reject_in_plain_sql(intern_url, request_id, f"human:{INTERN}")
+
+    again = await gate.decide(ctx, call)
+    assert again.outcome is ApprovalOutcome.PENDING, "asked afresh, not told it was rejected"
+    assert again.approval_id != request_id
+
+
+async def test_a_rejection_by_an_active_approver_with_the_role_still_stands(
+    policy: None, make_approver: MakeApprover, policy_gateway_url: str
+) -> None:
+    approver = _approver(await make_approver(AIDEN))
+    gate, ctx, call = _gate(policy_gateway_url, hold_s=0), _context(), _call()
+    pending = await gate.decide(ctx, call)
+    await approver.resolve(
+        UUID(pending.approval_id or ""), decision=Decision.REJECT, principal=HUMAN
+    )
+
+    for _ in range(2):
+        retried = await gate.decide(ctx, call)
+        assert retried.outcome is ApprovalOutcome.REJECTED
+        assert retried.approval_id == pending.approval_id
