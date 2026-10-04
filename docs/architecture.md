@@ -515,10 +515,17 @@ always best effort. Audit is owned by the pipeline: the write-ahead step can ref
 the rest is a queue. Telemetry down with audit up, audit down with telemetry up, and both down are
 all tested.
 
-**Cost.** agent-core appends one event per transaction and serialises appends: about 22 ms each
-(p95 about 100 ms) when measured here, so 50 concurrent appends took 3.2 s. The recorder therefore
-writes the queue in batches of up to 100 in one transaction, using `SQLAuditLog.append_many`: 100
-events took about 150 ms. Only the write-ahead record waits for its own transaction.
+**Cost.** agent-core appends one event per transaction and serialises appends. Measured on this
+node on 2026-10-03 under v0.1.0 (`scripts/measure_audit_throughput.py`, 50 appends and 5 runs, the
+stack's own Postgres on a disk volume, a copy of the real one): one append at a time, median 16.8 ms
+(p95 55.6 ms); 50 appends at once took 0.78 s (median of 5; 3.2 s under a3, with a median of 22 ms and a
+p95 of about 100 ms for one); one `append_many` of 100 took 75 ms (about 150 ms under a3, with
+`append_in`). An approval's submit takes 20.9 ms (p95 72.7 ms), a repeat of an open one 5.4 ms (p95
+9.6 ms: the idempotent path a retry takes), and a cancel 19.4 ms. The recorder therefore still writes
+the queue in batches of up to 100 in one transaction, using `SQLAuditLog.append_many`. Only the
+write-ahead record waits for its own transaction. agent-core does not coalesce independent appends
+(it lists that as planned work), so the batching stays. The test Postgres in agent-core's own
+benchmark runs on tmpfs, so its numbers are lower than these.
 
 **Bounded waits.** agent-core's storage is async, on a psycopg connection pool. The gateway gives
 the audit log pools of its own (four connections for the write-ahead record, one for the batches),
