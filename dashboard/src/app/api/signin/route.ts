@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { seeOther } from "@/lib/redirect";
 import { config } from "@/lib/config";
 import { isSameOrigin } from "@/lib/auth/origin";
 import { ABSOLUTE_LIFETIME_S, COOKIE_NAME, cookieAttributes } from "@/lib/auth/session";
@@ -7,8 +8,8 @@ import { signInThrottle } from "@/lib/auth/throttle";
 
 export const dynamic = "force-dynamic";
 
-function back(request: Request, query: string): NextResponse {
-  return NextResponse.redirect(new URL(`/signin${query}`, request.url), 303);
+function back(query: string): NextResponse {
+  return seeOther(`/signin${query}`);
 }
 
 export async function POST(request: Request): Promise<NextResponse> {
@@ -24,18 +25,18 @@ export async function POST(request: Request): Promise<NextResponse> {
   });
   switch (result.status) {
     case "ok": {
-      const response = NextResponse.redirect(new URL("/", request.url), 303);
+      const response = seeOther("/");
       response.headers.append("Set-Cookie", `${COOKIE_NAME}=${result.token}; ${cookieAttributes(ABSOLUTE_LIFETIME_S)}`);
       return response;
     }
     case "throttled": {
-      const response = back(request, "?error=wait");
+      const response = back("?error=wait");
       response.headers.set("Retry-After", String(result.retryAfter));
       return response;
     }
     case "disabled":
-      return back(request, "?error=disabled");
+      return back("?error=disabled");
     case "denied":
-      return back(request, "?error=denied");
+      return back("?error=denied");
   }
 }

@@ -99,7 +99,7 @@ def test_the_dashboard_publishes_4400_on_loopback_and_runs_hardened(
     assert dashboard["cap_drop"] == ["ALL"]
     assert dashboard["security_opt"] == ["no-new-privileges:true"]
     assert dashboard["restart"] == "unless-stopped"
-    assert dashboard["mem_limit"] == "256m", "provisional: Phase 5c-3 measures it"
+    assert dashboard["mem_limit"] == "144m", "1.5 x the 94 MiB measured peak (Phase 5c-3)"
 
 
 def test_next_telemetry_is_disabled_in_the_dashboard_service_and_image(

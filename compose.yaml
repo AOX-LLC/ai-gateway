@@ -196,8 +196,8 @@ services:
     <<: *hardening
 
   # The dashboard (Phase 5c): read-only, on 127.0.0.1:4400, through the telemetry reader role. It is on
-  # a network of its own with Postgres, not on `edge` with the gateway. The memory limit is provisional
-  # (Phase 5c-3 measures it). Sign in with the admin password: scripts/set_dashboard_password.py.
+  # a network of its own with Postgres, not on `edge` with the gateway. The memory limit is 1.5 times the
+  # highest peak measured by scripts/measure_dashboard_memory.py (94 MiB), the Node heap 60% of it. Sign in with the admin password: scripts/set_dashboard_password.py.
   dashboard:
     build: ./dashboard
     image: ai-gateway-dashboard
@@ -209,10 +209,10 @@ services:
     networks: [dashboard]
     ports:
       - "127.0.0.1:4400:4400"
-    mem_limit: 256m
+    mem_limit: 144m
     environment:
       NEXT_TELEMETRY_DISABLED: "1"
-      NODE_OPTIONS: --max-old-space-size=160
+      NODE_OPTIONS: --max-old-space-size=86
       DASHBOARD_DATABASE_URL: postgresql://telemetry_reader:${TELEMETRY_READER_DB_PASSWORD:?set it in .env}@postgres:5432/${POSTGRES_DB}
       DASHBOARD_SESSION_SECRET: ${DASHBOARD_SESSION_SECRET:?set it in .env (python3 scripts/init_env.py adds it)}
       DASHBOARD_ADMIN_PASSWORD_HASH: ${DASHBOARD_ADMIN_PASSWORD_HASH:-}

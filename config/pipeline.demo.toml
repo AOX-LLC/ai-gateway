@@ -1,0 +1,11 @@
+# The demo stack's pipeline (compose.demo.yaml points the gateway at it): the same as the default,
+# with rate limiting in monitor mode, so calls it would have limited are recorded as "would block"
+# and the dashboard has them to show. Never use this for anything real: a monitored layer stops nothing.
+[layers]
+scope = "enforce"
+allowlist = "enforce"
+rate_limit = "monitor"
+approval = "enforce"
+
+[safety]
+allow_floor_override = false

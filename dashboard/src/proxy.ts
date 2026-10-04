@@ -33,7 +33,7 @@ function policy(nonce: string): string {
 
 const HEADERS: Record<string, string> = {
   "X-Content-Type-Options": "nosniff",
-  "Referrer-Policy": "no-referrer",
+  "Referrer-Policy": "same-origin",
   "X-Frame-Options": "DENY",
   "Cross-Origin-Opener-Policy": "same-origin",
   "Cross-Origin-Resource-Policy": "same-origin",
@@ -45,6 +45,15 @@ function secure(response: NextResponse, csp: string): NextResponse {
   response.headers.set("Content-Security-Policy", csp);
   for (const [name, value] of Object.entries(HEADERS)) response.headers.set(name, value);
   return response;
+}
+
+// Next's proxy layer refuses a Location that is not absolute, and in a container request.url names the
+// address the server listens on (0.0.0.0), not the one the browser used. The Host header is the name it
+// used, and has already been checked against the allowlist when this runs.
+function signInRedirect(request: NextRequest): NextResponse {
+  const target = new URL("/signin", request.url);
+  target.host = request.headers.get("host") ?? target.host;
+  return NextResponse.redirect(target, 303);
 }
 
 export function proxy(request: NextRequest): NextResponse {
@@ -62,7 +71,7 @@ export function proxy(request: NextRequest): NextResponse {
     if (path.startsWith("/api/")) {
       return secure(NextResponse.json({ error: "not signed in" }, { status: 401 }), csp);
     }
-    return secure(NextResponse.redirect(new URL("/signin", request.url), 303), csp);
+    return secure(signInRedirect(request), csp);
   }
 
   const headers = new Headers(request.headers);

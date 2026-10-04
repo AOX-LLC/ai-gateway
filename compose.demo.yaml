@@ -1,0 +1,29 @@
+# The demo stack: the normal stack with a few settings changed so the dashboard can be seeded and
+# photographed. Use it on a stack made for that, never on one holding anything real:
+#
+#   scripts/run_dashboard_demo.sh        # builds, starts, seeds, signs in and takes the screenshots
+#
+# or by hand: DEMO_DASHBOARD_PASSWORD_HASH=... DEMO_SESSION_SECRET=... \
+#               docker compose -f compose.yaml -f compose.demo.yaml up -d --build --wait
+# (this file names the project, so by hand it is still not the real stack's)
+#
+# It changes only these (everything else, the networks, ports, hardening and limits, is compose.yaml's):
+name: ai-gateway-demo
+services:
+  gateway:
+    environment:
+      # A day, so the writes left waiting for a person do not expire while the pictures are taken.
+      GATEWAY_APPROVAL_TTL_S: "86400"
+      # Three seconds, so seeding six waiting writes takes seconds and not minutes.
+      GATEWAY_APPROVAL_HOLD_S: "3"
+      # Rate limiting in monitor mode, so there are calls it would have limited to show.
+      GATEWAY_PIPELINE_FILE: /app/config/pipeline.demo.toml
+  dashboard:
+    environment:
+      # "Now" is the newest recorded request, so the seeded state looks the same whenever it is seen.
+      DASHBOARD_DEMO: "1"
+      # A demo-only admin password, as a hash made for this run by the runner. The real one, in .env,
+      # is not touched and does not work here.
+      # Its own session secret too: a cookie signed with .env's would be valid on the real dashboard.
+      DASHBOARD_SESSION_SECRET: ${DEMO_SESSION_SECRET:?set by scripts/run_dashboard_demo.sh}
+      DASHBOARD_ADMIN_PASSWORD_HASH: ${DEMO_DASHBOARD_PASSWORD_HASH:?set by scripts/run_dashboard_demo.sh}

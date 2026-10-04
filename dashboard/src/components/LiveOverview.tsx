@@ -4,8 +4,9 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { clock, windowLabel } from "@/lib/format";
 import { RANGES, type Range } from "@/lib/data/ranges";
-import type { Approvals, DecisionsPage, Kpis, Overview, Result } from "@/lib/data/types";
+import type { Approvals, Charts, DecisionsPage, Kpis, Overview, Result } from "@/lib/data/types";
 import { ApprovalsPanel } from "./ApprovalsPanel";
+import { ChartsSection } from "./charts/ChartsSection";
 import { type DecisionsView, DecisionsPanel } from "./DecisionsPanel";
 import { Icon } from "./Icon";
 import { KpiTiles } from "./KpiTiles";
@@ -32,6 +33,7 @@ function next<T>(previous: Panel<T>, result: Result<T>, at: string): Panel<T> {
 
 export function LiveOverview({ initial, range }: { initial: Overview; range: Range }) {
   const [kpis, setKpis] = useState<Panel<Kpis>>(() => start(initial.kpis, initial.at));
+  const [charts, setCharts] = useState<Panel<Charts>>(() => start(initial.charts, initial.at));
   const [approvals, setApprovals] = useState<Panel<Approvals>>(() => start(initial.approvals, initial.at));
   const [live, setLive] = useState<Panel<DecisionsPage>>(() => start(initial.decisions, initial.at));
   const [updatedAt, setUpdatedAt] = useState(initial.at);
@@ -61,6 +63,7 @@ export function LiveOverview({ initial, range }: { initial: Overview; range: Ran
       if (!response.ok) throw new Error(String(response.status));
       const overview = (await response.json()) as Overview;
       setKpis((p) => next(p, overview.kpis, overview.at));
+      setCharts((p) => next(p, overview.charts, overview.at));
       setApprovals((p) => next(p, overview.approvals, overview.at));
       setLive((p) => (indexRef.current === 0 ? next(p, overview.decisions, overview.at) : p));
       setUpdatedAt(overview.at);
@@ -68,6 +71,7 @@ export function LiveOverview({ initial, range }: { initial: Overview; range: Ran
       const message = "The dashboard could not reach its server.";
       const failed = <T,>(p: Panel<T>): Panel<T> => ({ ...p, error: message, stale: p.data !== null });
       setKpis(failed);
+      setCharts(failed);
       setApprovals(failed);
       setLive(failed);
     }
@@ -158,6 +162,7 @@ export function LiveOverview({ initial, range }: { initial: Overview; range: Ran
         since={kpis.since ? clock(kpis.since) : null}
         loading={false}
       />
+      <ChartsSection charts={charts.data} error={charts.error} stale={charts.stale} since={charts.since ? clock(charts.since) : null} />
       <div className="panel-grid">
         <DecisionsPanel view={view} onOlder={goOlder} onNewer={goNewer} rangeLabel={windowLabel(RANGES[range])} />
         <ApprovalsPanel

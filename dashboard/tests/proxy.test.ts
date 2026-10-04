@@ -36,8 +36,18 @@ describe("the proxy", () => {
     const api = await call("/api/live");
 
     expect(page.status).toBe(303);
-    expect(new URL(page.headers.get("location")!).pathname).toBe("/signin");
+    expect(page.headers.get("location")).toBe("http://127.0.0.1:4400/signin");
     expect(api.status).toBe(401);
+  });
+
+  it("sends the visitor back to the name they used, not the address the server listens on", async () => {
+    const { proxy } = await import("@/proxy");
+    const behindDocker = new NextRequest("http://0.0.0.0:4400/", { headers: { host: "127.0.0.1:4400" } });
+
+    const response = proxy(behindDocker);
+
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toBe("http://127.0.0.1:4400/signin");
   });
 
   it("lets the sign-in page, its form and the health check through without one", async () => {
@@ -71,7 +81,7 @@ describe("the proxy", () => {
   it("sets the security headers, and no caching, on a redirect as on a page", async () => {
     for (const response of [await call("/"), await call("/signin")]) {
       expect(response.headers.get("x-content-type-options")).toBe("nosniff");
-      expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+      expect(response.headers.get("referrer-policy")).toBe("same-origin");
       expect(response.headers.get("x-frame-options")).toBe("DENY");
       expect(response.headers.get("cache-control")).toBe("no-store");
       expect(response.headers.get("cross-origin-opener-policy")).toBe("same-origin");

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { seeOther } from "@/lib/redirect";
 import { isSameOrigin } from "@/lib/auth/origin";
 import { config } from "@/lib/config";
 import { revoke } from "@/lib/auth/revoked";
@@ -17,7 +18,7 @@ export function POST(request: Request): NextResponse {
   const now = Math.floor(Date.now() / 1000);
   const payload = verify(cookieValue(request), config().sessionSecret, now);
   if (payload) revoke(payload.sid, now);
-  const response = NextResponse.redirect(new URL("/signin", request.url), 303);
+  const response = seeOther("/signin");
   response.headers.append("Set-Cookie", `${COOKIE_NAME}=; ${cookieAttributes(0)}`);
   return response;
 }

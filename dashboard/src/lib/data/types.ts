@@ -63,6 +63,35 @@ export type Approvals = {
   recent: Approval[];
 };
 
+/** One point of a time chart: the start of its bucket, UTC ISO 8601 (seconds). */
+export type VolumePoint = { ts: string; forwarded: number; blocked: number };
+/** null: nothing went through in that bucket, so there is nothing to take a percentile of. */
+export type LatencyPoint = { ts: string; p50: number | null; p95: number | null; p99: number | null };
+export type ToolOutcome = { tool: string; ok: number; error: number };
+export type LayerCount = {
+  layer: string;
+  /** The layer's mode in the configuration in use; null if the layer is not in it (old records). */
+  mode: string | null;
+  blocked: number;
+  wouldBlock: number;
+};
+export type ReasonCount = { reason: string; count: number };
+export type TrendPoint = { ts: string; count: number };
+
+export type Charts = {
+  windowSeconds: number;
+  bucketSeconds: number;
+  /** The window, UTC ISO 8601: what the x axes span. */
+  start: string;
+  end: string;
+  volume: VolumePoint[];
+  latency: LatencyPoint[];
+  tools: ToolOutcome[];
+  layers: LayerCount[];
+  authReasons: ReasonCount[];
+  authTrend: TrendPoint[];
+};
+
 /** A panel's data, or the fact that it could not be read. The message is generic: what the database
  * said is logged on the server and never sent to the browser. */
 export type Result<T> = { ok: true; data: T } | { ok: false; error: string };
@@ -70,6 +99,7 @@ export type Result<T> = { ok: true; data: T } | { ok: false; error: string };
 export type Overview = {
   at: string;
   kpis: Result<Kpis>;
+  charts: Result<Charts>;
   decisions: Result<DecisionsPage>;
   approvals: Result<Approvals>;
 };

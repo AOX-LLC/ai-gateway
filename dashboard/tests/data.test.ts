@@ -1,13 +1,18 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import type { PoolClient } from "pg";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { AuthError, mint } from "@/lib/auth/authed";
-import { usePool } from "@/lib/db";
+import { setPool } from "@/lib/db";
 import * as data from "@/lib/data";
 import { encodeCursor } from "@/lib/data/cursor";
 
 const session = mint({ sid: "s", iat: 0, seen: 0 });
+
+beforeAll(() => {
+  process.env.DASHBOARD_DATABASE_URL = "postgresql://x:y@db:5432/z";
+  process.env.DASHBOARD_SESSION_SECRET = "d".repeat(40);
+});
 
 type Reply = Record<string, unknown>[];
 
@@ -23,15 +28,15 @@ function poolReplying(replies: (text: string) => Reply) {
   return { pool: { connect: async () => client }, sent };
 }
 
-afterEach(() => usePool(undefined));
+afterEach(() => setPool(undefined));
 
 describe("every data function", () => {
   it("is exported with a session first, and refuses a missing or forged one before the database is touched", async () => {
     let touched = false;
-    usePool({ connect: async () => ((touched = true), {} as PoolClient) } as never);
+    setPool({ connect: async () => ((touched = true), {} as PoolClient) } as never);
     const functions = Object.entries(data);
 
-    expect(functions.map(([name]) => name).sort()).toEqual(["getApprovals", "getDecisions", "getKpis"]);
+    expect(functions.map(([name]) => name).sort()).toEqual(["getApprovals", "getCharts", "getClock", "getDecisions", "getKpis"]);
     for (const [name, call] of functions) {
       const fn = call as (...args: unknown[]) => Promise<unknown>;
       for (const bad of [undefined, null, {}, { sid: "forged" }, "session"]) {
@@ -45,7 +50,7 @@ describe("every data function", () => {
 describe("the views", () => {
   it("are named with their schema, because the reader's search path does not include it", async () => {
     const { pool, sent } = poolReplying(() => [{ requests: "0", forwarded: "0", succeeded: "0", blocked: "0", p95_ms: null, would_block: "0", auth_failures: "0" }]);
-    usePool(pool as never);
+    setPool(pool as never);
 
     await data.getKpis(session, "1h");
     await data.getDecisions(session, { range: "1h" });
@@ -65,10 +70,13 @@ describe("the data module", () => {
     const index = readFileSync(`${directory}index.ts`, "utf8");
     const readers = readdirSync(directory)
       .filter((file) => file.endsWith(".ts") && !["index.ts", "types.ts", "cursor.ts", "ranges.ts", "overview.ts"].includes(file))
-      .flatMap((file) => [...readFileSync(`${directory}${file}`, "utf8").matchAll(/export (?:async )?function (\w+)/g)].map((m) => [file, m[1]!]));
+      .flatMap((file) => [...readFileSync(`${directory}${file}`, "utf8").matchAll(/export async function (\w+)\(\s*(\w*)/g)].map((m) => [file, m[1]!, m[2]!]));
 
-    expect(readers.length).toBeGreaterThanOrEqual(3);
-    for (const [file, name] of readers) expect(index, `${name} (${file}) must be exported from lib/data/index.ts`).toContain(name);
+    expect(readers.length).toBeGreaterThanOrEqual(5);
+    for (const [file, name, firstParameter] of readers) {
+      expect(firstParameter, `${name} (${file}) is async, so it reads: it must take the session first`).toBe("session");
+      expect(index, `${name} (${file}) must be exported from lib/data/index.ts`).toContain(name);
+    }
   });
 });
 
@@ -77,14 +85,14 @@ describe("the KPIs", () => {
     const { pool, sent } = poolReplying(() => [
       { requests: "120", forwarded: "100", succeeded: "90", blocked: "20", p95_ms: "41.5", would_block: "3", auth_failures: "7" },
     ]);
-    usePool(pool as never);
+    setPool(pool as never);
 
     const kpis = await data.getKpis(session, "1h");
 
     expect(kpis).toMatchObject({ requests: 120, perMinute: 2, p95Ms: 41.5, successRate: 0.9, blocked: 20, wouldBlock: 3, authFailures: 7 });
     expect(sent.find((q) => q.text.includes("dash_requests"))?.values).toEqual([3600]);
 
-    usePool(poolReplying(() => [{ requests: "0", forwarded: "0", succeeded: "0", blocked: "0", p95_ms: null, would_block: "0", auth_failures: "0" }]).pool as never);
+    setPool(poolReplying(() => [{ requests: "0", forwarded: "0", succeeded: "0", blocked: "0", p95_ms: null, would_block: "0", auth_failures: "0" }]).pool as never);
     expect(await data.getKpis(session, "24h")).toMatchObject({ requests: 0, p95Ms: null, successRate: null });
   });
 });
@@ -107,7 +115,7 @@ describe("the recent decisions", () => {
 
   it("asks for one more than a page to know whether there is another, and cursors on the last row it shows", async () => {
     const { pool, sent } = poolReplying(() => [row(1), row(2), row(3)]);
-    usePool(pool as never);
+    setPool(pool as never);
 
     const page = await data.getDecisions(session, { range: "24h", limit: 2 });
 
@@ -121,7 +129,7 @@ describe("the recent decisions", () => {
   it("has no next cursor on the last page, and pages from the cursor it is given", async () => {
     const cursor = encodeCursor({ ts: "2026-10-03T10:00:59.000123Z", id: "00000000-0000-4000-8000-000000000001" });
     const { pool, sent } = poolReplying(() => [row(2)]);
-    usePool(pool as never);
+    setPool(pool as never);
 
     const page = await data.getDecisions(session, { range: "7d", cursor, limit: 25 });
 
@@ -136,7 +144,7 @@ describe("the recent decisions", () => {
 
   it("clamps the page size, and drops a cursor it did not make", async () => {
     const { pool, sent } = poolReplying(() => []);
-    usePool(pool as never);
+    setPool(pool as never);
 
     await data.getDecisions(session, { range: "1h", limit: 9999, cursor: "'; DROP TABLE x; --" });
     await data.getDecisions(session, { range: "1h", limit: -5 });
@@ -154,7 +162,7 @@ describe("the approval queue", () => {
         ? [{ ...base, id: "a", action: "tickets__assign", status: "pending" }]
         : [{ ...base, id: "b", action: "tickets__assign", status: "approved", resolved_at: "2026-10-03T10:01:00.000000Z", resolved_by_name: "Dana Kerr" }],
     );
-    usePool(pool as never);
+    setPool(pool as never);
 
     const approvals = await data.getApprovals(session);
 
@@ -164,7 +172,7 @@ describe("the approval queue", () => {
 
   it("reads a status it does not know as cancelled rather than trusting it", async () => {
     const { pool } = poolReplying(() => [{ id: "c", action: "x__y", namespace: "x", status: "weird", created_at: "t", expires_at: "t" }]);
-    usePool(pool as never);
+    setPool(pool as never);
 
     expect((await data.getApprovals(session)).recent[0]?.status).toBe("cancelled");
   });

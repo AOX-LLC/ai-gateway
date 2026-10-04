@@ -9,6 +9,9 @@ export type Config = {
   readonly adminPasswordHash: string;
   readonly sessionSecret: string;
   readonly sampleData: boolean;
+  /** A demo stack: "now" is the newest recorded request, so a seeded state looks the same whenever it is
+   * looked at (see lib/data/clock.ts). Never set it against real data. */
+  readonly demo: boolean;
   /** The Host values this dashboard answers to (see auth/hosts.ts). */
   readonly allowedHosts: readonly string[];
 };
@@ -31,6 +34,7 @@ export function parseConfig(env: Readonly<Record<string, string | undefined>>): 
     adminPasswordHash: env.DASHBOARD_ADMIN_PASSWORD_HASH ?? "",
     sessionSecret,
     sampleData: env.DASHBOARD_SAMPLE_DATA === "1",
+    demo: env.DASHBOARD_DEMO === "1",
     allowedHosts: parseHosts(env.DASHBOARD_ALLOWED_HOSTS),
   };
 }
