@@ -87,6 +87,15 @@ DEMO_SCOPES_OPS = [
     "tickets__change_status",
     "tickets__assign",
 ]
+# The helper API of the 09 integrated demo (a separate service that triages a customer email with a
+# model): the CRM reads and one write, and nothing else. Its allowlist caps are in
+# config/allowlist.toml, so a normal triage never meets them and a bulk export does.
+DEMO_SCOPES_HELPER_API = [
+    "crm__search_accounts",
+    "crm__get_account",
+    "crm__list_deals",
+    "tickets__create_ticket",
+]
 DEMO_CLIENTS = {
     "harborline-support-bot": (
         "Support assistant for the fictional Harborline Supply Co. (demo data)",
@@ -95,6 +104,10 @@ DEMO_CLIENTS = {
     "harborline-ops-bot": (
         "Operations assistant for the fictional Harborline Supply Co. (demo data)",
         DEMO_SCOPES_OPS,
+    ),
+    "harborline-helper-api": (
+        "Helper API of the 09 integrated demo: reads the CRM, opens one ticket (demo data)",
+        DEMO_SCOPES_HELPER_API,
     ),
     # No scopes: the traffic simulator's wrong-secret attempts use this token, because the
     # failed-login throttle locks out the token id that is guessed at.
