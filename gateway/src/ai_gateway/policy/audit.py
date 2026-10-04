@@ -157,11 +157,31 @@ def call_event(event: GatewayEvent, record_id: str | None = None) -> AuditEvent:
     )
 
 
-_LAYER_KEYS = ("layer", "hook", "mode", "verdict", "code")
+_LAYER_KEYS = ("layer", "hook", "mode", "verdict", "code", "score")
 
 
 def _layers(value: object) -> list[dict[str, Any]]:
     return [layer for layer in value if isinstance(layer, dict)] if isinstance(value, list) else []
+
+
+_ALERT_KEYS = ("kind", "tool", "client_name", "definition_sha256", "canary", "score")
+
+
+def alert_audit_event(event: GatewayEvent) -> AuditEvent:
+    """The audit event for a `gateway.alert`: the kind, the tool and client, and a hash, a canary's
+    name or a count. Built from named fields only, so no argument or result can ride along."""
+    subject_id, _ = _subject(event.subject_id)
+    payload: dict[str, Any] = {"record_id": str(uuid4())}
+    payload.update(
+        {
+            key: event.payload[key]
+            for key in _ALERT_KEYS
+            if isinstance(event.payload.get(key), str | int) and event.payload.get(key) != ""
+        }
+    )
+    return AuditEvent(
+        action="gateway.alert", actor_id="gateway", subject_id=subject_id, payload=payload
+    )
 
 
 def write_ahead_event(ctx: CallContext, call: ToolCall) -> AuditEvent:
@@ -271,9 +291,12 @@ class PostgresAuditRecorder:
 
     def record(self, event: GatewayEvent) -> None:
         try:
-            if event.action != "gateway.tool_call":
+            if event.action == "gateway.alert":
+                checked = self._log.checked_event(alert_audit_event(event))
+            elif event.action == "gateway.tool_call":
+                checked = self._log.checked_event(call_event(event))
+            else:
                 return
-            checked = self._log.checked_event(call_event(event))
         except Exception as error:
             self._rejected_total += 1
             self._note("rejected", "an audit record could not be built (%s)", _reason(error))

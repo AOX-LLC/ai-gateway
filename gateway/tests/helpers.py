@@ -1,11 +1,13 @@
 """Test helpers shared by several test modules."""
 
+import asyncio
 import json
 import threading
 import time
 from collections.abc import AsyncGenerator, Iterator, Sequence
 from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
+from typing import Any
 
 import httpx2
 import uvicorn
@@ -15,8 +17,11 @@ from pydantic import SecretStr
 from starlette.types import ASGIApp
 
 from ai_gateway.app import create_app
+from ai_gateway.pipeline.pins import load_tool_pins, render_tool_pins
 from ai_gateway.seams.events import MemoryEventSink
 from ai_gateway.settings import GatewaySettings
+
+PINS_FILE = Path(__file__).resolve().parents[2] / "config" / "tool_pins.toml"
 
 HANDBOOK_DOCUMENTS = Path(__file__).resolve().parents[2] / "servers" / "handbook" / "documents"
 """The handbook's Markdown documents: a plain repository folder, in no package or image."""
@@ -107,6 +112,32 @@ class RunningGateway:
         self.events = events
 
 
+def _echo_definitions() -> list[tuple[str, str | None, dict[str, Any]]]:
+    """(exposed name, description, input schema) of the echo test upstream's tools."""
+    from echo_server.server import build_server
+
+    async def listed() -> list[tuple[str, str | None, dict[str, Any]]]:
+        tools = await build_server().list_tools()
+        return [(f"echo__{tool.name}", tool.description, dict(tool.input_schema)) for tool in tools]
+
+    results: list[list[tuple[str, str | None, dict[str, Any]]]] = []
+    thread = threading.Thread(target=lambda: results.append(asyncio.run(listed())))
+    thread.start()
+    thread.join()
+    return results[0]
+
+
+def pins_text_for_tests() -> str:
+    """A pins file for the echo test upstream and the Harborline servers' reviewed tools."""
+    shipped = load_tool_pins(PINS_FILE)
+    definitions = [
+        (name, pin.description, dict(pin.input_schema))
+        for name in sorted(shipped.names())
+        if (pin := shipped.get(name)) is not None
+    ]
+    return render_tool_pins([*definitions, *_echo_definitions()])
+
+
 @contextmanager
 def run_gateway(
     database_url: str,
@@ -118,6 +149,10 @@ def run_gateway(
     allowlist: str = "",
     rate_limits: str = "",
     fast_catalog: bool = False,
+    layers: dict[str, str] | None = None,
+    pins: str | None = None,
+    egress: str | None = None,
+    canaries: str | None = None,
 ) -> Iterator[RunningGateway]:
     """The whole gateway on a free port, with only the scope layer, recording its events (and,
     given a telemetry database, storing them there too).
@@ -134,8 +169,19 @@ def run_gateway(
     # A test that is not about approvals switches the layer off, which a floor layer allows only
     # with the override flag; one that is gets the shipped behaviour and a short hold.
     approval_mode = "enforce" if approvals is not None else "off"
+    # The layers a test is not about are off, as they were before they existed; one that is says so.
+    modes = {
+        "scope": "enforce",
+        "approval": approval_mode,
+        "schema": "off",
+        "pinned_descriptions": "off",
+        "egress": "off",
+        "canary": "off",
+        **(layers or {}),
+    }
+    layer_lines = "".join(f'{name} = "{mode}"\n' for name, mode in modes.items())
     pipeline_file.write_text(
-        f'[layers]\nscope = "enforce"\napproval = "{approval_mode}"\n\n[safety]\n'
+        f"[layers]\n{layer_lines}\n[safety]\n"
         f"allow_unaudited_writes = {unaudited}\n"
         f"allow_floor_override = {str(approvals is None).lower()}\n"
     )
@@ -143,6 +189,12 @@ def run_gateway(
     allowlist_file.write_text(allowlist)
     limits_file = workdir / "rate_limits.toml"
     limits_file.write_text(rate_limits)
+    pins_file = workdir / "tool_pins.toml"
+    pins_file.write_text(pins if pins is not None else pins_text_for_tests())
+    egress_file = workdir / "egress.toml"
+    egress_file.write_text(egress if egress is not None else "")
+    canaries_file = workdir / "canaries.toml"
+    canaries_file.write_text(canaries if canaries is not None else 'shape = "CNRYHBL[0-9A-F]{8}"\n')
     roles_file = workdir / "approval_roles.toml"
     roles_file.write_text('[roles_by_action]\necho__shout = "approver"\n')
     catalog = {"catalog_refresh_s": 0.3, "catalog_registry_poll_s": 0.3} if fast_catalog else {}
@@ -153,6 +205,9 @@ def run_gateway(
         approval_roles_file=roles_file,
         allowlist_file=allowlist_file,
         rate_limits_file=limits_file,
+        tool_pins_file=pins_file,
+        egress_file=egress_file,
+        canaries_file=canaries_file,
         telemetry_database_url=(
             SecretStr(telemetry_database_url) if telemetry_database_url else None
         ),

@@ -36,7 +36,7 @@ COLUMNS: dict[str, tuple[str, ...]] = {
     ),
     "layer_verdicts": (
         "request_id", "ordinal", "ts", "layer", "hook", "mode", "verdict", "code",
-        "tools_removed", "duration_ms",
+        "tools_removed", "duration_ms", "score",
     ),
     "auth_failures": ("event_id", "ts", "reason", "lookup_id"),
     "spans": (

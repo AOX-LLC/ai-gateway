@@ -20,12 +20,17 @@ from ai_gateway.auth.middleware import BearerAuthMiddleware
 from ai_gateway.auth.throttle import LoginThrottle, ThrottleConfig
 from ai_gateway.auth.verifier import TokenVerifier
 from ai_gateway.pipeline.config import load_pipeline_config
+from ai_gateway.pipeline.crosscheck import check_policy_files
 from ai_gateway.pipeline.layers.allowlist import load_allowlist
+from ai_gateway.pipeline.layers.canary import load_canary_config
+from ai_gateway.pipeline.layers.egress import load_egress_config
 from ai_gateway.pipeline.layers.rate_limit import load_rate_limits
+from ai_gateway.pipeline.pins import load_tool_pins
 from ai_gateway.pipeline.registry import LAYER_ORDER
 from ai_gateway.pipeline.runner import Pipeline
 from ai_gateway.policy.approvals import expire_due_forever
 from ai_gateway.policy.audit import PostgresAuditRecorder
+from ai_gateway.policy.roles import load_roles_by_action
 from ai_gateway.policy.runtime import build_approvals, build_audit
 from ai_gateway.proxy.catalog import Catalog
 from ai_gateway.proxy.http import ProtocolVersionGuard, SessionAdmission, SessionCleanup
@@ -69,13 +74,29 @@ def create_app(settings: GatewaySettings, events: EventSink | None = None) -> Fa
         event_sink = FanOutEventSink([("postgres", telemetry.sink)], event_sink)
     pipeline_config = load_pipeline_config(settings.pipeline_file, LAYER_ORDER)
     approvals = build_approvals(settings)
+    pins = load_tool_pins(settings.tool_pins_file)
+    allowlist = load_allowlist(settings.allowlist_file)
+    rate_limits = load_rate_limits(settings.rate_limits_file)
+    check_policy_files(
+        pins,
+        allowlist=allowlist,
+        rate_limits=rate_limits,
+        approval_tools=(
+            load_roles_by_action(settings.approval_roles_file)
+            if settings.policy_database_url is not None
+            else ()
+        ),
+    )
     pipeline = Pipeline.build(
         pipeline_config,
         event_sink,
         audit=audit,
         approvals=approvals[0] if approvals else None,
-        allowlist=load_allowlist(settings.allowlist_file),
-        rate_limits=load_rate_limits(settings.rate_limits_file),
+        allowlist=allowlist,
+        rate_limits=rate_limits,
+        pins=pins,
+        egress=load_egress_config(settings.egress_file),
+        canaries=load_canary_config(settings.canaries_file),
     )
     if telemetry is not None:
         telemetry.buffer.put(

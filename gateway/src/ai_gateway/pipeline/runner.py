@@ -21,10 +21,16 @@ from opentelemetry.context import Context
 from opentelemetry.trace import Span
 from pydantic import JsonValue
 
+from ai_gateway.pipeline.alerts import Alerts
 from ai_gateway.pipeline.config import PipelineConfig
 from ai_gateway.pipeline.layers.allowlist import AllowlistLayer, AllowlistRule
 from ai_gateway.pipeline.layers.approval import ApprovalLayer
+from ai_gateway.pipeline.layers.canary import CanaryConfig, CanaryLayer
+from ai_gateway.pipeline.layers.egress import EgressConfig, EgressLayer
+from ai_gateway.pipeline.layers.pinned import PinnedDescriptionsLayer
 from ai_gateway.pipeline.layers.rate_limit import RateLimitLayer, RateLimits
+from ai_gateway.pipeline.layers.schema import SchemaLayer
+from ai_gateway.pipeline.pins import ToolPins
 from ai_gateway.pipeline.registry import LAYER_ORDER
 from ai_gateway.pipeline.types import (
     BaseLayer,
@@ -98,6 +104,7 @@ class LayerDecision:
     code: str | None = None
     tools_removed: int | None = None
     duration_ms: float = 0.0
+    score: int | None = None
 
     def to_payload(self) -> dict[str, JsonValue]:
         payload: dict[str, JsonValue] = {
@@ -111,6 +118,8 @@ class LayerDecision:
             payload["code"] = self.code
         if self.tools_removed is not None:
             payload["tools_removed"] = self.tools_removed
+        if self.score is not None:
+            payload["score"] = self.score
         return payload
 
 
@@ -157,7 +166,12 @@ class Pipeline:
         approvals: ApprovalGate | None = None,
         allowlist: Sequence[AllowlistRule] = (),
         rate_limits: RateLimits | None = None,
+        pins: ToolPins | None = None,
+        egress: EgressConfig | None = None,
+        canaries: CanaryConfig | None = None,
     ) -> "Pipeline":
+        alerts = Alerts(audit)
+
         def make(layer_class: type[BaseLayer]) -> BaseLayer:
             if issubclass(layer_class, ApprovalLayer):
                 return layer_class(approvals)
@@ -165,6 +179,14 @@ class Pipeline:
                 return layer_class(allowlist)
             if issubclass(layer_class, RateLimitLayer):
                 return layer_class(rate_limits)
+            if issubclass(layer_class, SchemaLayer):
+                return layer_class(pins)
+            if issubclass(layer_class, PinnedDescriptionsLayer):
+                return layer_class(pins, alerts)
+            if issubclass(layer_class, EgressLayer):
+                return layer_class(egress)
+            if issubclass(layer_class, CanaryLayer):
+                return layer_class(canaries, alerts)
             return layer_class()
 
         layers = [make(layer_class) for layer_class in layer_order]
@@ -346,16 +368,31 @@ class Pipeline:
             details["approval_id"] = verdict.approval_id
 
         if not isinstance(verdict, Deny):
-            decisions.append(LayerDecision(layer.name, hook, mode, "allow", duration_ms=elapsed_ms))
+            decisions.append(
+                LayerDecision(
+                    layer.name, hook, mode, "allow", duration_ms=elapsed_ms, score=verdict.score
+                )
+            )
             return None
         code_value = verdict.code.value
         if mode is LayerMode.MONITOR:
             decisions.append(
-                LayerDecision(layer.name, hook, mode, "would_block", code_value, None, elapsed_ms)
+                LayerDecision(
+                    layer.name,
+                    hook,
+                    mode,
+                    "would_block",
+                    code_value,
+                    None,
+                    elapsed_ms,
+                    verdict.score,
+                )
             )
             return None
         decisions.append(
-            LayerDecision(layer.name, hook, mode, "deny", code_value, None, elapsed_ms)
+            LayerDecision(
+                layer.name, hook, mode, "deny", code_value, None, elapsed_ms, verdict.score
+            )
         )
         return layer.name, verdict
 

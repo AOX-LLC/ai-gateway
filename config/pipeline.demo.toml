@@ -5,6 +5,10 @@
 scope = "enforce"
 allowlist = "enforce"
 rate_limit = "monitor"
+schema = "enforce"
+pinned_descriptions = "enforce"
+egress = "enforce"
+canary = "enforce"
 approval = "enforce"
 
 [safety]
