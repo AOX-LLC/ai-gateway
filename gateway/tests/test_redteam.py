@@ -218,8 +218,9 @@ async def test_the_oracle_sees_values_and_canaries_that_landed_and_nothing_else(
 
 
 def test_the_monitor_pipeline_weakens_every_layer_that_may_be_and_keeps_the_floors() -> None:
-    from ai_gateway.pipeline.config import LayerMode, load_pipeline_config
+    from ai_gateway.pipeline.config import load_pipeline_config
     from ai_gateway.pipeline.registry import LAYER_ORDER
+    from ai_gateway.pipeline.types import LayerMode
 
     config = load_pipeline_config(ROOT / "config" / "pipeline.monitor.toml", LAYER_ORDER)
 
