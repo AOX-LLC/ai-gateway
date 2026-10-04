@@ -69,9 +69,12 @@ The ones 09 will notice:
   it writes. A text it judges to be an injection refuses the call. In `replay` mode (the default) it
   answers from recordings, see below.
 - **egress** refuses a write that carries five or more customer values (ids, emails, phone numbers)
-  that the same MCP session read, or ten across the session. **Use one MCP session per message** and
-  open the ticket with the account id (which is exempt) and a summary in your own words, not a paste
-  of the contacts.
+  that **the client** read in the last 30 minutes (in any of its MCP sessions: the ledger is per client,
+  so opening a session per call changes nothing), or ten across one session's writes (that session is
+  then refused every later write), or ten across all the client's writes in the window. Open the ticket
+  with the account id (which is exempt) and a summary in your own words, not a paste of the contacts.
+  A busy client that cites many read values in its tickets will meet the window's limit
+  (`per_window` in `config/egress.toml`): say so, and it is raised for that client's traffic.
 - **canary** refuses any write that carries a decoy value seeded in the data.
 - **schema** refuses arguments that do not fit the tool's published input schema.
 
