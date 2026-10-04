@@ -118,13 +118,19 @@ def seeded_data(config: JudgeConfig | None = None) -> list[CorpusUnit]:
     return units
 
 
+_WRITTEN_SURFACES = (SURFACE_ARGUMENTS, SURFACE_RESULT)
+"""Text a client writes is judged as arguments, and a later read returns it (a ticket's body, a
+comment) and judges it again as a result: both are recorded."""
+
+
 def scenario_writes(config: JudgeConfig) -> list[CorpusUnit]:
     raw = tomllib.loads((ROOT / "scripts" / "scenarios" / "harborline.toml").read_text())
     return [
-        CorpusUnit("scenario", SURFACE_ARGUMENTS, text)
+        CorpusUnit("scenario", surface, text)
         for call in raw["call"]
         if call["tool"] in WRITE_TOOLS
         for text in _units(call["arguments"], config)
+        for surface in _WRITTEN_SURFACES
     ]
 
 
@@ -144,8 +150,9 @@ def simulator_writes(config: JudgeConfig) -> list[CorpusUnit]:
         for step in module.build_plan(seed, calls, writes=True):
             if step.kind == "normal" and (step.tool or "").split("__")[-1] in WRITE_TOOLS:
                 units += [
-                    CorpusUnit("simulator", SURFACE_ARGUMENTS, t)
+                    CorpusUnit("simulator", surface, t)
                     for t in _units(step.arguments, config)
+                    for surface in _WRITTEN_SURFACES
                 ]
     return units
 
