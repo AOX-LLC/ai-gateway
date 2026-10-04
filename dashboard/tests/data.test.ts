@@ -36,7 +36,7 @@ describe("every data function", () => {
     setPool({ connect: async () => ((touched = true), {} as PoolClient) } as never);
     const functions = Object.entries(data);
 
-    expect(functions.map(([name]) => name).sort()).toEqual(["getApprovals", "getCharts", "getClock", "getDecisions", "getKpis"]);
+    expect(functions.map(([name]) => name).sort()).toEqual(["getApprovals", "getCharts", "getClock", "getDecisions", "getKpis", "getUsage"]);
     for (const [name, call] of functions) {
       const fn = call as (...args: unknown[]) => Promise<unknown>;
       for (const bad of [undefined, null, {}, { sid: "forged" }, "session"]) {
@@ -72,7 +72,7 @@ describe("the data module", () => {
       .filter((file) => file.endsWith(".ts") && !["index.ts", "types.ts", "cursor.ts", "ranges.ts", "overview.ts"].includes(file))
       .flatMap((file) => [...readFileSync(`${directory}${file}`, "utf8").matchAll(/export async function (\w+)\(\s*(\w*)/g)].map((m) => [file, m[1]!, m[2]!]));
 
-    expect(readers.length).toBeGreaterThanOrEqual(5);
+    expect(readers.length).toBeGreaterThanOrEqual(6);
     for (const [file, name, firstParameter] of readers) {
       expect(firstParameter, `${name} (${file}) is async, so it reads: it must take the session first`).toBe("session");
       expect(index, `${name} (${file}) must be exported from lib/data/index.ts`).toContain(name);

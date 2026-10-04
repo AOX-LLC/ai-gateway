@@ -1238,8 +1238,10 @@ wrong-typed session before the database is touched, so a function added without 
 
 ### Panels and refresh
 
-Each panel has loading, empty, error and (for tokens and cost, which start with the injection
-classifier in Phase 4) not-active states, and status is always an icon and words, never colour alone.
+Each panel has loading, empty, error and stale states, and status is always an icon and words, never
+colour alone. The tokens and cost panels read `telemetry.dash_model_usage` (`lib/data/usage.ts`) and
+keep replayed cost apart from billed cost: a `replay` row is labelled "replayed, not billed" and is
+never added into a billed figure; calls replay had no recording for are counted as unclassified.
 The page is rendered on the server with the data, then refreshed every 15 seconds from `/api/live`
 while the tab is visible: it stops when the tab is hidden and refreshes at once on return after a gap,
 and a failed refresh keeps the last good data on screen with its age. The decisions are paged by

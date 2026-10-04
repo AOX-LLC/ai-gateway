@@ -4,3 +4,4 @@ export { getCharts } from "./charts";
 export { getClock } from "./clock";
 export { getDecisions } from "./decisions";
 export { getKpis } from "./kpis";
+export { getUsage } from "./usage";

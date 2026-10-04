@@ -40,3 +40,15 @@ export function words(code: string): string {
   const text = code.replaceAll("_", " ");
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
+
+const compact = new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 });
+
+/** Chart axis labels: 1,200,000 -> "1.2M". */
+export const formatCompact = (value: number): string => compact.format(value);
+
+/** Dollars at the precision a model call's cost needs: "$0.0123", "$12.40", "$0.00". */
+export function formatUsd(value: number): string {
+  if (value === 0) return "$0.00";
+  if (value < 1) return `$${value.toFixed(4)}`;
+  return `$${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}

@@ -4,13 +4,13 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { clock, windowLabel } from "@/lib/format";
 import { RANGES, type Range } from "@/lib/data/ranges";
-import type { Approvals, Charts, DecisionsPage, Kpis, Overview, Result } from "@/lib/data/types";
+import type { Approvals, Charts, DecisionsPage, Kpis, Overview, Result, Usage } from "@/lib/data/types";
 import { ApprovalsPanel } from "./ApprovalsPanel";
 import { ChartsSection } from "./charts/ChartsSection";
 import { type DecisionsView, DecisionsPanel } from "./DecisionsPanel";
 import { Icon } from "./Icon";
 import { KpiTiles } from "./KpiTiles";
-import { NotActive } from "./States";
+import { UsagePanel } from "./UsagePanel";
 
 /** The overview as it refreshes: every 15 seconds while the tab is visible, straight away when it
  * becomes visible again after a gap, and never while it is hidden. A refresh that fails keeps the
@@ -35,6 +35,7 @@ export function LiveOverview({ initial, range }: { initial: Overview; range: Ran
   const [kpis, setKpis] = useState<Panel<Kpis>>(() => start(initial.kpis, initial.at));
   const [charts, setCharts] = useState<Panel<Charts>>(() => start(initial.charts, initial.at));
   const [approvals, setApprovals] = useState<Panel<Approvals>>(() => start(initial.approvals, initial.at));
+  const [usage, setUsage] = useState<Panel<Usage>>(() => start(initial.usage, initial.at));
   const [live, setLive] = useState<Panel<DecisionsPage>>(() => start(initial.decisions, initial.at));
   const [updatedAt, setUpdatedAt] = useState(initial.at);
   // Older pages are fetched on request; page 0 is the live one that the refresh keeps current.
@@ -65,6 +66,7 @@ export function LiveOverview({ initial, range }: { initial: Overview; range: Ran
       setKpis((p) => next(p, overview.kpis, overview.at));
       setCharts((p) => next(p, overview.charts, overview.at));
       setApprovals((p) => next(p, overview.approvals, overview.at));
+      setUsage((p) => next(p, overview.usage, overview.at));
       setLive((p) => (indexRef.current === 0 ? next(p, overview.decisions, overview.at) : p));
       setUpdatedAt(overview.at);
     } catch {
@@ -73,6 +75,7 @@ export function LiveOverview({ initial, range }: { initial: Overview; range: Ran
       setKpis(failed);
       setCharts(failed);
       setApprovals(failed);
+      setUsage(failed);
       setLive(failed);
     }
   }, [range, router]);
@@ -173,11 +176,7 @@ export function LiveOverview({ initial, range }: { initial: Overview; range: Ran
           loading={false}
         />
       </div>
-      <section aria-label="Tokens and cost">
-        <NotActive title="Tokens and cost: not active yet">
-          Token counts and model cost start with the injection classifier in Phase 4. Until a model is called there is nothing to count.
-        </NotActive>
-      </section>
+      <UsagePanel usage={usage.data} error={usage.error} stale={usage.stale} since={usage.since ? clock(usage.since) : null} />
     </>
   );
 }
