@@ -48,6 +48,10 @@ LAYERS = [
     ("scope", "enforce"),
     ("allowlist", "enforce"),
     ("rate_limit", "monitor"),
+    ("schema", "enforce"),
+    ("pinned_descriptions", "enforce"),
+    ("egress", "enforce"),
+    ("canary", "enforce"),
     ("approval", "enforce"),
 ]
 """The demo pipeline: rate limiting in monitor mode, so the dashboard has "would block" to show."""
@@ -390,6 +394,11 @@ def _call(
                     "would_block" if burst and rng.random() < 0.6 else "allow",
                     "rate_limited" if burst else None,
                 )
+            )
+            # The injection layers pass the demo's honest traffic (it has no attack for them yet).
+            verdicts.extend(
+                (layer, "allow", None)
+                for layer in ("schema", "pinned_descriptions", "egress", "canary")
             )
             if effect == "write" and rng.random() < 0.45:
                 blocked_by, deny_code = "approval", "approval_pending"

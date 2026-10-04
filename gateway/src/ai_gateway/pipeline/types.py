@@ -13,6 +13,10 @@ from mcp.types import CallToolResult, Tool
 
 from ai_gateway.text import printable
 
+POLICY_BLOCK_MESSAGE = "Request blocked by gateway policy."
+"""What a client is told when a layer refuses a call: it never names the layer or echoes arguments.
+One constant, so every layer says exactly the same thing."""
+
 Effect = Literal["read", "write"]
 """Whether a tool only reads or may change something. Decided by the gateway's reviewed
 policy, never by the upstream's own annotations."""
@@ -40,6 +44,14 @@ class DenyCode(StrEnum):
     APPROVAL_REJECTED = "approval_rejected"
     APPROVAL_EXPIRED = "approval_expired"
     APPROVAL_UNAVAILABLE = "approval_unavailable"
+    SCHEMA_VIOLATION = "schema_violation"
+    PIN_DRIFT = "pin_drift"
+    PIN_UNPINNED = "pin_unpinned"
+    EGRESS_BULK = "egress_bulk"
+    EGRESS_MARKER = "egress_marker"
+    EGRESS_STATE_LOST = "egress_state_lost"
+    CANARY_HIT = "canary_hit"
+    CANARY_UNCHECKABLE = "canary_uncheckable"
 
 
 class Disposition(StrEnum):
@@ -56,6 +68,9 @@ class Disposition(StrEnum):
 class Allow:
     approval_id: str | None = None
     """The approval this call used, for the record."""
+    score: int | None = None
+    """A layer's own count for the record (matches found, violations), never content. Kept for an
+    allowed call too, so a layer in monitor mode shows how close calls come to its limit."""
 
 
 @dataclass(frozen=True)
@@ -66,6 +81,8 @@ class Deny:
     disposition: Disposition = Disposition.BLOCK
     approval_id: str | None = None
     """The approval request behind this verdict, when there is one: it is the client's receipt."""
+    score: int | None = None
+    """A layer's own count for the record (matches found, violations), never content."""
 
 
 Verdict = Allow | Deny
@@ -126,6 +143,21 @@ class CatalogTool:
 
 
 @dataclass(frozen=True)
+class ToolDefinition:
+    """What the gateway offered the client for a tool when the call was made: its description
+    and input schema, as the catalog holds them. Pinned descriptions compare it with the pin."""
+
+    description: str
+    input_schema_json: str = field(repr=False)
+    """Canonical JSON of the tool's input schema."""
+
+    @property
+    def input_schema(self) -> dict[str, Any]:
+        parsed: dict[str, Any] = json.loads(self.input_schema_json)
+        return parsed
+
+
+@dataclass(frozen=True)
 class ToolCall:
     """A tools/call request. The arguments are held as canonical JSON, so no layer can
     change them in place: what the last layer saw is exactly what is forwarded."""
@@ -138,6 +170,9 @@ class ToolCall:
     effect_source: EffectSource = "default"
     upstream_identity: str = ""
     """Which upstream this call goes to (`UpstreamServer.identity`). An approval is bound to it."""
+    definition: ToolDefinition | None = None
+    """The tool as the catalog offers it now. None only in a unit test's hand-made call: the
+    layers that read it treat a call without one as unverifiable."""
 
     @classmethod
     def create(
@@ -149,6 +184,7 @@ class ToolCall:
         effect: Effect = "write",
         effect_source: EffectSource = "default",
         upstream_identity: str = "",
+        definition: ToolDefinition | None = None,
     ) -> "ToolCall":
         canonical = json.dumps(arguments, sort_keys=True, separators=(",", ":"))
         return cls(
@@ -159,6 +195,7 @@ class ToolCall:
             effect,
             effect_source,
             upstream_identity,
+            definition,
         )
 
     @property

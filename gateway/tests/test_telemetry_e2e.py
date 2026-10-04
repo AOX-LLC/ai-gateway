@@ -141,6 +141,10 @@ async def test_requests_layers_spans_and_auth_failures_are_stored_without_a_trac
             ("scope",),
             ("allowlist",),
             ("rate_limit",),
+            ("schema",),
+            ("pinned_descriptions",),
+            ("egress",),
+            ("canary",),
             ("approval",),
         ]
 

@@ -1,0 +1,10 @@
+# Canary values seeded in the fictional Harborline data, as the canary layer knows them.
+# The file holds names and SHA-256 hashes of the squeezed values, never the values. The shipped
+# canaries are public (they are in the data seeds in this repository); a real deployment makes its own.
+# Harborline Supply Co. is fictional.
+
+shape = "CNRYHBL[0-9A-F]{8}"
+
+[canaries]
+crm-account-about = "f2af29ebf1f1e0266d5f7b1b0adf20e2242771322d2c99d5238969937b17089d"
+tickets-description = "a9df47f5d0a96e0311357da3af41057180ac21af36d39ce5fb6e46b75375e061"

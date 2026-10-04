@@ -21,6 +21,7 @@ dev = [
     "handbook-server",
     "harborline-setup",
     "types-pyyaml>=6",
+    "types-jsonschema>=4",
 ]
 
 [tool.uv]

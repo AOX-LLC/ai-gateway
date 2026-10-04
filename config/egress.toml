@@ -1,0 +1,27 @@
+# What the egress layer counts as data read in a session, and how much of it a write may carry.
+# See gateway/src/ai_gateway/pipeline/layers/egress.py. Harborline Supply Co. is fictional.
+
+[limits]
+per_write = 5        # distinct values read in this session that one write may carry
+per_session = 10     # ... across all of the session's writes (the same copy, dripped out)
+
+[memory]
+max_sessions = 1000
+max_values_per_session = 2000
+max_values_total = 200000
+
+[values]
+identifier_patterns = ["ACC-[0-9]{5}", "CON-[0-9]{5}", "DEAL-[0-9]{5}", "TKT-[0-9]{6}"]
+emails = true
+phone_pattern = "555-01[0-9]{2}"
+
+[markers]
+# Internal-only values never leave: a write carrying one is refused whatever the session read.
+internal = ["[INTERNAL-ONLY]"]
+
+[exempt]
+# The record a write is *about* is not counted as data copied out.
+"tickets__create_ticket" = ["account_id"]
+"tickets__add_comment" = ["ticket_id"]
+"tickets__change_status" = ["ticket_id"]
+"tickets__assign" = ["ticket_id"]

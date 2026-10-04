@@ -1,0 +1,525 @@
+# The reviewed description and input schema of every tool the gateway offers, pinned.
+# A tool that is not here, or whose definition no longer matches, is hidden and refused
+# by the pinned_descriptions layer. Written by scripts/generate_tool_pins.py: review it.
+# Harborline Supply Co. is fictional.
+
+[tools."crm__get_account"]
+sha256 = "b2cc0015be76fc003cb56a32a3055d44466b5efbe0134d780e8ff895ad1b1eb2"
+description = "Get one account with its contacts, its 10 newest activity notes and the total number of notes."
+input_schema = '''
+{
+  "additionalProperties": false,
+  "properties": {
+    "account_id": {
+      "maxLength": 9,
+      "pattern": "^ACC-[0-9]{5}$",
+      "title": "Account Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "account_id"
+  ],
+  "title": "GetAccountInput",
+  "type": "object"
+}
+'''
+
+[tools."crm__list_deals"]
+sha256 = "dadf6476b98fe8fd75cb47455916664d4357376923c719205c6866855152eb31"
+description = "List deals, newest close date first, optionally for one account or in one stage. Amounts are in cents."
+input_schema = '''
+{
+  "additionalProperties": false,
+  "properties": {
+    "account_id": {
+      "anyOf": [
+        {
+          "maxLength": 9,
+          "pattern": "^ACC-[0-9]{5}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Account Id"
+    },
+    "limit": {
+      "default": 10,
+      "maximum": 20,
+      "minimum": 1,
+      "title": "Limit",
+      "type": "integer"
+    },
+    "offset": {
+      "default": 0,
+      "maximum": 10000,
+      "minimum": 0,
+      "title": "Offset",
+      "type": "integer"
+    },
+    "stage": {
+      "anyOf": [
+        {
+          "enum": [
+            "prospecting",
+            "proposal",
+            "negotiation",
+            "won",
+            "lost"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Stage"
+    }
+  },
+  "title": "ListDealsInput",
+  "type": "object"
+}
+'''
+
+[tools."crm__search_accounts"]
+sha256 = "0a3d92029f0b1a7b00ae7762129a71c06b364ca912facba3a39023e46a8daad6"
+description = "Search accounts by words in the name, industry or description, optionally narrowed by tier or region. Returns up to 20 summaries; use offset to reach more."
+input_schema = '''
+{
+  "additionalProperties": false,
+  "properties": {
+    "limit": {
+      "default": 10,
+      "maximum": 20,
+      "minimum": 1,
+      "title": "Limit",
+      "type": "integer"
+    },
+    "offset": {
+      "default": 0,
+      "maximum": 10000,
+      "minimum": 0,
+      "title": "Offset",
+      "type": "integer"
+    },
+    "query": {
+      "maxLength": 100,
+      "minLength": 2,
+      "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*$",
+      "title": "Query",
+      "type": "string"
+    },
+    "region": {
+      "anyOf": [
+        {
+          "enum": [
+            "northeast",
+            "mid-atlantic",
+            "southeast",
+            "great-lakes",
+            "gulf-coast",
+            "pacific-northwest"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Region"
+    },
+    "tier": {
+      "anyOf": [
+        {
+          "enum": [
+            "bronze",
+            "silver",
+            "gold"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Tier"
+    }
+  },
+  "required": [
+    "query"
+  ],
+  "title": "SearchAccountsInput",
+  "type": "object"
+}
+'''
+
+[tools."echo__say"]
+sha256 = "d88e0485dd4767732e5e0c88925be766caeb0d952339e1a5cf8f3f32c56a09de"
+description = "Return the text unchanged."
+input_schema = '''
+{
+  "properties": {
+    "text": {
+      "title": "Text",
+      "type": "string"
+    }
+  },
+  "required": [
+    "text"
+  ],
+  "title": "sayArguments",
+  "type": "object"
+}
+'''
+
+[tools."echo__shout"]
+sha256 = "788b26a6ae419b8904ad5ea88b1b170f7fe873187fd134f80fe215c968e4f7a3"
+description = "Return the text in upper case."
+input_schema = '''
+{
+  "properties": {
+    "text": {
+      "title": "Text",
+      "type": "string"
+    }
+  },
+  "required": [
+    "text"
+  ],
+  "title": "shoutArguments",
+  "type": "object"
+}
+'''
+
+[tools."echo__wait"]
+sha256 = "e3954853d23ebc8f242d2650754b0dcbad53cd78192fae422ebe6e34c161c4b7"
+description = "Sleep for the given number of seconds, then return 'done'."
+input_schema = '''
+{
+  "properties": {
+    "seconds": {
+      "title": "Seconds",
+      "type": "number"
+    }
+  },
+  "required": [
+    "seconds"
+  ],
+  "title": "waitArguments",
+  "type": "object"
+}
+'''
+
+[tools."handbook__get_document"]
+sha256 = "d49e5583751895ca91e39f0adbc8fda138835029bdc611b517d62a4aaa2abfd3"
+description = "Get one handbook document by id (for example DOC-001): its title, category, date and full text. If it has been superseded, superseded_by names the current edition."
+input_schema = '''
+{
+  "additionalProperties": false,
+  "properties": {
+    "document_id": {
+      "maxLength": 7,
+      "pattern": "^DOC-[0-9]{3}$",
+      "title": "Document Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "document_id"
+  ],
+  "title": "GetDocumentInput",
+  "type": "object"
+}
+'''
+
+[tools."handbook__search"]
+sha256 = "15c7d7601819098568b17e92a61e4a31c0d714bfdfbe2a4637e5f072ff8ad739"
+description = "Search the handbook by meaning and keywords, optionally within one category. Returns up to 10 current documents, each with its best-matching passage, best first."
+input_schema = '''
+{
+  "additionalProperties": false,
+  "properties": {
+    "category": {
+      "anyOf": [
+        {
+          "enum": [
+            "hr",
+            "returns",
+            "shipping",
+            "security",
+            "expenses"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Category"
+    },
+    "limit": {
+      "default": 5,
+      "maximum": 10,
+      "minimum": 1,
+      "title": "Limit",
+      "type": "integer"
+    },
+    "query": {
+      "maxLength": 200,
+      "minLength": 2,
+      "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*$",
+      "title": "Query",
+      "type": "string"
+    }
+  },
+  "required": [
+    "query"
+  ],
+  "title": "SearchInput",
+  "type": "object"
+}
+'''
+
+[tools."tickets__add_comment"]
+sha256 = "bd841e51c9a1855e56126ff6e71d34509ce54f88cee2730acd842773902a8655"
+description = "Add a public comment to a ticket."
+input_schema = '''
+{
+  "additionalProperties": false,
+  "properties": {
+    "body": {
+      "maxLength": 2000,
+      "minLength": 1,
+      "title": "Body",
+      "type": "string"
+    },
+    "ticket_id": {
+      "maxLength": 10,
+      "pattern": "^TKT-[0-9]{6}$",
+      "title": "Ticket Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "ticket_id",
+    "body"
+  ],
+  "title": "AddCommentInput",
+  "type": "object"
+}
+'''
+
+[tools."tickets__assign"]
+sha256 = "eeb0f3c8b89b762a96cf8e9c906a21c657585f76691c6e91e31031a8f218715b"
+description = "Assign a ticket to a staff member by handle."
+input_schema = '''
+{
+  "additionalProperties": false,
+  "properties": {
+    "assignee": {
+      "maxLength": 40,
+      "pattern": "^[a-z]+\\.[a-z]+$",
+      "title": "Assignee",
+      "type": "string"
+    },
+    "ticket_id": {
+      "maxLength": 10,
+      "pattern": "^TKT-[0-9]{6}$",
+      "title": "Ticket Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "ticket_id",
+    "assignee"
+  ],
+  "title": "AssignInput",
+  "type": "object"
+}
+'''
+
+[tools."tickets__change_status"]
+sha256 = "37c9f100e76faa72364a97b518f076912b13c2acc92f7e78fd8c008c9e62ed21"
+description = "Set a ticket's status."
+input_schema = '''
+{
+  "additionalProperties": false,
+  "properties": {
+    "status": {
+      "enum": [
+        "open",
+        "pending",
+        "resolved",
+        "closed"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "ticket_id": {
+      "maxLength": 10,
+      "pattern": "^TKT-[0-9]{6}$",
+      "title": "Ticket Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "ticket_id",
+    "status"
+  ],
+  "title": "ChangeStatusInput",
+  "type": "object"
+}
+'''
+
+[tools."tickets__create_ticket"]
+sha256 = "f5a35008959a7377839bdf76bd32b70f7de780c4c948d4b70d8f1210f652530b"
+description = "Open a new support ticket for an account."
+input_schema = '''
+{
+  "additionalProperties": false,
+  "properties": {
+    "account_id": {
+      "maxLength": 9,
+      "pattern": "^ACC-[0-9]{5}$",
+      "title": "Account Id",
+      "type": "string"
+    },
+    "description": {
+      "maxLength": 4000,
+      "minLength": 1,
+      "title": "Description",
+      "type": "string"
+    },
+    "priority": {
+      "default": "normal",
+      "enum": [
+        "low",
+        "normal",
+        "high",
+        "urgent"
+      ],
+      "title": "Priority",
+      "type": "string"
+    },
+    "subject": {
+      "maxLength": 120,
+      "minLength": 3,
+      "title": "Subject",
+      "type": "string"
+    }
+  },
+  "required": [
+    "subject",
+    "description",
+    "account_id"
+  ],
+  "title": "CreateTicketInput",
+  "type": "object"
+}
+'''
+
+[tools."tickets__get_ticket"]
+sha256 = "093c025ce1a733771d341a61ec494a23f63dd0818958e25769047ce16750e205"
+description = "Get one ticket with its newest public comments (at most 20) and the total number of them."
+input_schema = '''
+{
+  "additionalProperties": false,
+  "properties": {
+    "ticket_id": {
+      "maxLength": 10,
+      "pattern": "^TKT-[0-9]{6}$",
+      "title": "Ticket Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "ticket_id"
+  ],
+  "title": "GetTicketInput",
+  "type": "object"
+}
+'''
+
+[tools."tickets__list_tickets"]
+sha256 = "c04a75611fe578c5cf071cb5b9eb3bccae5367e3244e5cb09e64b2e9c6ee1709"
+description = "List support tickets, newest activity first, optionally filtered by status, priority or account. Use offset to reach older ones."
+input_schema = '''
+{
+  "additionalProperties": false,
+  "properties": {
+    "account_id": {
+      "anyOf": [
+        {
+          "maxLength": 9,
+          "pattern": "^ACC-[0-9]{5}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Account Id"
+    },
+    "limit": {
+      "default": 10,
+      "maximum": 20,
+      "minimum": 1,
+      "title": "Limit",
+      "type": "integer"
+    },
+    "offset": {
+      "default": 0,
+      "maximum": 10000,
+      "minimum": 0,
+      "title": "Offset",
+      "type": "integer"
+    },
+    "priority": {
+      "anyOf": [
+        {
+          "enum": [
+            "low",
+            "normal",
+            "high",
+            "urgent"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Priority"
+    },
+    "status": {
+      "anyOf": [
+        {
+          "enum": [
+            "open",
+            "pending",
+            "resolved",
+            "closed"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Status"
+    }
+  },
+  "title": "ListTicketsInput",
+  "type": "object"
+}
+'''

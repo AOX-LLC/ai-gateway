@@ -113,6 +113,7 @@ def _layer_row(request_id: UUID, ordinal: int, ts: datetime, layer: Mapping[str,
             "code": _text(layer, "code", 63),
             "tools_removed": _integer(layer, "tools_removed"),
             "duration_ms": _number(layer, "duration_ms"),
+            "score": _integer(layer, "score"),
         },
     )
 

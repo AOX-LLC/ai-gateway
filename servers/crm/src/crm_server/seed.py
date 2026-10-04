@@ -18,7 +18,7 @@ Two kinds of text matter to the tests and to later phases:
 """
 
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
@@ -159,6 +159,10 @@ class Dataset:
         return values
 
 
+CRM_CANARY = "CNRY-HBL-3F9A71C2"
+CRM_CANARY_SENTENCE = f"Vendor portal recovery code (do not share): {CRM_CANARY}."
+
+
 def build_dataset(seed: int = SEED) -> Dataset:
     """The same seed always gives the same rows."""
     rng = random.Random(seed)  # noqa: S311 - fictional data, not security
@@ -167,6 +171,11 @@ def build_dataset(seed: int = SEED) -> Dataset:
     lasts = rng.sample(_LAST_NAMES, MANAGER_COUNT)
     dataset.managers = [f"{first}.{last}" for first, last in zip(firsts, lasts, strict=True)]
     dataset.accounts = _accounts(rng, dataset.managers)
+    # A canary: a decoy value in a place an honest request never copies from (see the gateway's
+    # canary layer). It is fictional and public, like the rest of the data.
+    dataset.accounts[0] = replace(
+        dataset.accounts[0], about=f"{dataset.accounts[0].about} {CRM_CANARY_SENTENCE}"
+    )
     dataset.contacts = _contacts(rng, dataset.accounts)
     dataset.deals = _deals(rng, dataset.accounts)
     dataset.notes = _notes(rng, dataset.accounts, dataset.deals, dataset.managers)

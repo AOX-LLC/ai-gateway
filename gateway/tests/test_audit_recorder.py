@@ -479,3 +479,50 @@ def test_each_kind_of_failure_is_logged_on_its_own_schedule(
 
     assert caplog.text.count("could not be built") == 1
     assert caplog.text.count("write-ahead audit record failed") == 1
+
+
+# --- alerts ----------------------------------------------------------------------------------
+
+
+def test_an_alert_record_holds_the_kind_the_tool_the_client_and_a_hash_or_name_only() -> None:
+    from ai_gateway.policy.audit import alert_audit_event
+
+    event = alert_audit_event(
+        GatewayEvent(
+            action="gateway.alert",
+            actor_id="gateway",
+            subject_id="tickets__create_ticket",
+            payload={
+                "kind": "canary_hit",
+                "tool": "tickets__create_ticket",
+                "client_name": "harborline-ops-bot",
+                "canary": "crm-account-about",
+                "arguments": MARKER,
+                "result": "a result",
+            },
+        )
+    )
+
+    assert event.action == "gateway.alert"
+    assert event.subject_id == "tickets__create_ticket"
+    assert event.payload["canary"] == "crm-account-about"
+    assert MARKER not in event.model_dump_json(), "named fields only: nothing else rides along"
+    assert "a result" not in event.model_dump_json()
+
+
+@pytest.mark.anyio
+async def test_the_recorder_queues_an_alert_like_a_decision_record() -> None:
+    log = FakeLog()
+    recorder = _recorder(log)
+    recorder.record(
+        GatewayEvent(
+            action="gateway.alert",
+            actor_id="gateway",
+            subject_id=None,
+            payload={"kind": "pin_drift", "tool": "x__y", "definition_sha256": "a" * 64},
+        )
+    )
+
+    await recorder.close()
+
+    assert [e.action for e in log.committed] == ["gateway.alert"]

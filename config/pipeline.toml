@@ -1,6 +1,13 @@
 # Pipeline layer modes: enforce | monitor | off. See docs/architecture.md.
+# A layer not named here runs in enforce. Every layer is named so the file says what runs.
 [layers]
 scope = "enforce"
+allowlist = "enforce"
+rate_limit = "enforce"
+schema = "enforce"
+pinned_descriptions = "enforce"
+egress = "enforce"
+canary = "enforce"
 approval = "enforce"
 
 [safety]

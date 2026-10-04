@@ -252,9 +252,9 @@ async def _install(owner_url: str, *, bind: bool | None = None) -> None:
 # What this gateway grants, on its own tables and the audit log for the auditor. The gateway's and
 # the approver's rights on agent-core's tables are the installer's layout.
 _GRANTS = {
-    # It stores the arguments and can never read them back, nor choose when they are purged
-    # (`created_at` is the database's): only these two columns.
-    # And it may ask whether the person behind an approval is still an approver, and nothing more
+    # The gateway's rights on the approvals table are agent-core's requester layout, which includes
+    # reading a request's stored arguments (it must, to return an open request; it had them). It may
+    # also ask whether the person behind an approval is still an approver, and nothing more
     # about them: a removed approver's approval is not used.
     GATEWAY_ROLE: ((ACTIVE_APPROVERS_VIEW, "SELECT"),),
     APPROVER_ROLE: ((APPROVERS_TABLE, "SELECT"),),
@@ -520,7 +520,8 @@ async def _set_up_purger(connection: AsyncConnection, password: str | None) -> N
     it is a member of the approver role (inheriting, without `SET`), made one connection at a time.
 
     It is not an approver: it is mapped to a principal `policy.approvers` does not list, so the
-    gateway will not use a decision it writes and `audit-verify` refuses one. Like the lab role it
+    gateway will use no decision it writes, approval or rejection, and `audit-verify` refuses one
+    (the guard still lets any approver-role login write it). Like the lab role it
     is kept, not dropped and made again (a mapping is for good, by the role's OID), and without the
     password it cannot log in."""
     name = sql.Identifier(PURGER_ROLE)

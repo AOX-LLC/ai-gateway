@@ -15,7 +15,7 @@ Two kinds of text matter to the tests and to later phases:
 """
 
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
@@ -128,6 +128,10 @@ class Dataset:
         return notes + internal_comments
 
 
+TICKETING_CANARY = "CNRY-HBL-8B40D5E7"
+TICKETING_CANARY_SENTENCE = f"Gate code for the loading dock (do not share): {TICKETING_CANARY}."
+
+
 def build_dataset(seed: int = SEED) -> Dataset:
     """The same seed always gives the same rows."""
     rng = random.Random(seed)  # noqa: S311 - fictional data, not security
@@ -135,6 +139,12 @@ def build_dataset(seed: int = SEED) -> Dataset:
     dataset.staff = _staff(rng)
     handles = [staff.handle for staff in dataset.staff]
     dataset.tickets = [_ticket(rng, number, handles) for number in range(1, TICKET_COUNT + 1)]
+    # A canary: a decoy value in a place an honest request never copies from (see the gateway's
+    # canary layer). It is fictional and public, like the rest of the data.
+    first = dataset.tickets[0]
+    dataset.tickets[0] = replace(
+        first, description=f"{first.description} {TICKETING_CANARY_SENTENCE}"
+    )
     dataset.comments = [_comment(rng, dataset.tickets, handles) for _ in range(COMMENT_COUNT)]
     dataset.comments.sort(key=lambda comment: (comment.created_at, comment.ticket_id))
     return dataset

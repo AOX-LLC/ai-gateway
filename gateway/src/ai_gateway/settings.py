@@ -24,6 +24,13 @@ class GatewaySettings(ServiceSettings):
     """Per-client value rules on tool arguments (the allowlist layer)."""
     rate_limits_file: Path = Path("config/rate_limits.toml")
     """Token buckets per client for reads, writes and single tools (the rate limit layer)."""
+    tool_pins_file: Path = Path("config/tool_pins.toml")
+    """The reviewed description and input schema of every tool, pinned by hash (the schema and
+    pinned_descriptions layers). Read once at startup; a mistake stops the gateway starting."""
+    egress_file: Path = Path("config/egress.toml")
+    """What the egress layer counts as data read, and how much of it a write may carry."""
+    canaries_file: Path = Path("config/canaries.toml")
+    """The canary values seeded in the data, as hashes (the canary layer)."""
     session_idle_timeout_s: Annotated[float, Field(gt=0)] = 900.0
     login_failures_per_id: Annotated[int, Field(ge=1)] = 5
     """Failed logins for one token id, within the window, before that id is refused."""

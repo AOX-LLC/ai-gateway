@@ -1,5 +1,6 @@
 """The MCP server clients talk to: tools/list and tools/call, both through the pipeline."""
 
+import json
 import logging
 from typing import Any
 from uuid import UUID, uuid4
@@ -32,6 +33,7 @@ from ai_gateway.pipeline.types import (
     DenyCode,
     Disposition,
     ToolCall,
+    ToolDefinition,
 )
 from ai_gateway.proxy.catalog import Catalog
 from ai_gateway.proxy.sessions import UpstreamCallError, UpstreamSessionPool
@@ -108,6 +110,10 @@ class GatewayServer:
             effect=resolved.tool.effect,
             effect_source=resolved.tool.effect_source,
             upstream_identity=resolved.upstream.identity,
+            definition=ToolDefinition(
+                description=resolved.tool.tool.description or "",
+                input_schema_json=json.dumps(resolved.tool.tool.input_schema, sort_keys=True),
+            ),
         )
 
         async def forward(ctx: CallContext, approved_call: ToolCall) -> UpstreamOutcome:

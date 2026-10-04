@@ -2,12 +2,15 @@
 
 For a write the gateway submits a request for exactly this tool and these arguments (agent-core's
 submit is idempotent: while a request for the same client, tool and arguments is open, pending or
-approved and not yet used, it returns that one), unless a person has already rejected it and the
-rejection has not expired; holds for a decision for 45 s; and answers "pending" if there is none
-yet, so the client retries the same call. When a person has approved, the approval is consumed,
-once, right before the call is forwarded, after the gateway has checked that this client is the
-one who asked (agent-core's consume checks it too; the gate's own check is a second one, and
-fails the call with a log line of its own).
+approved and not yet used, it returns that one), unless an approver has already rejected it and
+the rejection has not expired. Only a decision by an active approver in `policy.approvers` who
+holds the role the request needs counts, a rejection as much as an approval: the guard lets any
+login in the approver role decide, the payload purge's included, and one that is no approver here
+must not be able to refuse or approve anything. The gate holds a pending request for a decision for
+45 s and answers "pending" if there is none yet, so the client retries the same call. When a
+person has approved, the approval is consumed, once, right before the call is forwarded, after the
+gateway has checked that this client is the one who asked (agent-core's consume checks it too;
+the gate's own check is a second one, and fails the call with a log line of its own).
 
 The arguments a person approves are stored with the request itself (`include_payload`), so the
 approver sees what the call really says and the request's hash binds it. It is the one place the
@@ -141,6 +144,18 @@ class PostgresApprovalGate:
                     del self._holding[requester.id]
 
         if request.status is ApprovalStatus.REJECTED:
+            # A rejection counts only from an active approver who holds the role the request
+            # needed, exactly as an approval does: the guard lets any login in the approver role
+            # decide (the payload purge's too), and one that is no approver here must not be able
+            # to deny every client's writes. An unqualified one is logged and refused as
+            # unavailable; the next call finds no standing rejection and asks afresh.
+            if not await self._decided_by_an_active_approver(request, "reject"):
+                logger.error(
+                    "approval %s was rejected by someone who is not an active approver with the"
+                    " role it needed: not honoured",
+                    approval_id,
+                )
+                return ApprovalDecision(ApprovalOutcome.UNAVAILABLE, approval_id)
             return ApprovalDecision(ApprovalOutcome.REJECTED, approval_id)
         if request.status is ApprovalStatus.PENDING:
             if request.is_expired(self._clock()):
@@ -178,7 +193,7 @@ class PostgresApprovalGate:
         if request.requested_by != requester.id:
             logger.error("approval %s was asked for by another client; refused", approval_id)
             return ApprovalDecision(ApprovalOutcome.UNAVAILABLE, approval_id)
-        if not await self._decided_by_an_active_approver(request):
+        if not await self._decided_by_an_active_approver(request, "approve"):
             logger.error(
                 "approval %s was decided by someone who may no longer approve", approval_id
             )
@@ -216,7 +231,7 @@ class PostgresApprovalGate:
         decided it, it is withdrawn and asked afresh; if a person approved it, it is used as it is,
         since consuming checks the tool, the arguments and the requester, not the summary."""
         rejected = await self._find_rejected(requester.id, payload_hash)
-        if rejected is not None:
+        if rejected is not None and await self._decided_by_an_active_approver(rejected, "reject"):
             return rejected
         for attempt in range(2):
             try:
@@ -239,9 +254,10 @@ class PostgresApprovalGate:
                 )
         return None
 
-    async def _decided_by_an_active_approver(self, request: ApprovalRequest) -> bool:
-        """The decision was written by the login of an approver who is still active and holds the
-        role the request needed, and the request says that approver decided it.
+    async def _decided_by_an_active_approver(self, request: ApprovalRequest, decision: str) -> bool:
+        """The decision (`approve` or `reject`) was written by the login of an approver who is
+        still active and holds the role the request needed, and the request says that approver
+        decided it.
 
         Who wrote the decision is the database's word (`db_role`, set by a trigger); `resolved_by`
         is whatever the deciding tool put there, so the two must agree, or a login could approve in
@@ -255,9 +271,14 @@ class PostgresApprovalGate:
                 f" JOIN policy.{ACTIVE_APPROVERS_VIEW} a ON a.db_role = e.db_role"
                 " WHERE e.action = 'approval.resolved' AND e.subject_id = ?"
                 " AND e.actor_id = a.principal AND a.principal = ?"
-                ' AND ? = ANY(a.roles) AND e.payload LIKE \'%"decision":"approve"%\''
+                " AND ? = ANY(a.roles) AND e.payload LIKE ?"
                 " LIMIT 1",
-                (str(request.id), request.resolved_by, request.required_role),
+                (
+                    str(request.id),
+                    request.resolved_by,
+                    request.required_role,
+                    f'%"decision":"{decision}"%',
+                ),
             )
             return rows
 
