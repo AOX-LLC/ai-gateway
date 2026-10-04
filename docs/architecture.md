@@ -943,8 +943,10 @@ the rate limits and the egress ledger live in its memory) and runs in CI after t
 so a session that has tried a bulk copy is refused every later write that carries anything it read. The
 canary-bearing write therefore comes first (egress has nothing against it yet, so the canary layer is
 the one that stops it), then the bulk copy, then the drip, which the session's own tally now stops from
-its first write. That is also what a refused attempt costs an honest session: after one bulk attempt, no
-write of that session that cites a value it read goes through.
+its first write. That is also what a refused attempt costs an honest session: after one bulk attempt,
+no write of that session goes through, whatever it carries (the session is quarantined, and a new
+session starts clean). It is a choice: a session that tried a bulk copy is suspect, and a write in its
+own words or in a spelling the patterns miss is how it would carry on.
 
 **What the test does not show** (and what gatekeeper pass 2 was asked to examine): a client that reads in
 one MCP session and writes in another (the second session's ledger is empty); a drip with no bulk

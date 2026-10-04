@@ -4,9 +4,11 @@ Detection. After every read the layer notes, per MCP session, which *values* the
 record identifiers (ACC-00001), email addresses and phone numbers (the patterns are configuration).
 A write is refused when its arguments carry too many distinct values the same session read: five in
 one write (a bulk copy of customer records), or ten across the session's writes (the same copy
-dripped out a few at a time). A write that carries an internal-only marker (`[INTERNAL-ONLY]`) is
-refused whatever the session read, since a marker has no honest use outside the system. The record a
-tool acts on (a ticket id the call is *about*) is exempt per tool, so an ops bot working through a
+dripped out a few at a time). A refused attempt still counts, so a session that has reached the
+tally of ten is quarantined: every later write in it is refused, whatever it carries. A write that
+carries an internal-only marker (`[INTERNAL-ONLY]`) is refused whatever the session read, since a
+marker has no honest use outside the system. The record a tool acts on (a ticket id the call is
+*about*) is exempt per tool, so an ops bot working through a
 list is not counted for naming each ticket once.
 
 What the gateway keeps. Never arguments or results, and nothing on disk, in the database or in
@@ -284,12 +286,14 @@ class EgressLayer(BaseLayer):
         for fingerprint in list(new)[: max(room, 0)]:
             ledger.egressed.add(fingerprint)
             self._total += 1
-        # A session that has reached the tally is refused the writes that carry what it read, and
-        # only those: a write that carries none of it (a status change, a ticket in the writer's
-        # own words) is not what the tally counts, and a refused attempt must not lock an honest
-        # session out of everything.
-        if len(copied) >= self._config.per_write or (
-            copied and len(ledger.egressed) >= self._config.per_session
+        # A session that has reached the tally is quarantined: every later write is refused, even
+        # one that carries nothing it read. A session that tried a bulk copy is suspect, and a
+        # write in the writer's own words, or in a spelling the patterns do not match, is how it
+        # would carry on. (It costs an honest agent that was talked into one attempt the rest of
+        # its session's writes; a new session starts clean.)
+        if (
+            len(copied) >= self._config.per_write
+            or len(ledger.egressed) >= self._config.per_session
         ):
             return Deny(
                 DenyCode.EGRESS_BULK,

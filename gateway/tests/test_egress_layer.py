@@ -338,12 +338,11 @@ async def test_a_result_too_large_to_scan_marks_the_session_so_writes_with_value
     assert isinstance(verdict, Deny)
 
 
-async def test_a_session_at_its_tally_is_refused_writes_that_carry_what_it_read_and_no_others() -> (
-    None
-):
-    """A refused attempt still counts, so one bulk attempt fills the session's tally. After that the
-    writes that carry something the session read are refused, and a write that carries none of it
-    (a status change, a ticket in the writer's own words) is not locked out with them."""
+async def test_a_session_at_its_tally_is_quarantined_and_a_new_session_starts_clean() -> None:
+    """A refused attempt still counts, so one bulk attempt fills the session's tally. After that
+    every write in the session is refused, even one that carries nothing it read (a session that
+    tried a bulk copy is suspect, and its own words are how it would carry on). A new session of
+    the same client starts clean."""
     layer, context = EgressLayer(SHIPPED), ctx()
     await _read(layer, _accounts(1, 30), context)
     bulk = await layer.before_call(context, _write(" ".join(f"ACC-{n:05d}" for n in range(1, 12))))
@@ -354,5 +353,9 @@ async def test_a_session_at_its_tally_is_refused_writes_that_carry_what_it_read_
     assert isinstance(bulk, Deny)
     assert isinstance(cites, Deny)
     assert cites.code is DenyCode.EGRESS_BULK
-    assert isinstance(own_words, Allow)
-    assert own_words.score == 0
+    assert isinstance(own_words, Deny)
+    assert own_words.code is DenyCode.EGRESS_BULK
+    fresh = await layer.before_call(
+        ctx(session="s2"), _write("The pallet arrived with crushed corners")
+    )
+    assert isinstance(fresh, Allow)

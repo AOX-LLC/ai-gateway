@@ -3,8 +3,8 @@
 # session for all of it. See scripts/redteam/attack_format.py for the format.
 #
 # The order is part of the test. A write refused by the egress layer still counts what it tried to
-# carry, so a session that has tried a bulk copy is refused every later write that carries anything
-# it read. The canary-bearing write therefore comes first (egress has nothing against it yet and the
+# carry, so a session that has tried a bulk copy is quarantined: every later write is refused. The
+# canary-bearing write therefore comes first (egress has nothing against it yet and the
 # canary layer is the one that stops it), then the bulk copy, then the drip, which the session's own
 # tally now stops from its first write.
 #
