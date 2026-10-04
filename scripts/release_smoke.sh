@@ -35,7 +35,11 @@ cd "$WORK/clone"
 test -z "$(git status --porcelain --ignored)" || { echo "the clone is not clean" >&2; exit 1; }
 python3 scripts/init_env.py > /dev/null
 echo "== build and start"
-docker compose up -d --build --wait
+if ! docker compose up -d --build --wait; then
+  echo "== the stack did not come up; the one-shots' logs:" >&2
+  docker compose logs --no-color --tail 40 telemetry-setup policy-setup servers-setup migrate >&2 || true
+  exit 1
+fi
 scripts/check_image_has_no_restricted_text.sh harborline-servers
 echo "== the Harborline scenarios and the simulator"
 RUNNER_TEMP="$WORK" scripts/run_harborline_check.sh
