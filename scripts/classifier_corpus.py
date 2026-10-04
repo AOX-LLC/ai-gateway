@@ -40,15 +40,17 @@ class CorpusUnit:
     text: str
     expect: str | None = None
     item_id: str | None = None
+    catchers: tuple[str, ...] = ()
+    """The layers expected to catch the item (see config/classifier_corpus/README.md)."""
 
 
 def judge_config() -> JudgeConfig:
     return load_judge_config(ROOT / "config" / "classifier.toml")
 
 
-def _items(file: str) -> list[dict[str, str]]:
+def _items(file: str) -> list[dict[str, Any]]:
     raw = tomllib.loads((CORPUS / file).read_text(encoding="utf-8"))
-    items: list[dict[str, str]] = raw["item"]
+    items: list[dict[str, Any]] = raw["item"]
     return items
 
 
@@ -56,10 +58,27 @@ def must_cover() -> list[CorpusUnit]:
     """Attack corpus, benign look-alikes and the 09 story: each item is one unit as written (a
     corpus text is a single value, so it is not cut or filtered)."""
     return [
-        CorpusUnit(file, item["surface"], item["text"], item.get("expect"), item["id"])
+        CorpusUnit(
+            file, item["surface"], item["text"], item["expect"], item["id"], _catchers(file, item)
+        )
         for file in ("attacks.toml", "benign.toml", "story_09.toml")
         for item in _items(file)
     ]
+
+
+CATCHER_LAYERS = frozenset({"classifier", "egress", "canary", "schema", "approval"})
+
+
+def _catchers(file: str, item: dict[str, Any]) -> tuple[str, ...]:
+    """The item's expected catching layers. A hostile item has some and a clean one has none, so an
+    item cannot be left unscored by forgetting the field."""
+    where = f"{file} {item['id']}"
+    catchers = item.get("catchers")
+    if not isinstance(catchers, list) or not set(catchers) <= CATCHER_LAYERS:
+        raise ValueError(f"{where}: catchers must be a list of {sorted(CATCHER_LAYERS)}")
+    if (item["expect"] == "injection") != bool(catchers):
+        raise ValueError(f"{where}: a hostile item needs catchers and a clean one has none")
+    return tuple(catchers)
 
 
 def _units(value: Any, config: JudgeConfig) -> list[str]:

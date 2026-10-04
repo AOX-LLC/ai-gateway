@@ -151,21 +151,38 @@ async def _verify(units: list[corpus.CorpusUnit]) -> None:
     judge.config = judge.config.__class__(
         **{**judge.config.__dict__, "max_calls_per_minute_per_client": 10_000}
     )
-    agree = disagree = 0
+    classifier_misses = false_positives = caught = clean_ok = 0
+    elsewhere: dict[str, list[str]] = {}
     for unit in corpus.must_cover():
         got = (
             await judge.judge(unit.surface, unit.text, client_name="verify", request_id=None)
         ).outcome
-        want = Outcome.INJECTION if unit.expect == "injection" else Outcome.CLEAN
-        if got is want:
-            agree += 1
+        flagged = got is Outcome.INJECTION
+        if unit.expect == "clean":
+            if flagged:
+                false_positives += 1
+                print(f"  false positive: {unit.source} {unit.item_id}")
+            else:
+                clean_ok += 1
+        elif "classifier" in unit.catchers:
+            if flagged:
+                caught += 1
+            else:
+                classifier_misses += 1
+                print(f"  classifier miss: {unit.source} {unit.item_id}")
         else:
-            disagree += 1
-            print(
-                f"  judge disagrees with the corpus: {unit.source} {unit.item_id}:"
-                f" {got.value}, wanted {want.value}"
-            )
-    print(f"corpus expectations: {agree} agree, {disagree} disagree")
+            # Not the classifier's to catch (the text holds no instruction to a model): reported
+            # under the layers expected to catch it, neither a hit nor a miss for the classifier.
+            for layer in unit.catchers:
+                elsewhere.setdefault(layer, []).append(f"{unit.source} {unit.item_id}")
+    print(
+        f"classifier: caught {caught}, missed {classifier_misses} of the items it is expected to"
+        f" catch; {false_positives} false positives on {false_positives + clean_ok} clean items"
+    )
+    for layer, items in sorted(elsewhere.items()):
+        print(f"expected of {layer}, not of the classifier ({len(items)}): " + ", ".join(items))
+    if classifier_misses or false_positives:
+        sys.exit(1)
 
 
 def main() -> None:
