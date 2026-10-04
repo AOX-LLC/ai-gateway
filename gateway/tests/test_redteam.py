@@ -272,3 +272,12 @@ def test_a_text_template_must_name_a_corpus_text_in_the_file() -> None:
 
     with pytest.raises(AttackFormatError, match="not in"):
         parse_attack(raw)
+
+
+def test_the_scripted_client_treats_every_way_the_gateway_refuses_as_a_refusal() -> None:
+    from mcp.types import INVALID_PARAMS
+
+    from ai_gateway.proxy.server import POLICY_BLOCKED
+    from redteam.scripted_client import REFUSAL_CODES
+
+    assert {INVALID_PARAMS, POLICY_BLOCKED} == REFUSAL_CODES

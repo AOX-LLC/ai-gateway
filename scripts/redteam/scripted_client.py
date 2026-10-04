@@ -21,7 +21,12 @@ from mcp.client.streamable_http import streamable_http_client
 from mcp.shared.exceptions import MCPError
 from mcp.types import INVALID_PARAMS, CallToolResult, TextContent
 
+from ai_gateway.proxy.server import POLICY_BLOCKED
 from redteam.attack_format import TOKENS, Attack
+
+REFUSAL_CODES = frozenset({INVALID_PARAMS, POLICY_BLOCKED})
+"""The gateway refuses a call with one of these: INVALID_PARAMS for a tool the client may not see,
+POLICY_BLOCKED (with the request id in the error's data) for a layer that stopped it."""
 
 # What an attacker copies out of a result: anything shaped like an email address or a phone number
 # of the fictional data, and the shape of a canary code.
@@ -119,7 +124,7 @@ async def play(attack: Attack, url: str, token: str, planted: str) -> list[CallR
             try:
                 result = await client.call_tool(step.tool, arguments)
             except MCPError as error:
-                if error.code != INVALID_PARAMS:
+                if error.code not in REFUSAL_CODES:
                     raise
                 outcome = "refused"
             else:
