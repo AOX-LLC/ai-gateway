@@ -66,7 +66,7 @@ select = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"**/tests/**" = ["S101", "S603"]
+"**/tests/**" = ["S101", "S603", "S608"]  # S608: tests build SQL from their own constants
 "scripts/**" = ["S101"]
 
 [tool.ruff.lint.flake8-tidy-imports]

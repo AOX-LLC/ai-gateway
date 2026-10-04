@@ -66,7 +66,7 @@ PY
 
 add_approver() {
   local added login password
-  added=$("${COMPOSE[@]}" run --rm -T admin approver-add "$1" --name "$2")
+  added=$("${COMPOSE[@]}" run --rm -T admin approver-add --name "$1")
   login=$(sed -n 's/^login  *//p' <<<"$added")
   password=$(sed -n 's/^password  *//p' <<<"$added")
   approver_url "$login" "$password"
@@ -74,8 +74,8 @@ add_approver() {
 
 seed() {
   demo_password
-  DEMO_APPROVER_1_URL=$(add_approver dana-kerr "Dana Kerr (fictional)")
-  DEMO_APPROVER_2_URL=$(add_approver priya-nair "Priya Nair (fictional)")
+  DEMO_APPROVER_1_URL=$(add_approver "Dana Kerr (fictional)")
+  DEMO_APPROVER_2_URL=$(add_approver "Priya Nair (fictional)")
   export DEMO_APPROVER_1_URL DEMO_APPROVER_2_URL
   (umask 077; "${COMPOSE[@]}" run --rm -T admin seed-demo > "$STATE/tokens.json")
   nice -n 19 uv run scripts/seed_dashboard_demo.py --tokens-file "$STATE/tokens.json"

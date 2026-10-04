@@ -83,7 +83,7 @@ async def _counts(url: str) -> dict[str, int]:
     counts = {}
     async with await psycopg.AsyncConnection.connect(url) as connection:
         for table in ("requests", "layer_verdicts", "auth_failures", "spans"):
-            cursor = await connection.execute(f"SELECT count(*) FROM telemetry.{table}".encode())  # noqa: S608
+            cursor = await connection.execute(f"SELECT count(*) FROM telemetry.{table}".encode())
             row = await cursor.fetchone()
             assert row is not None
             counts[table] = int(row[0])

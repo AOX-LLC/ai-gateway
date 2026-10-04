@@ -15,7 +15,7 @@ from aox_agent_core.approvals import (
 )
 from aox_agent_core.audit import AuditEvent
 from aox_agent_core.errors import ApprovalError, ApprovalPayloadMismatchError, ConfigError
-from aox_agent_core.storage import open_database
+from aox_agent_core.storage import bind_approver_login, open_database
 from psycopg import errors
 from pydantic import SecretStr
 
@@ -34,19 +34,19 @@ from ai_gateway.policy.setup import (
     setup_policy,
 )
 from mcp_common.roles import advisory_lock
-from tests.conftest import password_of
+from tests.conftest import AIDEN, password_of
 
 pytestmark = [pytest.mark.integration, pytest.mark.anyio]
 
 _REFUSED = (errors.RaiseException, errors.InsufficientPrivilege)
 """a3 refuses in two layers: column grants (InsufficientPrivilege) and the guard trigger."""
-# ruff: noqa: E501, S608 - a3 accepts only its canonical timestamp text (long); the SQL is fixed text
+# ruff: noqa: E501 - a3 accepts only its canonical timestamp text (long); the SQL is fixed text
 TS = "to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')"
 """A timestamp the way agent-core writes it: UTC text with six decimals and a Z."""
 PAYLOAD = {"ticket_id": "TKT-000001", "status": "closed"}
 ACTION = "tickets__change_status"
 CLIENT = Principal(id=f"client:{uuid4()}", kind=PrincipalKind.AGENT)
-HUMAN = Principal(id="human:aiden", kind=PrincipalKind.HUMAN, roles=frozenset({"approver"}))
+HUMAN = Principal(id=f"human:{AIDEN}", kind=PrincipalKind.HUMAN, roles=frozenset({"approver"}))
 
 
 def _queue(url: str) -> SQLApprovalQueue:
@@ -234,7 +234,7 @@ async def test_the_gateway_cannot_decide_a_request_by_any_route(
         with pytest.raises(_REFUSED):
             await connection.execute(
                 "UPDATE agent_core_approvals SET status = 'approved', decision = 'approve',"
-                " resolved_by = 'human:x', resolved_at = to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') WHERE id = %s",
+                f" resolved_by = 'human:{AIDEN}', resolved_at = to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') WHERE id = %s",
                 (str(request.id),),  # type: ignore[attr-defined]
             )
 
@@ -246,7 +246,7 @@ async def test_nobody_can_create_a_request_that_is_already_decided(
         "INSERT INTO agent_core_approvals (id, action, summary, payload_sha256, requested_by,"
         " required_role, created_at, expires_at, status, decision, resolved_by, resolved_at)"
         " VALUES (gen_random_uuid()::text, 'a', 's', repeat('a', 64), 'client:b', 'approver',"
-        " to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'), to_char((now() + interval '1 hour') AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'), 'approved', 'approve', 'human:x',"
+        f" to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'), to_char((now() + interval '1 hour') AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'), 'approved', 'approve', 'human:{AIDEN}',"
         " to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'))"
     )
     for url in (policy_gateway_url, test_database_url):
@@ -402,7 +402,7 @@ async def test_the_gateway_cannot_consume_an_approval_that_has_expired(
     [
         ("payload_sha256", "repeat('b', 64)"),  # approve something other than what was asked
         ("action", "'tickets__assign'"),
-        ("requested_by", "'human:aiden'"),  # so a request can look self-made
+        ("requested_by", f"'human:{AIDEN}'"),  # so a request can look self-made
         (
             "expires_at",
             "to_char((now() + interval '9 days') AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')",
@@ -422,7 +422,7 @@ async def test_the_approver_decides_a_request_and_changes_nothing_else_in_the_sa
     assignments = {
         "status": "'approved'",
         "decision": "'approve'",
-        "resolved_by": "'human:x'",
+        "resolved_by": f"'human:{AIDEN}'",
         "resolved_at": "to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')",
         column: value,  # the one thing that should not be allowed
     }
@@ -445,7 +445,7 @@ async def test_the_statements_the_attack_tests_alter_are_valid_when_nothing_is_a
     await _run(
         policy_approver_url,
         "UPDATE agent_core_approvals SET status = 'approved', decision = 'approve',"
-        f" resolved_by = 'human:x', resolved_at = {TS} WHERE id = %s",
+        f" resolved_by = 'human:{AIDEN}', resolved_at = {TS} WHERE id = %s",
         str(request.id),  # type: ignore[attr-defined]
     )
     await _run(
@@ -456,7 +456,7 @@ async def test_the_statements_the_attack_tests_alter_are_valid_when_nothing_is_a
 
     stored = await _queue(policy_approver_url).get(request.id)  # type: ignore[attr-defined]
     assert stored.status.value == "consumed"
-    assert stored.resolved_by == "human:x"
+    assert stored.resolved_by == f"human:{AIDEN}"
 
 
 async def test_the_approver_cannot_decide_a_request_twice_or_after_it_expired(
@@ -477,7 +477,7 @@ async def test_the_approver_cannot_decide_a_request_twice_or_after_it_expired(
         await _run(
             policy_approver_url,
             "UPDATE agent_core_approvals SET status = 'approved', decision = 'approve',"
-            " resolved_by = 'human:x', resolved_at = to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') WHERE id = %s",
+            f" resolved_by = 'human:{AIDEN}', resolved_at = to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') WHERE id = %s",
             str(expired.id),  # type: ignore[attr-defined]
         )
 
@@ -494,7 +494,7 @@ async def test_an_upsert_cannot_decide_a_request_either(
             " required_role, created_at, expires_at, status) VALUES (%s, 'a', 's', repeat('a', 64),"
             " 'c', 'approver', to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'), to_char((now() + interval '1 hour') AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'), 'pending')"
             " ON CONFLICT (id) DO UPDATE SET status = 'approved', decision = 'approve',"
-            " resolved_by = 'human:x', resolved_at = to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')",
+            f" resolved_by = 'human:{AIDEN}', resolved_at = to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')",
             str(request.id),  # type: ignore[attr-defined]
         )
 
@@ -534,7 +534,7 @@ async def test_a_member_of_the_gateway_role_is_the_requester_side_and_can_never_
         with pytest.raises(_REFUSED):
             await connection.execute(
                 "UPDATE agent_core_approvals SET status = 'approved', decision = 'approve',"
-                f" resolved_by = 'human:x', resolved_at = {TS} WHERE id = %s",
+                f" resolved_by = 'human:{AIDEN}', resolved_at = {TS} WHERE id = %s",
                 (str(request.id),),  # type: ignore[attr-defined]
             )
         await connection.execute(  # the control: the requester's own change is allowed
@@ -581,7 +581,9 @@ async def test_an_approval_that_plain_sql_made_stops_setup_and_leaves_the_roles_
     record and the audit log holds none to compare with. That must not leave the gateway and the
     approver with no access: the installer runs before their grants are cleared."""
     request = await _pending(policy_gateway_url)
-    _, connection = await _login_member_of(test_database_url, "policy_approver")
+    login, connection = await _login_member_of(test_database_url, "policy_approver")
+    # Binding is on, so plain SQL can only approve as the principal the owner mapped to the login.
+    bind_approver_login(test_database_url, login=login, principal="human:x", schema="policy")
     async with connection:
         await connection.execute(
             "UPDATE agent_core_approvals SET status = 'approved', decision = 'approve',"

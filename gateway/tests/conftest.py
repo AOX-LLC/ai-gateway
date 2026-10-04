@@ -1,7 +1,9 @@
 """Shared fixtures: the Postgres test database, registry helpers and the echo MCP server."""
 
+import hashlib
 import importlib.util
 import os
+import re
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from datetime import datetime
 from pathlib import Path
@@ -22,6 +24,7 @@ from pydantic import SecretStr
 
 from ai_gateway.auth.tokens import IssuedToken, generate_token
 from ai_gateway.policy import (
+    APPROVER_ID_PATTERN,
     APPROVER_LOGIN_PREFIX,
     LAB_APPROVER_ROLE,
     POLICY_IDLE_IN_TRANSACTION_MS,
@@ -446,6 +449,14 @@ def login_url(url: str, login: str, password: str) -> str:
     return urlunsplit(parts._replace(netloc=f"{login}:{password}@{parts.hostname}:{parts.port}"))
 
 
+def approver_id_for(name: str) -> str:
+    """A stable opaque approver id for a test's name for one: ids are never a person's name."""
+    return f"appr_{hashlib.sha256(name.encode()).hexdigest()[:10]}"
+
+
+AIDEN, TYLER, INTERN = (approver_id_for(name) for name in ("aiden", "tyler", "intern"))
+_DISPLAY_NAMES = {AIDEN: "Aiden", TYLER: "Tyler", INTERN: "Intern"}
+
 MakeApprover = Callable[..., Awaitable[str]]
 
 
@@ -456,13 +467,18 @@ async def make_approver(
     """Add an approver the way `gateway-admin approver-add` does (a login of their own, recorded in
     the audit log), with a password the tests know, and return the URL they sign in with."""
 
-    async def make(approver_id: str, roles: list[str] | None = None) -> str:
+    async def make(name: str, roles: list[str] | None = None) -> str:
+        approver_id = name if re.fullmatch(APPROVER_ID_PATTERN, name) else approver_id_for(name)
         audit = audit_log_on(open_database(SecretStr(policy_url(policy_gateway_url))))
         async with await psycopg.AsyncConnection.connect(
             test_database_url, autocommit=True
         ) as connection:
             added = await add_approver(
-                connection, audit, approver_id, approver_id.title(), roles or ["approver"]
+                connection,
+                audit,
+                approver_id,
+                _DISPLAY_NAMES.get(approver_id, "Test approver"),
+                roles or ["approver"],
             )
             await ensure_role(
                 connection, APPROVER_TEST_PASSWORD, added.login, POLICY_IDLE_IN_TRANSACTION_MS

@@ -50,7 +50,7 @@ def _call_rows(n: int = 1) -> list[Row]:
 
 async def _count(url: str, table: str) -> int:
     async with await AsyncConnection.connect(url) as connection:
-        cursor = await connection.execute(f"SELECT count(*) FROM telemetry.{table}".encode())  # noqa: S608
+        cursor = await connection.execute(f"SELECT count(*) FROM telemetry.{table}".encode())
         row = await cursor.fetchone()
     assert row is not None
     return int(row[0])

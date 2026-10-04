@@ -24,7 +24,7 @@ async def _counts(url: str) -> tuple[int, int, int]:
     async with await psycopg.AsyncConnection.connect(url) as connection:
         counts = []
         for table in ("staff", "tickets", "comments"):
-            cursor = await connection.execute(f"SELECT count(*) FROM ticketing.{table}".encode())  # noqa: S608
+            cursor = await connection.execute(f"SELECT count(*) FROM ticketing.{table}".encode())
             row = await cursor.fetchone()
             assert row is not None
             counts.append(int(row[0]))
@@ -178,7 +178,7 @@ async def _crm_counts(url: str) -> tuple[int, int, int, int]:
     async with await psycopg.AsyncConnection.connect(url) as connection:
         counts = []
         for table in ("accounts", "contacts", "deals", "activity_notes"):
-            cursor = await connection.execute(f"SELECT count(*) FROM crm.{table}".encode())  # noqa: S608
+            cursor = await connection.execute(f"SELECT count(*) FROM crm.{table}".encode())
             row = await cursor.fetchone()
             assert row is not None
             counts.append(int(row[0]))

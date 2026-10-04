@@ -29,6 +29,7 @@ from ai_gateway.policy.anchors import (
     read_anchors,
     verify_with_anchors,
 )
+from tests.conftest import AIDEN
 
 pytestmark = [pytest.mark.integration, pytest.mark.anyio]
 
@@ -307,5 +308,5 @@ async def test_a_record_the_approver_role_wrote_as_if_it_were_the_gateways_fails
     await _append(policy_approver_url, 1)  # a gateway.tool_call, appended with the approver's login
 
     assert (await auditor.verify()).seq == 4, "the hash chain alone cannot see it"
-    with pytest.raises(AuditIntegrityError, match="written by role policy_approver_aiden"):
+    with pytest.raises(AuditIntegrityError, match=f"written by role policy_approver_{AIDEN}"):
         await verify_with_anchors(auditor, [])

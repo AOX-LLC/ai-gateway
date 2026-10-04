@@ -38,7 +38,13 @@ from ai_gateway.policy import (
     ROLES,
     SCHEMA,
 )
-from ai_gateway.policy.approver_logins import managed_logins, sync_approver_logins
+from ai_gateway.policy.approver_logins import (
+    approver_principal,
+    bind_active_approvers,
+    bind_login,
+    managed_logins,
+    sync_approver_logins,
+)
 from ai_gateway.telemetry import READER_ROLE
 from mcp_common.roles import (
     advisory_lock,
@@ -102,6 +108,11 @@ async def setup_policy(owner_url: str, passwords: PolicyPasswords) -> None:
         await grant_policy_access(connection)
         await sync_approver_logins(connection)
         await _set_up_lab_role(connection, passwords.lab_approver)
+        # Binding goes on last: every active approver's login is mapped first, so nobody who could
+        # decide a moment ago is locked out. From here the database refuses a decision whose
+        # `resolved_by` is not the principal mapped to the login that made it.
+        await bind_active_approvers(connection)
+        await _install(owner_url, bind=True)
         await restrict_database_access(
             connection, [*ROLES, *([LAB_APPROVER_ROLE] if passwords.lab_approver else [])]
         )
@@ -156,7 +167,7 @@ async def _ensure_approver_group(connection: AsyncConnection) -> None:
     await reset_role(connection, APPROVER_ROLE)
 
 
-async def _install(owner_url: str) -> None:
+async def _install(owner_url: str, *, bind: bool | None = None) -> None:
     """Install or upgrade agent-core's tables and guard. The installer is synchronous (agent-core's
     drivers are), so it runs on a thread. An approved, unused request that no approver's decision
     approves (plain SQL could make one under a2, and a decision by an approver who has since been
@@ -176,6 +187,7 @@ async def _install(owner_url: str) -> None:
             requester_role=GATEWAY_ROLE,
             approver_role=APPROVER_ROLE,
             close_unaudited_approvals=close,
+            bind_resolved_by=bind,
         )
 
     try:
@@ -200,6 +212,11 @@ async def _install(owner_url: str) -> None:
     for grant in report.outside_layout:
         if grant.role not in (AUDITOR_ROLE, READER_ROLE):
             logger.warning("held outside agent-core's layout, to revoke if unused: %s", grant)
+    if bind and report.unmapped_logins:
+        logger.error(
+            "login binding is on and these logins have no mapping, so they cannot decide: %s",
+            ", ".join(report.unmapped_logins),
+        )
     logger.info("agent-core's audit and approval tables are installed in schema %s", SCHEMA)
 
 
@@ -437,20 +454,39 @@ _MEMBERSHIPS = (
 
 async def _set_up_lab_role(connection: AsyncConnection, password: str | None) -> None:
     """The lab approver: a login role that is a member of the approver role, so it has exactly the
-    approver's powers, and nothing else. Without a password it does not exist."""
+    approver's powers, and nothing else. Without a password it cannot log in.
+
+    The role is kept, not dropped and made again: agent-core maps a login to its principal for good
+    (by the role's OID, and a login is never mapped twice), so a lab role that was made again
+    could never decide. It is reset instead: its sessions end, what it owns or was granted goes,
+    every membership is revoked, and it is made what it should be."""
     name = sql.Identifier(LAB_APPROVER_ROLE)
-    # Rebuilt every time, not reset: a grant, a table privilege or a role made a member of it by
-    # hand disappears with it, and its running sessions end. The role holds nothing worth keeping.
     if await _role_exists(connection, LAB_APPROVER_ROLE):
+        await connection.execute(sql.SQL("ALTER ROLE {} NOLOGIN").format(name))
         await connection.execute(
             "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = %s",
             (LAB_APPROVER_ROLE,),
         )
         await connection.execute(sql.SQL("DROP OWNED BY {}").format(name))
-        await connection.execute(sql.SQL("DROP ROLE {}").format(name))
+        await reset_role(connection, LAB_APPROVER_ROLE)
+        # And no role is a member of it: that member would inherit its powers (the role used to be
+        # dropped, which took such memberships with it).
+        cursor = await connection.execute(
+            "SELECT member.rolname, grantor.rolname FROM pg_auth_members m"
+            " JOIN pg_roles parent ON parent.oid = m.roleid"
+            " JOIN pg_roles member ON member.oid = m.member"
+            " JOIN pg_roles grantor ON grantor.oid = m.grantor WHERE parent.rolname = %s",
+            (LAB_APPROVER_ROLE,),
+        )
+        for member, grantor in await cursor.fetchall():
+            await connection.execute(
+                sql.SQL("REVOKE {} FROM {} GRANTED BY {} CASCADE").format(
+                    name, sql.Identifier(member), sql.Identifier(grantor)
+                )
+            )
     approvers = sql.SQL("{}.{}").format(sql.Identifier(SCHEMA), sql.Identifier(APPROVERS_TABLE))
     if not password:
-        # Its decisions stay attributed to it; nobody can decide through a role that is not there.
+        # Its decisions stay attributed to it; nobody can decide through a login that is shut.
         await connection.execute(
             sql.SQL("UPDATE {} SET active = false WHERE db_role = %s").format(approvers),
             (LAB_APPROVER_ROLE,),
@@ -475,6 +511,7 @@ async def _set_up_lab_role(connection: AsyncConnection, password: str | None) ->
         ).format(approvers),
         (LAB_APPROVER_ID, "Lab approver (automatic)", ["approver"], LAB_APPROVER_ROLE),
     )
+    await bind_login(connection, LAB_APPROVER_ROLE, approver_principal(LAB_APPROVER_ID))
     logger.warning("the lab approver role exists: it decides requests as the approver role")
 
 

@@ -26,13 +26,13 @@ from ai_gateway.policy.approvals import PostgresApprovalGate, _payload, approval
 from ai_gateway.policy.database import BoundedPostgresDatabase
 from ai_gateway.policy.setup import PolicyPasswords, setup_policy
 from ai_gateway.seams.approvals import ApprovalOutcome
-from tests.conftest import password_of
+from tests.conftest import AIDEN, password_of
 
 pytestmark = [pytest.mark.integration, pytest.mark.anyio]
 
 ROLES = {"tickets__change_status": "approver"}
 MARKER = "dock-7-account-4111-1111-1111-1111"
-HUMAN = Principal(id="human:aiden", kind=PrincipalKind.HUMAN, roles=frozenset({"approver"}))
+HUMAN = Principal(id=f"human:{AIDEN}", kind=PrincipalKind.HUMAN, roles=frozenset({"approver"}))
 
 
 def _context(client_id: UUID | None = None, name: str = "harborline-ops-bot") -> CallContext:
@@ -352,7 +352,7 @@ async def test_the_dashboard_reader_sees_requests_without_arguments_and_nothing_
         ):
             await connection.rollback()
             with pytest.raises(errors.InsufficientPrivilege):
-                await connection.execute(f"SELECT * FROM {table}".encode())  # noqa: S608 - fixed names
+                await connection.execute(f"SELECT * FROM {table}".encode())
 
 
 async def test_submit_is_idempotent_while_a_request_for_the_intent_is_open(

@@ -76,7 +76,7 @@ async def as_gateway(
 
 @pytest.mark.parametrize("table", READABLE_TABLES)
 async def test_the_gateway_role_reads_the_registry(as_gateway: AsyncConnection, table: str) -> None:
-    query = f"SELECT count(*) FROM {table}"  # noqa: S608 - table names come from the list above
+    query = f"SELECT count(*) FROM {table}"
     cursor = await as_gateway.execute(query.encode())
 
     assert await cursor.fetchone() is not None
@@ -151,7 +151,7 @@ TICKETING_FORBIDDEN = {
     "update migrations": "UPDATE ticketing.schema_migrations SET version = version",
     "delete migrations": "DELETE FROM ticketing.schema_migrations",
     **{
-        f"read registry {table}": f"SELECT count(*) FROM public.{table}"  # noqa: S608 - names come from the list above
+        f"read registry {table}": f"SELECT count(*) FROM public.{table}"
         for table in READABLE_TABLES
     },
 }
@@ -172,7 +172,7 @@ async def as_ticketing(
 async def test_the_ticketing_role_reads_its_tables(
     as_ticketing: AsyncConnection, table: str
 ) -> None:
-    query = f"SELECT count(*) FROM ticketing.{table}"  # noqa: S608 - names come from the list above
+    query = f"SELECT count(*) FROM ticketing.{table}"
     cursor = await as_ticketing.execute(query.encode())
 
     assert await cursor.fetchone() is not None
@@ -201,7 +201,7 @@ async def test_the_ticketing_role_may_change_status_assignee_and_update_time(
 async def test_the_gateway_role_cannot_see_the_ticketing_schema(
     as_gateway: AsyncConnection, ticketing_data: object, table: str
 ) -> None:
-    query = f"SELECT count(*) FROM ticketing.{table}"  # noqa: S608 - names come from the list above
+    query = f"SELECT count(*) FROM ticketing.{table}"
     with pytest.raises(psycopg.errors.InsufficientPrivilege):
         await as_gateway.execute(query.encode())
 
@@ -266,7 +266,7 @@ CRM_READABLE = {
 # Everything below this line is read from a schema the role must not see at all.
 OTHER_SCHEMAS_FORBIDDEN = {
     **{
-        f"read registry {table}": f"SELECT count(*) FROM public.{table}"  # noqa: S608 - from the list
+        f"read registry {table}": f"SELECT count(*) FROM public.{table}"
         for table in READABLE_TABLES
     },
     "read ticketing tickets": "SELECT count(*) FROM ticketing.tickets",
@@ -337,7 +337,7 @@ async def as_crm(
 async def test_the_crm_role_reads_the_public_columns_of_its_tables(
     as_crm: AsyncConnection, table: str
 ) -> None:
-    query = f"SELECT {CRM_READABLE[table]} FROM crm.{table} LIMIT 1"  # noqa: S608 - from the dict above
+    query = f"SELECT {CRM_READABLE[table]} FROM crm.{table} LIMIT 1"
     cursor = await as_crm.execute(query.encode())
 
     assert await cursor.fetchone() is not None
@@ -431,7 +431,7 @@ async def as_handbook(
 async def test_the_handbook_role_reads_the_two_views_and_the_migration_list(
     as_handbook: AsyncConnection, relation: str
 ) -> None:
-    query = f"SELECT count(*) FROM handbook.{relation}"  # noqa: S608 - from the list above
+    query = f"SELECT count(*) FROM handbook.{relation}"
     cursor = await as_handbook.execute(query.encode())
 
     assert await cursor.fetchone() is not None

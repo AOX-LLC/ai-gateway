@@ -18,7 +18,7 @@ from pydantic import SecretStr
 from ai_gateway.policy import approval_queue_on, audit_log_on, policy_url
 from ai_gateway.policy.anchors import read_anchors, verify_with_anchors
 from ai_gateway.policy.setup import PolicyPasswords, setup_policy
-from tests.conftest import MakeApprover, password_of
+from tests.conftest import AIDEN, MakeApprover, password_of
 from tests.test_audit_anchors import _append
 
 pytestmark = [pytest.mark.integration, pytest.mark.anyio]
@@ -223,14 +223,14 @@ async def test_roles_that_held_other_grants_get_exactly_the_layout_and_can_still
         ("policy_gateway", False, False, True, False),
     ]
     approver = approval_queue_on(
-        open_database(SecretStr(policy_url(await make_approver("aiden")))),
+        open_database(SecretStr(policy_url(await make_approver(AIDEN)))),
         policy=RoleApproverPolicy(roles_by_action={"tickets__change_status": "approver"}),
     )
     request = await approver.resolve(
         UUID(PENDING),
         decision=Decision.APPROVE,
         principal=Principal(
-            id="human:fixture", kind=PrincipalKind.HUMAN, roles=frozenset({"approver"})
+            id=f"human:{AIDEN}", kind=PrincipalKind.HUMAN, roles=frozenset({"approver"})
         ),
     )
     assert request.status.value == "approved"

@@ -43,7 +43,7 @@ async def _lab_role_exists(owner: str) -> bool:
         return await cursor.fetchone() is not None
 
 
-async def test_without_a_password_there_is_no_lab_role_and_a_later_setup_removes_one(
+async def test_without_a_password_the_lab_role_cannot_log_in_and_decides_nothing(
     policy: None,
     test_database_url: str,
     policy_gateway_url: str,
@@ -56,7 +56,19 @@ async def test_without_a_password_there_is_no_lab_role_and_a_later_setup_removes
     assert await _lab_role_exists(test_database_url)
     await _setup(*args)
 
-    assert not await _lab_role_exists(test_database_url), "setup without the password drops it"
+    # The role is kept, not dropped: agent-core maps a login to its principal for good, by the
+    # role's OID, so one made again could never decide. Without the password it is shut.
+    assert await _lab_role_exists(test_database_url)
+    async with await psycopg.AsyncConnection.connect(
+        test_database_url, autocommit=True
+    ) as connection:
+        cursor = await connection.execute(
+            "SELECT rolcanlogin, pg_has_role('policy_lab_approver', 'policy_approver', 'MEMBER')"
+            " FROM pg_roles WHERE rolname = 'policy_lab_approver'"
+        )
+        assert await cursor.fetchone() == (False, False), "no login, and no powers"
+    with pytest.raises(psycopg.OperationalError):
+        await psycopg.AsyncConnection.connect(_lab_url(test_database_url))
 
 
 async def test_the_lab_role_decides_requests_like_the_approver_and_does_nothing_else(

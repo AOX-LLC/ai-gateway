@@ -22,7 +22,13 @@ from psycopg.errors import InsufficientPrivilege, UndefinedTable
 from pydantic import SecretStr
 
 from ai_gateway.auth.tokens import IssuedToken, generate_token
-from ai_gateway.policy import APPROVER_LOGINS_VIEW, SCHEMA, audit_log_on, policy_url
+from ai_gateway.policy import (
+    APPROVER_LOGINS_VIEW,
+    SCHEMA,
+    audit_log_on,
+    new_approver_id,
+    policy_url,
+)
 from ai_gateway.policy.anchors import (
     AnchorFileError,
     append_anchor,
@@ -161,8 +167,18 @@ def _parser() -> argparse.ArgumentParser:
         help="register a person who may approve writes and make their database login"
         f" (needs {_GATEWAY_URL_ENV})",
     )
-    approver_add.add_argument("id", help="lowercase letters, digits, . _ -")
-    approver_add.add_argument("--name", required=True, help="who they are, for the log")
+    approver_add.add_argument(
+        "id",
+        nargs="?",
+        default=None,
+        help="an existing approver's opaque id (appr_ and ten characters), to change their name or"
+        " roles; leave it out to make a new approver, whose id is generated",
+    )
+    approver_add.add_argument(
+        "--name",
+        required=True,
+        help="who they are: kept in the approvers table only, never in a login or an id",
+    )
     approver_add.add_argument("--role", action="append", default=None, help="default: approver")
     approver_add.set_defaults(handler=_approver_add)
     approver_rotate = commands.add_parser(
@@ -326,6 +342,7 @@ def _print_login(action: str, provisioned: Provisioned) -> None:
         return
     # The one time the password is shown: stdout only, never a log, and nothing keeps it.
     print(f"approver {provisioned.approver_id} {action}")
+    print(f"id        {provisioned.approver_id}")
     print(f"login     {provisioned.login}")
     print(f"password  {provisioned.password}")
     print("The password is shown once and kept nowhere. Give it to the person directly.")
@@ -336,7 +353,7 @@ async def _approver_add(database_url: str, args: argparse.Namespace) -> None:
     try:
         async with await AsyncConnection.connect(database_url, autocommit=True) as db:
             provisioned = await add_approver(
-                db, audit, args.id, args.name, args.role or ["approver"]
+                db, audit, args.id or new_approver_id(), args.name, args.role or ["approver"]
             )
     finally:
         await audit.database.aclose()
