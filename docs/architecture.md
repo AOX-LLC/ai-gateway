@@ -847,7 +847,12 @@ counts only an active approver's decision (a rejection included), so the effect 
 request is asked afresh, which a holder of the credential can repeat. A purge-only role in agent-core
 would end it. The pins cover the description and both schemas (4c added the output schema), not titles.
 Egress and canary scan at most 256 KiB of a call's arguments. A session that read more values than it
-is tracked for, or whose ledger was dropped for room, cannot write a value (`egress_state_lost`).
+is tracked for, or whose ledger was dropped for room, cannot write at all (`egress_state_lost`: the
+check comes before the write's values are looked at, and sessions of other clients can push a ledger
+out). The ledger is per MCP session: a client that reads in one session and writes in another is not
+seen by egress, and a session that opens and closes sessions cheaply can use that. A write that
+carries a value only in another spelling (`555 0142`, `ACC 00001`), a name, a note or an encoding other
+than base64 and hex is not matched either.
 The service logins' 90-day expiry is renewed by every `policy-setup`, so it does not force a
 rotation. The dashboard's sign-in redirect takes its scheme from the request URL: behind a TLS-
 terminating proxy that does not forward the scheme it would point at `http://`.
@@ -876,9 +881,17 @@ records the corpus (`--count` says what that costs, `--verify` fails on a miss) 
 any attack, benign look-alike, 09 story string or seeded write has no recording.
 
 **Guards.** A judged text is remembered by a keyed hash so none is judged twice; a client may cause
-`max_calls_per_minute_per_client` model calls a minute; live spend is capped at `max_usd_per_hour` for
-the whole gateway (so one client can use up the ceiling: the per-client cap is what limits that);
-more than `max_units` units in one call is refused (`classifier_oversize`), not partly judged.
+`max_calls_per_minute_per_client` model calls a minute; billed spend (live and record calls: a
+replayed call is not spend) is capped at `max_usd_per_hour_per_client` for each client and at
+`max_usd_per_hour` for the gateway as a whole, so one client that has spent its share is refused while
+the others still have the rest of the ceiling (the per-client call rate bounds how fast a client
+spends, not how much: before gatekeeper pass 2 only the rate and the whole-gateway ceiling existed, and
+one client could use the ceiling up and make every other client's judged calls fail closed). The wait
+for one of the `concurrency` model slots counts against `timeout_s`. A guard that refuses a call is
+logged (the client and the guard, once a minute, never any text). More than `max_units` units in one
+call is refused (`classifier_oversize`), not partly judged. Both the structured content and the text
+blocks of a result are judged (a string both carry once), and a line of a text that is `BEGIN` or `END`
+however it is spelled is emptied before the model sees it.
 
 **Usage.** Each model call is a row in `telemetry.model_usage` (model, tier, mode, tokens, cost,
 latency, status), never the text or the answer. `mode` says whether the cost was billed: a `replay`
@@ -915,8 +928,8 @@ runs, and a file with every call judged is the only kind the loader accepts.
 - **The oracle** (`scripts/redteam/oracle.py`) is the judge. It reads the CRM and ticketing databases
   as their owner, shares nothing with the gateway (not its layers, its telemetry or the values its
   egress layer tracks) and counts distinct customer emails and phone numbers and canary codes in
-  anything made during the run. In run A nothing may have landed; in run B it must see the export (28
-  customer values and a canary), which shows it can see one. It prints counts, never a value.
+  anything made during the run. In run A nothing may have landed; in run B it must see the export (ten
+  or more distinct customer values, or a canary), which shows it can see one. It prints counts, never a value.
 - **The dashboard** (`scripts/check_dashboard.py --expect-layers`): signed in, it names `egress`,
   `canary`, `classifier` and `rate_limit` among the layers that stopped or would have stopped a call.
 - **An honest run for contrast** (`normal-triage.toml`, as the `harborline-helper-api` client of the 09
@@ -942,7 +955,8 @@ writes it makes.
 
 **The helper client of the 09 demo** (`harborline-helper-api`, registered by `seed-demo`) may call the
 three CRM reads and `tickets__create_ticket` and nothing else. Its caps are set so a normal triage never
-meets them and a bulk read or write does: `limit` 1 to 5 and required on the two list tools, `offset` at
+meets them, a bulk write does and a bulk read is slowed (30 accounts an hour per client, though a
+client can vary its searches): `limit` 1 to 5 and required on the two list tools, `offset` at
 most 20, a ticket description of at most 1000 characters (`config/allowlist.toml`), and 30
 `crm__get_account` calls an hour per client (`config/rate_limits.toml`). See `docs/integration.md`.
 

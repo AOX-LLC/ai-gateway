@@ -104,17 +104,22 @@ A text must match its recording exactly (it is hashed), so an email with a times
 number that changes on every run will never be found: keep the demo's strings fixed.
 
 In a deployment, set `AGENT_CORE_MODE=live` and a key: then an error or a timeout from the model
-refuses the call (`classifier_unavailable`) instead of letting it through, and the gateway-wide spend
-ceiling in `config/classifier.toml` applies.
+refuses the call (`classifier_unavailable`) instead of letting it through, and the spend limits in
+`config/classifier.toml` apply: each client's share of the hour's billed spend and the gateway-wide
+ceiling (replayed calls cost nothing and do not count).
 
 ## Checking the integration
 
 ```sh
 docker compose up -d --build --wait
-docker compose run --rm -T admin seed-demo > demo.json
-# a normal triage as the helper: one search (limit 5), one get_account, one create_ticket
-LAB_AUTO_APPROVE=yes scripts/run_redteam_check.sh   # the acceptance test (the demo approver)
+# the acceptance test: it registers the demo clients and an approver for the run itself, makes an
+# honest triage as the helper (a search with limit 5, an account read, a deals read, one ticket), then
+# the export attack in both modes, and removes what it made. The demo approver is the caller's to allow.
+LAB_AUTO_APPROVE=yes scripts/run_redteam_check.sh
 ```
+
+(`seed-demo` prints a new set of tokens and revokes the old ones each time it runs, so running it
+yourself first and then the check would revoke the tokens you saved.)
 
 The dashboard (http://127.0.0.1:4400) shows each of these calls, the layer that stopped any of them,
 and the tokens and cost of the classifier's calls (replayed ones are marked "replayed, not billed").
