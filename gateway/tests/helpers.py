@@ -1,13 +1,11 @@
 """Test helpers shared by several test modules."""
 
-import asyncio
 import json
 import threading
 import time
 from collections.abc import AsyncGenerator, Iterator, Sequence
 from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
-from typing import Any
 
 import httpx2
 import uvicorn
@@ -17,7 +15,6 @@ from pydantic import SecretStr
 from starlette.types import ASGIApp
 
 from ai_gateway.app import create_app
-from ai_gateway.pipeline.pins import load_tool_pins, render_tool_pins
 from ai_gateway.seams.events import MemoryEventSink
 from ai_gateway.settings import GatewaySettings
 
@@ -112,30 +109,9 @@ class RunningGateway:
         self.events = events
 
 
-def _echo_definitions() -> list[tuple[str, str | None, dict[str, Any]]]:
-    """(exposed name, description, input schema) of the echo test upstream's tools."""
-    from echo_server.server import build_server
-
-    async def listed() -> list[tuple[str, str | None, dict[str, Any]]]:
-        tools = await build_server().list_tools()
-        return [(f"echo__{tool.name}", tool.description, dict(tool.input_schema)) for tool in tools]
-
-    results: list[list[tuple[str, str | None, dict[str, Any]]]] = []
-    thread = threading.Thread(target=lambda: results.append(asyncio.run(listed())))
-    thread.start()
-    thread.join()
-    return results[0]
-
-
 def pins_text_for_tests() -> str:
-    """A pins file for the echo test upstream and the Harborline servers' reviewed tools."""
-    shipped = load_tool_pins(PINS_FILE)
-    definitions = [
-        (name, pin.description, dict(pin.input_schema))
-        for name in sorted(shipped.names())
-        if (pin := shipped.get(name)) is not None
-    ]
-    return render_tool_pins([*definitions, *_echo_definitions()])
+    """The shipped pin file: the Harborline servers' reviewed tools and the echo test upstream's."""
+    return PINS_FILE.read_text(encoding="utf-8")
 
 
 @contextmanager

@@ -100,4 +100,5 @@ def test_every_tool_of_the_three_servers_is_pinned_and_nothing_else() -> None:
         "tickets__add_comment", "tickets__change_status", "tickets__assign",
         "crm__search_accounts", "crm__get_account", "crm__list_deals",
         "handbook__search", "handbook__get_document",
+        "echo__say", "echo__shout", "echo__wait",
     }  # fmt: skip

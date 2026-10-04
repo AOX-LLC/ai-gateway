@@ -159,6 +159,63 @@ input_schema = '''
 }
 '''
 
+[tools."echo__say"]
+sha256 = "d88e0485dd4767732e5e0c88925be766caeb0d952339e1a5cf8f3f32c56a09de"
+description = "Return the text unchanged."
+input_schema = '''
+{
+  "properties": {
+    "text": {
+      "title": "Text",
+      "type": "string"
+    }
+  },
+  "required": [
+    "text"
+  ],
+  "title": "sayArguments",
+  "type": "object"
+}
+'''
+
+[tools."echo__shout"]
+sha256 = "788b26a6ae419b8904ad5ea88b1b170f7fe873187fd134f80fe215c968e4f7a3"
+description = "Return the text in upper case."
+input_schema = '''
+{
+  "properties": {
+    "text": {
+      "title": "Text",
+      "type": "string"
+    }
+  },
+  "required": [
+    "text"
+  ],
+  "title": "shoutArguments",
+  "type": "object"
+}
+'''
+
+[tools."echo__wait"]
+sha256 = "e3954853d23ebc8f242d2650754b0dcbad53cd78192fae422ebe6e34c161c4b7"
+description = "Sleep for the given number of seconds, then return 'done'."
+input_schema = '''
+{
+  "properties": {
+    "seconds": {
+      "title": "Seconds",
+      "type": "number"
+    }
+  },
+  "required": [
+    "seconds"
+  ],
+  "title": "waitArguments",
+  "type": "object"
+}
+'''
+
 [tools."handbook__get_document"]
 sha256 = "d49e5583751895ca91e39f0adbc8fda138835029bdc611b517d62a4aaa2abfd3"
 description = "Get one handbook document by id (for example DOC-001): its title, category, date and full text. If it has been superseded, superseded_by names the current edition."
