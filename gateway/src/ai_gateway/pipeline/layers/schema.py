@@ -14,8 +14,9 @@ Results: after the upstream answers, a result's structured content is validated 
 never saw cannot ride along, whatever shape the root has, and the same for every nested object;
 a result with `_meta` is refused). A result with no structured content where the pin
 has an output schema is refused too, as is an error-free result that fails the schema. The text
-blocks are a second channel a client may be shown, so each must be a text block whose JSON is the
-structured content itself: any other block, any text that is not that JSON, is refused. A tool error
+blocks are a second channel a client may be shown, so each must be a bare text block that says what
+the structured content says (its JSON, or, for FastMCP's `{"result": value}` wrapper, the value
+itself): any other block, and any text that says more or other, is refused. A tool error
 (`isError`) must be plain text, with no structured content and no other kind of block (its words
 are the one thing not checked here; the classifier judges a read's error text), and a tool whose pin
 has no output schema is not checked: it has nothing reviewed to compare with. The text is read the
@@ -134,18 +135,38 @@ def _canonical(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
 
+def _says(text: str, value: Any) -> bool:
+    """Whether a text block says exactly this value: the string itself for a string, otherwise its
+    JSON (in any layout, compared as JSON, so `true` is not `1`)."""
+    if isinstance(value, str):
+        return text == value
+    try:
+        return _canonical(_strict_json(text)) == _canonical(value)
+    except ValueError:
+        return False
+
+
 def _blocks_repeat(result: CallToolResult, structured: Any) -> bool:
-    """Whether every content block is a text block whose JSON is the structured content: what a
-    client is shown in the text is then what was validated, and nothing rides along beside it."""
-    for block in result.content:
-        if not isinstance(block, TextContent) or block.meta or block.annotations:
-            return False
-        try:
-            if _canonical(_strict_json(block.text)) != _canonical(structured):
-                return False
-        except ValueError:
-            return False
-    return True
+    """Whether the content blocks say nothing the structured content does not: what a client is
+    shown in the text is then what was validated, and nothing rides along beside it. Every block
+    is a bare text block, and the texts are either each the JSON of the structured content, or,
+    for the `{"result": value}` wrapper the Python SDK's FastMCP puts around a plain return value,
+    the value itself: one block for a string or a number, one per item for a list."""
+    if any(
+        not isinstance(block, TextContent) or block.meta or block.annotations
+        for block in result.content
+    ):
+        return False
+    texts = [block.text for block in result.content if isinstance(block, TextContent)]
+    if all(_says(text, structured) for text in texts):
+        return True
+    if isinstance(structured, dict) and set(structured) == {"result"}:
+        value = structured["result"]
+        items = value if isinstance(value, list) else [value]
+        return len(texts) == len(items) and all(
+            _says(text, item) for text, item in zip(texts, items, strict=True)
+        )
+    return False
 
 
 class SchemaLayer(BaseLayer):
