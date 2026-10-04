@@ -381,7 +381,7 @@ services:
         condition: service_healthy
 
   # A person's tool for writes that wait for approval. Each approver has a database login of their
-  # own (`docker compose run --rm admin approver-add <id> --name "..."` prints it once), and the tool
+  # own (`docker compose run --rm admin approver-add --name "..."` prints it once), and the tool
   # reads who they are from that login: there is no --as to claim. Sign in with
   #   docker compose run --rm -e APPROVER_LOGIN -e APPROVER_PASSWORD approver list
   # or leave the two variables out to be asked. The URL below names the database and no login: no
