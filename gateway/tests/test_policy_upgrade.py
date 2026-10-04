@@ -6,7 +6,7 @@ taken from it before any upgrade."""
 
 import shutil
 from pathlib import Path
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import psycopg
 import pytest
@@ -236,43 +236,49 @@ async def test_roles_that_held_other_grants_get_exactly_the_layout_and_can_still
     assert request.status.value == "approved"
 
 
-async def test_setup_names_duplicate_pending_requests_and_goes_on_once_one_is_cancelled(
+async def test_setup_names_duplicate_open_requests_and_goes_on_once_one_is_cancelled(
     policy: None,
     test_database_url: str,
     policy_gateway_url: str,
     policy_auditor_url: str,
 ) -> None:
-    """A volume from before the unique index can hold identical pending requests. Setup cannot
-    cancel them (only the requester role may) and does not guess: it says which, and fails."""
-    from ai_gateway.policy.approvals import _payload
+    """A volume from before agent-core's unique index can hold identical open requests. The
+    installer does not close them silently (it would write no audit event): setup stops, names
+    them, and goes on once a person has cancelled all but one."""
+    from aox_agent_core.approvals import Principal, PrincipalKind
+    from aox_agent_core.errors import ConfigError
+
     from tests.test_approval_gate import _call, _context, _gate
 
     ctx, call = _context(), _call()
     gate = _gate(policy_gateway_url, hold_s=0)
     first = await gate.decide(ctx, call)
+    second_id = str(uuid4())
     async with await psycopg.AsyncConnection.connect(
         policy_url(test_database_url), autocommit=True
     ) as connection:
-        await connection.execute("DROP INDEX policy_approvals_one_pending")
-    from aox_agent_core.approvals import Principal, PrincipalKind
+        await connection.execute("DROP INDEX agent_core_approvals_one_open")
+        await connection.execute("ALTER TABLE agent_core_approvals DISABLE TRIGGER USER")
+        await connection.execute(
+            "CREATE TEMP TABLE twin AS SELECT * FROM agent_core_approvals WHERE id = %s",
+            (first.approval_id,),
+        )
+        await connection.execute("UPDATE twin SET id = %s", (second_id,))
+        await connection.execute("INSERT INTO agent_core_approvals SELECT * FROM twin")
+        await connection.execute("ALTER TABLE agent_core_approvals ENABLE TRIGGER USER")
 
-    second = await gate._submit(
-        ctx, call, Principal(id=ctx.client.actor_id, kind=PrincipalKind.SERVICE), _payload(call)
-    )
-    assert second is not None
-
-    with pytest.raises(RuntimeError) as stopped:
+    with pytest.raises(ConfigError) as stopped:
         await _upgrade(test_database_url, policy_gateway_url, policy_auditor_url)
 
     assert str(first.approval_id) in str(stopped.value)
-    assert str(second.id) in str(stopped.value)
+    assert second_id in str(stopped.value)
     await gate._queue.cancel(
-        second.id, principal=Principal(id=ctx.client.actor_id, kind=PrincipalKind.SERVICE)
+        UUID(second_id), principal=Principal(id=ctx.client.actor_id, kind=PrincipalKind.SERVICE)
     )
     await _upgrade(test_database_url, policy_gateway_url, policy_auditor_url)
     indexes = await _rows(
         test_database_url,
         "SELECT indexname FROM pg_indexes WHERE schemaname = 'policy'"
-        " AND indexname LIKE 'policy_approvals_one_%'",
+        " AND indexname IN ('agent_core_approvals_one_open', 'policy_approvals_one_pending')",
     )
-    assert indexes == [("policy_approvals_one_pending",)]
+    assert indexes == [("agent_core_approvals_one_open",)], "agent-core's index, not the gateway's"

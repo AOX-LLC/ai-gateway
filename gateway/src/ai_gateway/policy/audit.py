@@ -11,8 +11,8 @@ Two paths, with different failure policies (docs/architecture.md, Audit):
   the first thing written is an `audit.gap` record saying how many were lost.
 
 agent-core appends one event per transaction and serialises appends: about 22 ms each, a few
-dozen a second. A batch of 100 in one transaction takes about 150 ms, so batching is what lets
-every call be audited.
+dozen a second. A batch of 100 in one transaction (`append_many`) takes about 150 ms, so batching is
+what lets every call be audited.
 """
 
 import json
@@ -323,10 +323,7 @@ class PostgresAuditRecorder:
                 to_write = [gap, *self._pending] if gap is not None else list(self._pending)
                 if self._maybe_committed:
                     to_write = await self._without_those_already_written(to_write)
-                records = await self._batch_log.database.run(
-                    lambda session: [self._batch_log.append_in(session, e) for e in to_write],
-                    write=True,
-                )
+                records = await self._batch_log.append_many(to_write)
         except Exception as error:
             self._failing = True
             self._maybe_committed = True
@@ -354,8 +351,8 @@ class PostgresAuditRecorder:
         records are searched for them."""
         last_seq = self._last_seq
 
-        def read(session: Any) -> list[tuple[Any, ...]]:
-            rows: list[tuple[Any, ...]] = session.execute(
+        async def read(session: Any) -> list[tuple[Any, ...]]:
+            rows: list[tuple[Any, ...]] = await session.execute(
                 "SELECT payload FROM policy.agent_core_audit WHERE seq > ? ORDER BY seq DESC",
                 (last_seq,),
             )

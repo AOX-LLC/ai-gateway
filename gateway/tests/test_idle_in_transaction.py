@@ -21,8 +21,9 @@ from ai_gateway.policy.database import BoundedPostgresDatabase
 
 pytestmark = [pytest.mark.integration, pytest.mark.anyio]
 
-APPEND_LOCK_KEY = 0x6167656E74636F72
-"""agent-core's key for `pg_advisory_xact_lock` on appends (audit.sql.APPEND_LOCK_KEY)."""
+APPEND_LOCK_KEY_SQL = "hashtextextended('agent_core_audit:' || %s, 0)"
+"""agent-core's key for `pg_advisory_xact_lock` on appends: per schema, computed in SQL by the
+library and by the audit insert trigger (a6 and later)."""
 POLICY_ROLES = ("policy_gateway", "policy_approver", "policy_auditor")
 OTHER_ROLES = ("gateway_app", "telemetry_writer", "telemetry_reader", "telemetry_purger")
 """The roles this test's fixtures set up: the gateway's own (a migration), and the telemetry roles
@@ -93,11 +94,13 @@ async def test_an_idle_transaction_from_a_policy_role_is_ended_and_a_write_then_
 
     stuck = await psycopg.AsyncConnection.connect(policy_url(urls[role]))
     try:
-        await stuck.execute("SELECT pg_advisory_xact_lock(%s)", (APPEND_LOCK_KEY,))
+        await stuck.execute(f"SELECT pg_advisory_xact_lock({APPEND_LOCK_KEY_SQL})", ("policy",))
         started = time.monotonic()  # now idle inside the transaction, holding the append lock
 
         # Blocked: the write's audit record cannot be written, so the write would be refused.
-        with pytest.raises((psycopg.errors.LockNotAvailable, AgentCoreError)):
+        with pytest.raises(
+            (psycopg.errors.LockNotAvailable, psycopg.errors.QueryCanceled, AgentCoreError)
+        ):
             await write_ahead.append(event())
 
         # Watch the session from outside: using it would be activity, which resets the timer.

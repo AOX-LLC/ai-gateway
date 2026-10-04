@@ -81,7 +81,10 @@ def test_control_characters_and_escape_sequences_in_the_arguments_are_shown_esca
 
 def test_free_text_from_outside_is_cleaned_of_escape_sequences() -> None:
     arguments = {"a": 1}
-    request = _request(arguments, summary="ok\x1b[2J" + "x" * 10, requested_by=f"client:{uuid4()}")
+    # agent-core a6 refuses such text on the way in; a row written around it is still cleaned here.
+    request = _request(arguments, requested_by=f"client:{uuid4()}").model_copy(
+        update={"summary": "ok\x1b[2J" + "x" * 10}
+    )
     shown = render(request, _stored(arguments))
 
     assert "\x1b" not in shown.text

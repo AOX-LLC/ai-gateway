@@ -154,12 +154,13 @@ class TestWithTheDatabase:
     ) -> None:
         gate = _gate(policy_gateway_url, ttl_s=1, hold_s=0)
         first = await gate.decide(_context(), _call())
+        approver = _approver(policy_approver_url)  # one connection pool, not one per look
 
         async with anyio.create_task_group() as tasks:
             tasks.start_soon(expire_due_forever, gate, 0.2)
             with anyio.fail_after(5):
                 while True:
-                    stored = await _approver(policy_approver_url).get(UUID(first.approval_id or ""))
+                    stored = await approver.get(UUID(first.approval_id or ""))
                     if stored.status.value == "expired":
                         break
                     await anyio.sleep(0.2)

@@ -333,22 +333,33 @@ def _print_login(action: str, provisioned: Provisioned) -> None:
 
 async def _approver_add(database_url: str, args: argparse.Namespace) -> None:
     audit = _gateway_audit_log()
-    async with await AsyncConnection.connect(database_url, autocommit=True) as db:
-        provisioned = await add_approver(db, audit, args.id, args.name, args.role or ["approver"])
+    try:
+        async with await AsyncConnection.connect(database_url, autocommit=True) as db:
+            provisioned = await add_approver(
+                db, audit, args.id, args.name, args.role or ["approver"]
+            )
+    finally:
+        await audit.database.aclose()
     _print_login("registered", provisioned)
 
 
 async def _approver_rotate(database_url: str, args: argparse.Namespace) -> None:
     audit = _gateway_audit_log()
-    async with await AsyncConnection.connect(database_url, autocommit=True) as db:
-        provisioned = await rotate_approver(db, audit, args.id)
+    try:
+        async with await AsyncConnection.connect(database_url, autocommit=True) as db:
+            provisioned = await rotate_approver(db, audit, args.id)
+    finally:
+        await audit.database.aclose()
     _print_login("has a new password", provisioned)
 
 
 async def _approver_remove(database_url: str, args: argparse.Namespace) -> None:
     audit = _gateway_audit_log()
-    async with await AsyncConnection.connect(database_url, autocommit=True) as db:
-        await remove_approver(db, audit, args.id)
+    try:
+        async with await AsyncConnection.connect(database_url, autocommit=True) as db:
+            await remove_approver(db, audit, args.id)
+    finally:
+        await audit.database.aclose()
     print(f"approver {args.id} removed: no login, no sessions; past decisions still name them")
 
 
@@ -373,9 +384,12 @@ async def _audit_anchor(database_url: str, args: argparse.Namespace) -> None:
         if args.file.exists() or args.file.is_symlink():
             raise
         existing = []  # no file yet: the first anchor
-    verified = await verify_with_anchors(
-        log, existing, approver_logins=await _approver_logins(database_url)
-    )
+    try:
+        verified = await verify_with_anchors(
+            log, existing, approver_logins=await _approver_logins(database_url)
+        )
+    finally:
+        await log.database.aclose()
     anchor = append_anchor(args.file, verified)  # the head that was verified, not a fresh one
     print(f"anchored record {anchor.seq} ({anchor.record_hash[:12]}...) in {args.file}")
 
@@ -398,12 +412,15 @@ async def _audit_verify(database_url: str, args: argparse.Namespace) -> None:
     log = _audit_log(database_url)
     anchors = read_anchors(args.anchors) if args.anchors else []
     lab_decisions: list[int] = []
-    head = await verify_with_anchors(
-        log,
-        anchors,
-        lab_decisions=lab_decisions,
-        approver_logins=await _approver_logins(database_url),
-    )
+    try:
+        head = await verify_with_anchors(
+            log,
+            anchors,
+            lab_decisions=lab_decisions,
+            approver_logins=await _approver_logins(database_url),
+        )
+    finally:
+        await log.database.aclose()
     print(f"ok: {head.seq} records chain correctly and match {len(anchors)} anchors")
     if lab_decisions:
         print(

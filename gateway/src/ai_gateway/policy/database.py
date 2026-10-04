@@ -1,19 +1,19 @@
-"""A database for agent-core's audit log that cannot starve the rest of the gateway.
+"""A database for agent-core's audit log and approval queue that cannot starve the rest of the
+gateway.
 
-agent-core runs each database operation on the event loop's default thread pool
-(`asyncio.to_thread`), and that pool is shared: it also resolves names for psycopg and httpx. A few
-audit operations stuck behind a held lock would delay a read that needs a new connection. This
-subclass runs the same operations on anyio's own worker threads, a few at a time, so a stalled audit
-log can fill only its own limiter, and can say so (`busy`) so a write is refused at once instead of
-queueing.
+agent-core's storage is async: a Postgres `Database` owns a psycopg connection pool. This subclass
+caps that pool at a few connections and says when every one is taken (`busy`), so a write that
+needs the audit log is refused at once instead of queueing behind a stalled one.
+
+A caller that stops waiting (a timeout, a cancelled request) closes its connection, but the server
+may keep a statement running, for example one waiting for the audit append lock. What ends it is
+the server's own limits (`policy_url` sets a lock, a statement and a transaction timeout on every
+connection), so the database gives up a wait before the caller stops waiting for it.
 """
 
-import threading
-from collections.abc import Callable
-from functools import partial
+from collections.abc import Awaitable, Callable
 from typing import TypeVar
 
-import anyio
 from aox_agent_core.storage import PostgresDatabase, Session
 from pydantic import SecretStr
 
@@ -22,33 +22,24 @@ ResultT = TypeVar("ResultT")
 
 class BoundedPostgresDatabase(PostgresDatabase):
     def __init__(self, url: SecretStr, *, concurrency: int) -> None:
-        super().__init__(url)
-        self._limiter = anyio.CapacityLimiter(concurrency)
+        super().__init__(url, max_connections=concurrency)
         self._concurrency = concurrency
         self._running = 0
-        self._running_lock = threading.Lock()
 
     @property
     def busy(self) -> bool:
-        """Every worker thread is taken, including one whose caller has stopped waiting for it:
-        a new operation would wait for one (or add a thread to a database that is not answering)."""
-        with self._running_lock:
-            return self._running >= self._concurrency
+        """Every connection is taken: a new operation would wait for one."""
+        return self._running >= self._concurrency
 
-    def _counted(self, work: Callable[[Session], ResultT], write: bool) -> ResultT:
-        with self._running_lock:
-            self._running += 1
+    async def run(
+        self,
+        work: Callable[[Session], Awaitable[ResultT]],
+        *,
+        write: bool = False,
+        acquire_timeout: float | None = None,
+    ) -> ResultT:
+        self._running += 1
         try:
-            return self.run_sync(work, write=write)
+            return await super().run(work, write=write, acquire_timeout=acquire_timeout)
         finally:
-            with self._running_lock:
-                self._running -= 1
-
-    async def run(self, work: Callable[[Session], ResultT], *, write: bool = False) -> ResultT:
-        return await anyio.to_thread.run_sync(
-            partial(self._counted, work, write),
-            limiter=self._limiter,
-            # A cancelled caller stops waiting at once; the thread ends when the server's own
-            # timeouts (see policy_url) end its transaction, and holds its worker until then.
-            abandon_on_cancel=True,
-        )
+            self._running -= 1

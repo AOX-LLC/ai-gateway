@@ -1,11 +1,14 @@
 """The policy database settings, and the thread pool the audit log is kept out of."""
 
 import asyncio
-import threading
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 import anyio
 import pytest
+from aox_agent_core.storage import Dialect, Session
 from pydantic import SecretStr
 
 from ai_gateway.policy import policy_url
@@ -13,6 +16,16 @@ from ai_gateway.policy.database import BoundedPostgresDatabase
 from tests.test_upstreams import eventually
 
 URL = "postgresql://policy_gateway:pw@postgres:5432/ai_gateway"
+
+
+class _NoServer(BoundedPostgresDatabase):
+    """The bounded database with no server behind it: a transaction is just a context."""
+
+    @asynccontextmanager
+    async def _transaction(
+        self, *, write: bool, acquire_timeout: float | None
+    ) -> AsyncIterator[Session]:
+        yield Session(None, Dialect.POSTGRES)  # type: ignore[arg-type]
 
 
 def _options(url: str) -> str:
@@ -41,19 +54,19 @@ def test_the_whole_transaction_is_bounded_too() -> None:
 
 
 @pytest.mark.anyio
-async def test_a_caller_stops_waiting_for_a_blocked_worker_thread_when_its_time_is_up() -> None:
-    release = threading.Event()
-    database = BoundedPostgresDatabase(SecretStr(URL), concurrency=1)
-    database.run_sync = lambda work, write=False: release.wait(5)  # type: ignore[method-assign,assignment,misc]
+async def test_a_caller_stops_waiting_when_its_time_is_up_and_the_slot_is_freed() -> None:
+    database = _NoServer(SecretStr(URL), concurrency=1)
+    release = anyio.Event()
+
+    async def stalled(session: Any) -> None:
+        await release.wait()
+
     started = anyio.current_time()
-    try:
-        with anyio.move_on_after(0.2) as scope:
-            await database.run(lambda session: None)
-        assert scope.cancelled_caught
-        assert anyio.current_time() - started < 1.0, "the wait ended at its limit, not the thread's"
-        assert database.busy, "the abandoned thread still holds its worker until it returns"
-    finally:
-        release.set()
+    with anyio.move_on_after(0.2) as scope:
+        await database.run(stalled)
+    assert scope.cancelled_caught
+    assert anyio.current_time() - started < 1.0, "the wait ended at its limit"
+    assert not database.busy, "a caller that gave up no longer holds a slot"
 
 
 def test_other_parts_of_the_url_survive_unchanged() -> None:
@@ -73,18 +86,21 @@ def test_options_already_in_the_url_are_kept() -> None:
 
 
 @pytest.mark.anyio
-async def test_a_stalled_audit_log_fills_its_own_workers_and_not_the_default_thread_pool() -> None:
-    database = BoundedPostgresDatabase(SecretStr(URL), concurrency=2)
-    release = threading.Event()
-    database.run_sync = lambda work, write=False: release.wait(10)  # type: ignore[assignment,method-assign,misc]
+async def test_a_stalled_audit_log_fills_its_own_connections_and_says_so() -> None:
+    database = _NoServer(SecretStr(URL), concurrency=2)
+    release = anyio.Event()
+
+    async def stalled(session: Any) -> None:
+        await release.wait()
 
     async with anyio.create_task_group() as tasks:
         for _ in range(4):
-            tasks.start_soon(database.run, lambda session: None)
+            tasks.start_soon(database.run, stalled)
         await eventually(lambda: database.busy, timeout_s=3)
 
         # The loop's default executor, which resolves names for psycopg and httpx, is untouched.
         with anyio.fail_after(1):
             assert await asyncio.get_running_loop().run_in_executor(None, lambda: "free") == "free"
 
-        release.set()
+        tasks.cancel_scope.cancel()
+    assert not database.busy
