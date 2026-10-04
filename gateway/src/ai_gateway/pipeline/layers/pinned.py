@@ -16,6 +16,7 @@ from ai_gateway.pipeline.alerts import Alerts
 from ai_gateway.pipeline.pins import ToolPins, definition_sha256
 from ai_gateway.pipeline.types import (
     ALLOW,
+    POLICY_BLOCK_MESSAGE,
     BaseLayer,
     CallContext,
     CatalogTool,
@@ -24,8 +25,6 @@ from ai_gateway.pipeline.types import (
     ToolCall,
     Verdict,
 )
-
-POLICY_BLOCK_MESSAGE = "Request blocked by gateway policy."
 
 
 class PinnedDescriptionsLayer(BaseLayer):

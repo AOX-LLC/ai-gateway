@@ -138,3 +138,33 @@ async def test_the_record_never_holds_the_argument_names_or_values() -> None:
     )
 
     assert "zq" not in str(events.events[-1].payload)
+
+
+async def test_a_schema_that_points_at_a_remote_reference_is_never_fetched(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An upstream's own schema (a tool with no pin) must not make the gateway fetch a URL: the
+    gateway can reach places the upstream cannot."""
+    import urllib.request
+
+    def refuse(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError("the gateway fetched a remote reference")
+
+    monkeypatch.setattr(urllib.request, "urlopen", refuse)
+    hostile = {
+        "type": "object",
+        "properties": {"subject": {"$ref": "http://127.0.0.1:1/secret.json#/x"}},
+    }
+
+    verdict = await SchemaLayer(ToolPins({})).before_call(
+        ctx(), call({"subject": "x"}, schema=hostile)
+    )
+
+    assert isinstance(verdict, Deny), "an unreachable reference is a refusal, not a fetch"
+
+
+def test_a_pinned_schema_that_is_not_a_valid_schema_stops_startup() -> None:
+    broken = {"type": "object", "properties": {"subject": {"type": "no-such-type"}}}
+
+    with pytest.raises(Exception, match="no-such-type"):
+        SchemaLayer(pins_for(schema=broken))

@@ -13,6 +13,10 @@ from mcp.types import CallToolResult, Tool
 
 from ai_gateway.text import printable
 
+POLICY_BLOCK_MESSAGE = "Request blocked by gateway policy."
+"""What a client is told when a layer refuses a call: it never names the layer or echoes arguments.
+One constant, so every layer says exactly the same thing."""
+
 Effect = Literal["read", "write"]
 """Whether a tool only reads or may change something. Decided by the gateway's reviewed
 policy, never by the upstream's own annotations."""
@@ -45,6 +49,7 @@ class DenyCode(StrEnum):
     PIN_UNPINNED = "pin_unpinned"
     EGRESS_BULK = "egress_bulk"
     EGRESS_MARKER = "egress_marker"
+    EGRESS_STATE_LOST = "egress_state_lost"
     CANARY_HIT = "canary_hit"
 
 

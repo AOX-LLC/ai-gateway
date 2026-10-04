@@ -36,6 +36,7 @@ from typing import Any
 from ai_gateway.pipeline.alerts import Alerts
 from ai_gateway.pipeline.types import (
     ALLOW,
+    POLICY_BLOCK_MESSAGE,
     BaseLayer,
     CallContext,
     Deny,
@@ -44,10 +45,13 @@ from ai_gateway.pipeline.types import (
     Verdict,
 )
 
-POLICY_BLOCK_MESSAGE = "Request blocked by gateway policy."
 _B64 = re.compile(r"[A-Za-z0-9+/_-]{16,512}={0,2}")
 _HEX = re.compile(r"(?:[0-9A-Fa-f]{2}){8,256}")
-_MAX_DECODED_RUNS = 20
+_MAX_DECODED_RUNS = 2_000
+_MAX_TEXT = 262_144
+"""What is scanned of a call's arguments, bytes of text: the work is linear, and arguments are
+bounded by the schema layer well below it. A run is decoded whether or not it is a value, so
+filler words cannot use the budget up before a real one."""
 
 
 class CanaryConfigError(ValueError):
@@ -104,7 +108,7 @@ def _strings(value: Any) -> list[str]:
     return []
 
 
-def _decoded_runs(text: str) -> list[str]:
+def decoded_runs(text: str) -> list[str]:
     runs: list[str] = []
     for match in _B64.finditer(text):
         token = match.group(0).replace("-", "+").replace("_", "/")
@@ -136,7 +140,7 @@ class CanaryLayer(BaseLayer):
         if config is None:
             return set()
         names: set[str] = set()
-        for candidate in (text, *_decoded_runs(text)):
+        for candidate in (text, *decoded_runs(text)):
             for match in config.shape.finditer(squeeze(candidate)):
                 digest = hashlib.sha256(match.group(0).encode()).hexdigest()
                 if digest in config.by_sha256:
@@ -146,7 +150,7 @@ class CanaryLayer(BaseLayer):
     async def before_call(self, ctx: CallContext, call: ToolCall) -> Verdict:
         if self._config is None:
             return ALLOW
-        found = self._found("\n".join(_strings(call.arguments)))
+        found = self._found("\n".join(_strings(call.arguments))[:_MAX_TEXT])
         if not found:
             return ALLOW
         for name in sorted(found):

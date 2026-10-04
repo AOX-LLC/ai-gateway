@@ -40,8 +40,10 @@ from typing import Any
 
 from mcp.types import CallToolResult, TextContent
 
+from ai_gateway.pipeline.layers.canary import decoded_runs
 from ai_gateway.pipeline.types import (
     ALLOW,
+    POLICY_BLOCK_MESSAGE,
     Allow,
     BaseLayer,
     CallContext,
@@ -51,10 +53,22 @@ from ai_gateway.pipeline.types import (
     Verdict,
 )
 
-POLICY_BLOCK_MESSAGE = "Request blocked by gateway policy."
 _EMAIL = re.compile(r"[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,255}\.[A-Za-z]{2,24}")
 _TOP_KEYS = frozenset({"limits", "memory", "values", "markers", "exempt"})
-_MAX_TEXT = 1_000_000
+_MAX_TEXT = 262_144
+_DASHES = dict.fromkeys(
+    map(ord, "\u2010\u2011\u2012\u2013\u2014\u2015\u2212\ufe58\ufe63\uff0d"), "-"
+)
+_MAX_EVICTED_REMEMBERED = 4_096
+
+
+def normalise(text: str) -> str:
+    """The text as a value would be matched in it: compatibility forms folded (full-width letters,
+    ligatures), format and zero-width characters dropped, every dash a plain hyphen, upper case. A
+    value dressed up to slip past a pattern is the same value once it is plain."""
+    folded = unicodedata.normalize("NFKC", text)
+    kept = "".join(c for c in folded if unicodedata.category(c) != "Cf").translate(_DASHES)
+    return kept.upper()
 
 
 class EgressConfigError(ValueError):
@@ -126,20 +140,21 @@ def parse_egress_config(raw: Mapping[str, Any]) -> EgressConfig:
     )
 
 
-def _strings(value: Any) -> list[str]:
+def _keys_and_values(value: Any) -> list[str]:
+    """Every string in the value, dict keys included: a value can hide in a key."""
     if isinstance(value, str):
         return [value]
     if isinstance(value, dict):
-        return [s for item in value.values() for s in _strings(item)]
+        return [s for k, item in value.items() for s in [k, *_keys_and_values(item)]]
     if isinstance(value, list):
-        return [s for item in value for s in _strings(item)]
+        return [s for item in value for s in _keys_and_values(item)]
     return []
 
 
 def _result_text(result: CallToolResult) -> str:
     parts: list[str] = []
     if result.structured_content is not None:
-        parts += _strings(result.structured_content)
+        parts += _keys_and_values(result.structured_content)
     for block in result.content:
         if isinstance(block, TextContent):
             parts.append(block.text)
@@ -150,6 +165,9 @@ def _result_text(result: CallToolResult) -> str:
 class _SessionLedger:
     read: set[int] = field(default_factory=set)
     egressed: set[int] = field(default_factory=set)
+    saturated: bool = False
+    """The session read more values than it may be tracked for: what it read afterwards is not
+    recorded, so a write from it that carries any value cannot be checked and is refused."""
 
 
 class EgressLayer(BaseLayer):
@@ -159,18 +177,24 @@ class EgressLayer(BaseLayer):
         self._config = config or EgressConfig()
         self._key = secrets.token_bytes(32)
         self._ledgers: OrderedDict[tuple[str, str], _SessionLedger] = OrderedDict()
+        self._evicted: OrderedDict[tuple[str, str], None] = OrderedDict()
+        """Sessions whose ledger was dropped for room (keys only): a write from one is refused,
+        because what it read can no longer be compared, and forgetting would fail open."""
         self._total = 0
 
     # -- what counts as a value -----------------------------------------------------------------
 
     def _values_in(self, text: str) -> set[str]:
+        """The values in the text, in the clear or in a decoded base64 or hex run of it."""
         found: set[str] = set()
-        for pattern in self._config.identifier_patterns:
-            found.update(m.group(0) for m in pattern.finditer(text))
-        if self._config.emails:
-            found.update(m.group(0).lower() for m in _EMAIL.finditer(text))
-        if self._config.phone_pattern is not None:
-            found.update(m.group(0) for m in self._config.phone_pattern.finditer(text))
+        for candidate in (text, *decoded_runs(text)):
+            plain = normalise(candidate)
+            for pattern in self._config.identifier_patterns:
+                found.update(m.group(0) for m in pattern.finditer(plain))
+            if self._config.emails:
+                found.update(m.group(0).lower() for m in _EMAIL.finditer(plain))
+            if self._config.phone_pattern is not None:
+                found.update(m.group(0) for m in self._config.phone_pattern.finditer(plain))
         return found
 
     def _fingerprint(self, value: str) -> int:
@@ -188,8 +212,11 @@ class EgressLayer(BaseLayer):
         while len(self._ledgers) > self._config.max_sessions or (
             self._total > self._config.max_values_total and len(self._ledgers) > 1
         ):
-            _, evicted = self._ledgers.popitem(last=False)
+            gone, evicted = self._ledgers.popitem(last=False)
             self._total -= len(evicted.read) + len(evicted.egressed)
+            self._evicted[gone] = None
+            while len(self._evicted) > _MAX_EVICTED_REMEMBERED:
+                self._evicted.popitem(last=False)
         return ledger
 
     def stored_values(self) -> int:
@@ -204,6 +231,8 @@ class EgressLayer(BaseLayer):
         values = self._values_in(_result_text(result))
         ledger = self._ledger(ctx)
         room = self._config.max_values_per_session - len(ledger.read)
+        if len(values) > max(room, 0):
+            ledger.saturated = True
         for value in list(values)[: max(room, 0)]:
             fingerprint = self._fingerprint(value)
             if fingerprint not in ledger.read:
@@ -215,17 +244,22 @@ class EgressLayer(BaseLayer):
         if call.effect != "write":
             return ALLOW
         arguments = call.arguments
-        text = "\n".join(_strings(arguments))
+        text = "\n".join(_keys_and_values(arguments))[:_MAX_TEXT]
         normalised = unicodedata.normalize("NFKC", text).casefold()
         markers = sum(normalised.count(marker.casefold()) for marker in self._config.markers)
         if markers:
             return Deny(DenyCode.EGRESS_MARKER, POLICY_BLOCK_MESSAGE, score=markers)
 
+        key = (str(ctx.client.id), ctx.session_id or "-")
+        if key in self._evicted:
+            return Deny(DenyCode.EGRESS_STATE_LOST, POLICY_BLOCK_MESSAGE, score=1)
         exempt_values: set[str] = set()
         for argument in self._config.exempt.get(call.exposed_name, frozenset()):
-            exempt_values |= self._values_in("\n".join(_strings(arguments.get(argument))))
+            exempt_values |= self._values_in("\n".join(_keys_and_values(arguments.get(argument))))
         carried = self._values_in(text) - exempt_values
         ledger = self._ledger(ctx)
+        if ledger.saturated and carried:
+            return Deny(DenyCode.EGRESS_STATE_LOST, POLICY_BLOCK_MESSAGE, score=len(carried))
         copied = {
             fingerprint
             for value in carried

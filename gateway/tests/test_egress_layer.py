@@ -1,5 +1,6 @@
 """The egress layer: data read in a session does not flow back out through a write."""
 
+import base64
 import json
 import tomllib
 from pathlib import Path
@@ -248,3 +249,65 @@ def test_the_shipped_configuration_loads_and_a_mistake_stops_startup(tmp_path: P
     assert (
         tomllib.loads((ROOT / "config" / "egress.toml").read_text())["limits"]["per_session"] == 10
     )
+
+
+@pytest.mark.parametrize(
+    "disguise",
+    [
+        lambda text: text.lower(),
+        lambda text: text.replace("-", "\u2011"),
+        lambda text: text.replace("-", "\u2212"),
+        lambda text: "".join(chr(ord(c) + 0xFEE0) if c.isalnum() else c for c in text),
+        lambda text: text.replace("ACC", "A\u200bCC"),
+        lambda text: base64.b64encode(text.encode()).decode(),
+        lambda text: text.encode().hex(),
+    ],
+    ids=["lower", "nb-hyphen", "minus", "fullwidth", "zero-width", "base64", "hex"],
+)
+async def test_a_value_dressed_up_to_slip_past_the_pattern_is_still_counted(disguise) -> None:  # type: ignore[no-untyped-def]
+    layer, context = EgressLayer(SHIPPED), ctx()
+    await _read(layer, _accounts(1, 20), context)
+    ids = " ".join(f"ACC-{n:05d}" for n in range(1, 8))
+
+    verdict = await layer.before_call(context, _write(disguise(ids)))
+
+    assert isinstance(verdict, Deny)
+
+
+async def test_a_value_in_a_dict_key_is_counted_too() -> None:
+    layer, context = EgressLayer(SHIPPED), ctx()
+    await _read(layer, _accounts(1, 20), context)
+    keyed = {f"ACC-{n:05d}": "x" for n in range(1, 8)}
+
+    verdict = await layer.before_call(context, call({"subject": "s", "notes": keyed}, name=WRITE))
+
+    assert isinstance(verdict, Deny)
+
+
+async def test_a_session_that_read_more_than_it_is_tracked_for_cannot_write_values() -> None:
+    """Flooding a session with reads must not make it forget what it read afterwards: past the cap
+    the layer refuses writes that carry any value (it cannot check them), not wave them through."""
+    config = EgressConfig(max_values_per_session=5, identifier_patterns=SHIPPED.identifier_patterns)
+    layer, context = EgressLayer(config), ctx()
+    await _read(layer, _accounts(1, 30), context)
+
+    carrying = await layer.before_call(context, _write("see ACC-00099"))
+    plain = await layer.before_call(context, _write("see the attached"))
+
+    assert isinstance(carrying, Deny)
+    assert carrying.code is DenyCode.EGRESS_STATE_LOST
+    assert isinstance(plain, Allow)
+
+
+async def test_a_session_whose_ledger_was_dropped_for_room_cannot_write_values() -> None:
+    config = EgressConfig(max_sessions=2, identifier_patterns=SHIPPED.identifier_patterns)
+    layer = EgressLayer(config)
+    victim = ctx(session="victim")
+    await _read(layer, _accounts(1, 20), victim)
+    for other in ("a", "b"):
+        await _read(layer, _accounts(1, 2), ctx(session=other))  # crowd the victim out
+
+    verdict = await layer.before_call(victim, _write(" ".join(f"ACC-{n:05d}" for n in range(1, 8))))
+
+    assert isinstance(verdict, Deny), "forgetting would fail open"
+    assert verdict.code is DenyCode.EGRESS_STATE_LOST

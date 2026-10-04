@@ -136,3 +136,13 @@ def test_a_mistake_in_the_file_stops_startup(tmp_path: Path) -> None:
             load_canary_config(path)
     with pytest.raises(CanaryConfigError):
         load_canary_config(tmp_path / "missing.toml")
+
+
+async def test_filler_words_before_an_encoded_canary_do_not_use_up_the_decoding_budget() -> None:
+    layer, _ = _layer()
+    filler = " ".join(f"fillerword{n:04d}abcdefgh" for n in range(200))
+    encoded = base64.b64encode(f"code: {CRM_CANARY}".encode()).decode()
+
+    verdict = await layer.before_call(ctx(), _write(f"{filler} {encoded}"))
+
+    assert isinstance(verdict, Deny)

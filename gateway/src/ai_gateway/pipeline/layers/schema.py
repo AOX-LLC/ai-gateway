@@ -19,10 +19,13 @@ import math
 from typing import Any
 
 from jsonschema import Draft202012Validator
+from referencing import Registry
+from referencing.exceptions import Unresolvable
 
-from ai_gateway.pipeline.pins import ToolPins
+from ai_gateway.pipeline.pins import ToolPin, ToolPins
 from ai_gateway.pipeline.types import (
     ALLOW,
+    POLICY_BLOCK_MESSAGE,
     BaseLayer,
     CallContext,
     Deny,
@@ -31,7 +34,6 @@ from ai_gateway.pipeline.types import (
     Verdict,
 )
 
-POLICY_BLOCK_MESSAGE = "Request blocked by gateway policy."
 MAX_ARGUMENT_BYTES = 65_536
 MAX_DEPTH = 6
 MAX_VIOLATIONS = 50
@@ -59,26 +61,49 @@ class SchemaLayer(BaseLayer):
 
     def __init__(self, pins: ToolPins | None = None) -> None:
         self._pins = pins if pins is not None else ToolPins({})
+        # One validator per pin, built (and the schema itself checked) at startup: a pinned schema
+        # that is not a valid schema stops the gateway starting, and nothing is built per call.
+        self._validators = {
+            name: self._validator(self._pins.get(name)) for name in self._pins.names()
+        }
 
-    def _schema_for(self, call: ToolCall) -> dict[str, Any] | None:
-        pin = self._pins.get(call.exposed_name)
+    @staticmethod
+    def _validator(pin: ToolPin | None) -> Draft202012Validator:
+        schema = {**(pin.input_schema if pin else {}), "additionalProperties": False}
         if pin is not None:
-            return dict(pin.input_schema)
-        if call.definition is not None:
-            return call.definition.input_schema
-        return None
+            Draft202012Validator.check_schema(schema)
+        # An empty registry with no way to fetch: a `$ref` that is not inside the schema cannot be
+        # resolved, so it is never retrieved from the network (jsonschema's default would try).
+        return Draft202012Validator(schema, registry=Registry())
+
+    def _validator_for(self, call: ToolCall) -> Draft202012Validator | None:
+        known = self._validators.get(call.exposed_name)
+        if known is not None:
+            return known
+        if call.definition is None:
+            return None
+        # A tool with no pin (`pinned_descriptions` refuses it, but this layer runs first): checked
+        # against the schema the catalog offers now, never fetching anything.
+        try:
+            return Draft202012Validator(
+                {**call.definition.input_schema, "additionalProperties": False}, registry=Registry()
+            )
+        except Exception:  # an upstream's own schema is not trusted to be valid
+            return None
 
     async def before_call(self, ctx: CallContext, call: ToolCall) -> Verdict:
-        schema = self._schema_for(call)
-        if schema is None:
+        validator = self._validator_for(call)
+        if validator is None:
             return Deny(DenyCode.SCHEMA_VIOLATION, POLICY_BLOCK_MESSAGE, score=1)
         if len(call.arguments_json.encode()) > MAX_ARGUMENT_BYTES:
             return Deny(DenyCode.SCHEMA_VIOLATION, POLICY_BLOCK_MESSAGE, score=1)
         arguments = call.arguments
         violations = _shape_violations(arguments)
-        strict = {**schema, "additionalProperties": False}
-        errors = Draft202012Validator(strict).iter_errors(arguments)
-        violations += sum(1 for _ in itertools.islice(errors, MAX_VIOLATIONS))
+        try:
+            errors = validator.iter_errors(arguments)
+            violations += sum(1 for _ in itertools.islice(errors, MAX_VIOLATIONS))
+        except Unresolvable:
+            violations += 1  # a reference to somewhere that cannot be reached is a refusal
         if violations:
             return Deny(
                 DenyCode.SCHEMA_VIOLATION,

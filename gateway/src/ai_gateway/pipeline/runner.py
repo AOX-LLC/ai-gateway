@@ -33,6 +33,7 @@ from ai_gateway.pipeline.layers.schema import SchemaLayer
 from ai_gateway.pipeline.pins import ToolPins
 from ai_gateway.pipeline.registry import LAYER_ORDER
 from ai_gateway.pipeline.types import (
+    POLICY_BLOCK_MESSAGE,
     BaseLayer,
     CallContext,
     CatalogTool,
@@ -56,8 +57,6 @@ _tracer = trace.get_tracer("ai_gateway")
 # `traceparent` the client sent in `_meta`, and the call to the upstream carries the trace
 # context that is current when it is made; starting the gateway's spans in an empty context,
 # not under the SDK's, means a client cannot choose which trace an upstream call joins.
-
-POLICY_BLOCK_MESSAGE = "Request blocked by gateway policy."
 
 
 class UpstreamStatus(StrEnum):
