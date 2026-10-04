@@ -311,3 +311,28 @@ async def test_a_session_whose_ledger_was_dropped_for_room_cannot_write_values()
 
     assert isinstance(verdict, Deny), "forgetting would fail open"
     assert verdict.code is DenyCode.EGRESS_STATE_LOST
+
+
+async def test_arguments_too_large_to_scan_are_refused_not_scanned_in_part() -> None:
+    from ai_gateway.pipeline.layers.egress import _MAX_TEXT
+
+    layer, context = EgressLayer(SHIPPED), ctx()
+    padded = "x" * (_MAX_TEXT + 10) + " ".join(f"ACC-{n:05d}" for n in range(1, 8))
+
+    verdict = await layer.before_call(context, _write(padded))
+
+    assert isinstance(verdict, Deny), "values hidden behind padding"
+    assert verdict.code is DenyCode.EGRESS_STATE_LOST
+
+
+async def test_a_result_too_large_to_scan_marks_the_session_so_writes_with_values_are_refused() -> (
+    None
+):
+    from ai_gateway.pipeline.layers.egress import _MAX_TEXT
+
+    layer, context = EgressLayer(SHIPPED), ctx()
+    await _read(layer, "y" * (_MAX_TEXT + 10) + _accounts(1, 20), context)
+
+    verdict = await layer.before_call(context, _write("see ACC-00005"))
+
+    assert isinstance(verdict, Deny)

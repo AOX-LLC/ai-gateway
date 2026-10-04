@@ -152,13 +152,14 @@ def _keys_and_values(value: Any) -> list[str]:
 
 
 def _result_text(result: CallToolResult) -> str:
+    """The text of a result, whole: the caller notes when it is longer than can be scanned."""
     parts: list[str] = []
     if result.structured_content is not None:
         parts += _keys_and_values(result.structured_content)
     for block in result.content:
         if isinstance(block, TextContent):
             parts.append(block.text)
-    return "\n".join(parts)[:_MAX_TEXT]
+    return "\n".join(parts)
 
 
 @dataclass
@@ -228,8 +229,13 @@ class EgressLayer(BaseLayer):
     async def after_call(self, ctx: CallContext, call: ToolCall, result: CallToolResult) -> Verdict:
         if call.effect != "read":
             return ALLOW
-        values = self._values_in(_result_text(result))
+        text = _result_text(result)
+        values = self._values_in(text[:_MAX_TEXT])
         ledger = self._ledger(ctx)
+        if len(text) > _MAX_TEXT:
+            ledger.saturated = (
+                True  # what lies past the bound is not recorded: writes cannot be checked
+            )
         room = self._config.max_values_per_session - len(ledger.read)
         if len(values) > max(room, 0):
             ledger.saturated = True
@@ -244,7 +250,10 @@ class EgressLayer(BaseLayer):
         if call.effect != "write":
             return ALLOW
         arguments = call.arguments
-        text = "\n".join(_keys_and_values(arguments))[:_MAX_TEXT]
+        text = "\n".join(_keys_and_values(arguments))
+        if len(text) > _MAX_TEXT:
+            # Not scanning the rest would let values hide behind padding: refuse what is unchecked.
+            return Deny(DenyCode.EGRESS_STATE_LOST, POLICY_BLOCK_MESSAGE, score=1)
         normalised = unicodedata.normalize("NFKC", text).casefold()
         markers = sum(normalised.count(marker.casefold()) for marker in self._config.markers)
         if markers:

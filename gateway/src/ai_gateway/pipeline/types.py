@@ -51,6 +51,7 @@ class DenyCode(StrEnum):
     EGRESS_MARKER = "egress_marker"
     EGRESS_STATE_LOST = "egress_state_lost"
     CANARY_HIT = "canary_hit"
+    CANARY_UNCHECKABLE = "canary_uncheckable"
 
 
 class Disposition(StrEnum):

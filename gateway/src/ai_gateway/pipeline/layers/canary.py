@@ -150,7 +150,12 @@ class CanaryLayer(BaseLayer):
     async def before_call(self, ctx: CallContext, call: ToolCall) -> Verdict:
         if self._config is None:
             return ALLOW
-        found = self._found("\n".join(_strings(call.arguments))[:_MAX_TEXT])
+        text = "\n".join(_strings(call.arguments))
+        if len(text) > _MAX_TEXT:
+            # Not scanning the rest would let a value hide behind padding: what cannot be checked
+            # is refused (the schema layer refuses arguments this large anyway).
+            return Deny(DenyCode.CANARY_UNCHECKABLE, POLICY_BLOCK_MESSAGE, score=1)
+        found = self._found(text)
         if not found:
             return ALLOW
         for name in sorted(found):

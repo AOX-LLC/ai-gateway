@@ -146,3 +146,13 @@ async def test_filler_words_before_an_encoded_canary_do_not_use_up_the_decoding_
     verdict = await layer.before_call(ctx(), _write(f"{filler} {encoded}"))
 
     assert isinstance(verdict, Deny)
+
+
+async def test_arguments_too_large_to_scan_are_refused_not_scanned_in_part() -> None:
+    from ai_gateway.pipeline.layers.canary import _MAX_TEXT
+
+    layer, _ = _layer()
+
+    verdict = await layer.before_call(ctx(), _write("x" * (_MAX_TEXT + 10) + CRM_CANARY))
+
+    assert isinstance(verdict, Deny), "a canary hidden behind padding"
