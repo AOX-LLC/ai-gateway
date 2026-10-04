@@ -36,8 +36,18 @@ describe("the proxy", () => {
     const api = await call("/api/live");
 
     expect(page.status).toBe(303);
-    expect(page.headers.get("location")).toBe("/signin");
+    expect(page.headers.get("location")).toBe("http://127.0.0.1:4400/signin");
     expect(api.status).toBe(401);
+  });
+
+  it("sends the visitor back to the name they used, not the address the server listens on", async () => {
+    const { proxy } = await import("@/proxy");
+    const behindDocker = new NextRequest("http://0.0.0.0:4400/", { headers: { host: "127.0.0.1:4400" } });
+
+    const response = proxy(behindDocker);
+
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toBe("http://127.0.0.1:4400/signin");
   });
 
   it("lets the sign-in page, its form and the health check through without one", async () => {

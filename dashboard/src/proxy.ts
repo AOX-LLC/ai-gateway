@@ -1,4 +1,3 @@
-import { seeOther } from "@/lib/redirect";
 import { type NextRequest, NextResponse } from "next/server";
 import { config as settings } from "./lib/config";
 import { hostAllowed } from "./lib/auth/hosts";
@@ -48,6 +47,15 @@ function secure(response: NextResponse, csp: string): NextResponse {
   return response;
 }
 
+// Next's proxy layer refuses a Location that is not absolute, and in a container request.url names the
+// address the server listens on (0.0.0.0), not the one the browser used. The Host header is the name it
+// used, and has already been checked against the allowlist when this runs.
+function signInRedirect(request: NextRequest): NextResponse {
+  const target = new URL("/signin", request.url);
+  target.host = request.headers.get("host") ?? target.host;
+  return NextResponse.redirect(target, 303);
+}
+
 export function proxy(request: NextRequest): NextResponse {
   const nonce = Buffer.from(crypto.randomUUID()).toString("base64");
   const csp = policy(nonce);
@@ -63,7 +71,7 @@ export function proxy(request: NextRequest): NextResponse {
     if (path.startsWith("/api/")) {
       return secure(NextResponse.json({ error: "not signed in" }, { status: 401 }), csp);
     }
-    return secure(seeOther("/signin"), csp);
+    return secure(signInRedirect(request), csp);
   }
 
   const headers = new Headers(request.headers);
