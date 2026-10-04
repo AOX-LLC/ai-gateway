@@ -9,13 +9,25 @@ import pytest
 from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
-from crm_server.seed import ACCOUNT_COUNT, CONTACT_COUNT, DEAL_COUNT, NOTE_COUNT
+from crm_server.seed import (
+    ACCOUNT_COUNT,
+    CONTACT_COUNT,
+    CRM_CANARY,
+    CRM_CANARY_SENTENCE,
+    DEAL_COUNT,
+    NOTE_COUNT,
+)
 from harborline_setup.crm import setup_crm
 from harborline_setup.handbook import setup_handbook
 from harborline_setup.handbook_documents import DocumentFileError
 from harborline_setup.ticketing import setup_ticketing
 from tests.helpers import HANDBOOK_DOCUMENTS
-from ticketing_server.seed import COMMENT_COUNT, TICKET_COUNT
+from ticketing_server.seed import (
+    COMMENT_COUNT,
+    TICKET_COUNT,
+    TICKETING_CANARY,
+    TICKETING_CANARY_SENTENCE,
+)
 
 pytestmark = [pytest.mark.integration, pytest.mark.anyio]
 
@@ -505,3 +517,55 @@ async def test_handbook_setup_narrows_a_schema_grant(
 
     assert not await _holds(url, role, create)
     assert await _holds(url, role, "SELECT has_schema_privilege(%(r)s, 'handbook', 'USAGE')")
+
+
+async def _one_value(url: str, query: str) -> str:
+    async with await psycopg.AsyncConnection.connect(url) as connection:
+        cursor = await connection.execute(query.encode())
+        row = await cursor.fetchone()
+    assert row is not None
+    return str(row[0])
+
+
+async def test_crm_setup_puts_the_canary_in_a_volume_seeded_without_it(
+    scratch_database: tuple[str, str],
+) -> None:
+    url, role = scratch_database
+    password = f"scratch-{uuid4().hex}"
+    await setup_crm(url, password, None, role)
+    about = "SELECT about FROM crm.accounts WHERE id = 'ACC-00001'"
+    assert (await _one_value(url, about)).count(CRM_CANARY) == 1  # a fresh volume has it once
+    async with await psycopg.AsyncConnection.connect(url) as connection:
+        await connection.execute(
+            "UPDATE crm.accounts SET about = replace(about, %s, '') WHERE id = 'ACC-00001'",
+            (f" {CRM_CANARY_SENTENCE}",),
+        )
+    assert CRM_CANARY not in await _one_value(url, about)  # now it looks like an older volume
+
+    await setup_crm(url, password, None, role)
+    await setup_crm(url, password, None, role)
+
+    assert (await _one_value(url, about)).count(CRM_CANARY) == 1
+
+
+async def test_ticketing_setup_puts_the_canary_in_a_volume_seeded_without_it(
+    test_database_url: str, ticketing_app_url: str, ticketing_schema: None
+) -> None:
+    password = str(conninfo_to_dict(ticketing_app_url)["password"])
+    async with await psycopg.AsyncConnection.connect(test_database_url) as connection:
+        await connection.execute("TRUNCATE ticketing.comments, ticketing.tickets, ticketing.staff")
+    await setup_ticketing(test_database_url, password, None)
+    text = "SELECT description FROM ticketing.tickets WHERE id = 'TKT-000001'"
+    assert (await _one_value(test_database_url, text)).count(TICKETING_CANARY) == 1
+    async with await psycopg.AsyncConnection.connect(test_database_url) as connection:
+        await connection.execute(
+            "UPDATE ticketing.tickets SET description = replace(description, %s, '')"
+            " WHERE id = 'TKT-000001'",
+            (f" {TICKETING_CANARY_SENTENCE}",),
+        )
+    assert TICKETING_CANARY not in await _one_value(test_database_url, text)
+
+    await setup_ticketing(test_database_url, password, None)
+    await setup_ticketing(test_database_url, password, None)
+
+    assert (await _one_value(test_database_url, text)).count(TICKETING_CANARY) == 1

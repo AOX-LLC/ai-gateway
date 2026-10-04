@@ -335,6 +335,18 @@ async def is_seeded(connection: AsyncConnection) -> bool:
     return bool(row and row[0])
 
 
+async def sync_canary(connection: AsyncConnection) -> bool:
+    """Put the canary in a volume seeded before it existed. Idempotent: the sentence is appended to
+    the first account's `about` only when the canary is not in it, so a fresh volume (which has it
+    from the seed) and a volume synced before are left as they are. Returns whether it changed."""
+    cursor = await connection.execute(
+        "UPDATE accounts SET about = about || ' ' || %s"
+        " WHERE id = 'ACC-00001' AND position(%s IN about) = 0",
+        (CRM_CANARY_SENTENCE, CRM_CANARY),
+    )
+    return cursor.rowcount == 1
+
+
 async def insert_dataset(connection: AsyncConnection, dataset: Dataset) -> None:
     """Write the dataset in one transaction."""
     async with connection.transaction(), connection.cursor() as cursor:

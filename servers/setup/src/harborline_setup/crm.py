@@ -6,7 +6,13 @@ from pathlib import Path
 from psycopg import AsyncConnection, sql
 
 from crm_server import MIGRATIONS_PACKAGE, ROLE, SCHEMA
-from crm_server.seed import build_dataset, insert_dataset, is_seeded, load_extra_records
+from crm_server.seed import (
+    build_dataset,
+    insert_dataset,
+    is_seeded,
+    load_extra_records,
+    sync_canary,
+)
 from mcp_common.migrate import apply_migrations
 from mcp_common.roles import (
     ensure_role,
@@ -52,7 +58,10 @@ async def setup_crm(
     async with await AsyncConnection.connect(owner_url) as connection:
         await connection.execute(sql.SQL("SET search_path TO {}").format(sql.Identifier(SCHEMA)))
         if await is_seeded(connection):
-            logger.info("crm is already seeded")
+            if await sync_canary(connection):
+                logger.info("crm is already seeded; the canary was added")
+            else:
+                logger.info("crm is already seeded")
             return
         dataset = build_dataset()
         if extra_records is not None:

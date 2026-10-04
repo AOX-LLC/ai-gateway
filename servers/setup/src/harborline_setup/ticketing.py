@@ -13,7 +13,13 @@ from mcp_common.roles import (
     revoke_role_access,
 )
 from ticketing_server import MIGRATIONS_PACKAGE, ROLE, SCHEMA
-from ticketing_server.seed import build_dataset, insert_dataset, is_seeded, load_extra_records
+from ticketing_server.seed import (
+    build_dataset,
+    insert_dataset,
+    is_seeded,
+    load_extra_records,
+    sync_canary,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +60,10 @@ async def setup_ticketing(
     async with await AsyncConnection.connect(owner_url) as connection:
         await connection.execute(sql.SQL("SET search_path TO {}").format(sql.Identifier(SCHEMA)))
         if await is_seeded(connection):
-            logger.info("ticketing is already seeded")
+            if await sync_canary(connection):
+                logger.info("ticketing is already seeded; the canary was added")
+            else:
+                logger.info("ticketing is already seeded")
             return
         dataset = build_dataset()
         if extra_records is not None:
