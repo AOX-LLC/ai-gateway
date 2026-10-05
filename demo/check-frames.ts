@@ -7,11 +7,14 @@
 // other than the project's own repository, `localhost`, a shell prompt or home path, an e-mail address, a
 // gateway token (`gw_` and a run of letters or digits), and every line of the private denylist
 // (.denylist.local, git-ignored: names of internal machines and tools; its matches are never printed).
-// `--reviewed` is for a person who has read every finding (and the contact sheets in out/contact/) and judged
-// them false positives, which small palette-reduced GIF text produces: the findings still print, and the
-// exit code stays 0. Never pass it to get past a finding that has not been read.
+// `--reviewed` is for a person who has read the findings (and the frames they came from) and judged them
+// false positives, which small palette-reduced GIF text produces. It accepts findings in .gif files only, and
+// never a denylist hit (its line is withheld, so nobody can have read it), a gateway token or a missing
+// "Sample data": those fail the run whatever the flag. Accepted findings still print. Never pass it to get
+// past a finding that has not been read.
 // Required: files whose name matches config.check.requiredTextPattern must show the required text in every
-// distinct frame (the "Sample data" pill).
+// sampled frame (the "Sample data" pill). A video is sampled at one frame a second, plus its last; a frame
+// that repeats the one before it is read once.
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
@@ -22,6 +25,9 @@ import { chromium } from "playwright";
 import { IMAGES_DIR, MEDIA_DIR, OUT_DIR, REPO_DIR, ffmpeg, probeWidth, readConfig } from "./lib.ts";
 
 const execFileAsync = promisify(execFile);
+
+/** Rules that no review can accept: the person could not read the line, or the finding is a secret. */
+const NEVER_ACCEPTED_RULES = ["denylist", "gateway token", "required text"];
 
 const MEDIA_EXTENSIONS = [".mp4", ".gif", ".webm", ".png"];
 const SKIPPED_DIRECTORIES = ["contact", ".work", "video-tmp", ".selftest", "node_modules"];
@@ -34,7 +40,7 @@ const TOP_BAND_FRACTION = 0.1;
 const TOP_BAND_SCALE = 3;
 
 const IPV4 = /\b(?:\d{1,3}\.){3}\d{1,3}\b/g;
-const TLDS = "com|net|org|io|dev|ai|app|co|us|uk|de|local|lan|internal|home|arpa|xyz|info|biz|cloud|me|tv|ly";
+const TLDS = "com|net|org|io|dev|ai|app|co|us|uk|de|local|lan|internal|home|arpa|xyz|info|biz|cloud|me|tv|ly|sh|gg|cc|to|so|run|page|site|online|tech";
 const HOSTNAME = new RegExp(
   `\\b(?:https?:\\/\\/)?(?:[a-z0-9-]+\\.)+(?:${TLDS})\\b(?::\\d+)?(?:\\/[^\\s"'<>)]*)?`, "gi",
 );
@@ -59,10 +65,14 @@ interface Frame {
   path: string;
 }
 
+function extraTerms(): string[] {
+  return (process.env.CHECK_EXTRA_TERMS ?? "").split(",").map((term) => term.trim().toLowerCase()).filter(Boolean);
+}
+
 function loadDenylist(): string[] {
   const path = join(REPO_DIR, ".denylist.local");
   if (!existsSync(path)) {
-    if (process.env.CHECK_NO_DENYLIST === "1") return [];
+    if (process.env.CHECK_NO_DENYLIST === "1") return extraTerms();
     throw new Error(
       "no .denylist.local: without it the internal-name check checks nothing. Copy it from the main checkout, or set CHECK_NO_DENYLIST=1 to run without it.",
     );
@@ -72,7 +82,7 @@ function loadDenylist(): string[] {
     .map((line) => line.trim())
     .filter((line) => line !== "" && !line.startsWith("#"))
     .map((line) => line.toLowerCase())
-    .concat((process.env.CHECK_EXTRA_TERMS ?? "").split(",").map((t) => t.trim().toLowerCase()).filter(Boolean));
+    .concat(extraTerms());
 }
 
 function isAllowedHost(token: string, allowedRepo: RegExp): boolean {
@@ -303,8 +313,11 @@ async function main(): Promise<void> {
   if (findings.length > 0) {
     console.log("");
     printFindings(findings);
-    if (reviewed) console.log("\nThese findings were read by a person and accepted (--reviewed).");
-    else process.exitCode = 1;
+    const accepted = (finding: Finding): boolean =>
+      reviewed && finding.file.endsWith(".gif") && !NEVER_ACCEPTED_RULES.some((rule) => finding.rule.startsWith(rule));
+    const refused = findings.filter((finding) => !accepted(finding));
+    if (refused.length > 0) process.exitCode = 1;
+    else console.log("\nThese findings, all in GIFs, were read by a person and accepted (--reviewed).");
   }
 }
 

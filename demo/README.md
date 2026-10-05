@@ -54,9 +54,9 @@ The GIF cuts between these four and leaves out the scrolls, because a scroll cha
 - a shell prompt or home path, an e-mail address and a gateway token (`gw`, an optional separator, a run of letters or digits: OCR often drops the underscore);
 - any line of `.denylist.local`, a git-ignored list of names of internal machines and tools. It is copied into each worktree from the main checkout, as `.env` is, and its matches are never printed. Without it the check refuses to run (`CHECK_NO_DENYLIST=1` runs it without, and says nothing about internal names).
 
-Files named `dashboard-*`, `social-*` and `overview-*` must also show "Sample data" in every distinct frame. `node check-frames.ts --selftest` proves the check catches a dirty image and passes a clean one, and it found that an early version of the token rule missed an underscore OCR had dropped. Contact sheets of what was checked land in `out/contact/` for a person to look at.
+Files named `dashboard-*`, `social-*` and `overview-*` must also show "Sample data" in every sampled frame (a frame a second, plus the last). `node check-frames.ts --selftest` proves the check catches a dirty image and passes a clean one, and it found that an early version of the token rule missed an underscore OCR had dropped. Contact sheets of what was checked land in `out/contact/` for a person to look at.
 
-Small, palette-reduced GIF text makes OCR misread words as addresses or prompts. `publish.sh --reviewed` passes the findings to the check as read and accepted: use it only after reading every finding and the frames they came from. The MP4 and WebM of the same scenes, which are larger, are checked too and must be clean.
+Small, palette-reduced GIF text makes OCR misread words as addresses or prompts. `publish.sh --reviewed` accepts findings **in GIFs only**, once a person has read them and the frames they came from; it never accepts a denylist hit, a token or a missing "Sample data", and it does not touch the MP4 and WebM of the same scenes, which are larger and must be clean.
 
 ## Files
 

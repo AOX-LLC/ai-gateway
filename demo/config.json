@@ -9,7 +9,7 @@
     "dark": "../dashboard/public/brand/aox-logo-white.png"
   },
   "check": {
-    "allowedRepoPattern": "^(?:https?:\\/\\/)?github\\.com\\/aox-llc\\/ai-gateway",
+    "allowedRepoPattern": "^(?:https?:\\/\\/)?github\\.com\\/aox-llc\\/ai-gateway(?![\\w.-])",
     "requiredText": "sample data",
     "requiredTextPattern": "^(dashboard|social|overview)"
   }
