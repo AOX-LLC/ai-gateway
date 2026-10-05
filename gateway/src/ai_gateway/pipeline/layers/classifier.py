@@ -56,6 +56,8 @@ _KEYS = frozenset(
         "min_chars",
         "min_words",
         "max_unit_chars",
+        "short_text",
+        "unit_overlap_chars",
         "max_units",
         "concurrency",
         "timeout_s",
@@ -91,6 +93,8 @@ def parse_judge_config(raw: Mapping[str, Any]) -> JudgeConfig:
             min_chars=table.get("min_chars", defaults.min_chars),
             min_words=table.get("min_words", defaults.min_words),
             max_unit_chars=table.get("max_unit_chars", defaults.max_unit_chars),
+            short_text=table.get("short_text", defaults.short_text),
+            unit_overlap_chars=table.get("unit_overlap_chars", defaults.unit_overlap_chars),
             max_units=table.get("max_units", defaults.max_units),
             concurrency=table.get("concurrency", defaults.concurrency),
             timeout_s=float(table.get("timeout_s", defaults.timeout_s)),
@@ -117,6 +121,17 @@ def parse_judge_config(raw: Mapping[str, Any]) -> JudgeConfig:
     )
     if config.min_confidence not in ("low", "medium", "high"):
         raise ClassifierConfigError("min_confidence is low, medium or high")
+    if config.short_text not in ("legacy", "normalized"):
+        raise ClassifierConfigError("short_text is legacy or normalized")
+    overlap = config.unit_overlap_chars
+    if (
+        not isinstance(overlap, int)
+        or isinstance(overlap, bool)
+        or not 0 <= overlap < config.max_unit_chars // 2
+    ):
+        raise ClassifierConfigError(
+            "unit_overlap_chars is a whole number from 0 to less than half of max_unit_chars"
+        )
     if not all(isinstance(v, int) and not isinstance(v, bool) and v >= 1 for v in whole):
         raise ClassifierConfigError(
             "the classifier's sizes and limits are whole numbers of 1 or more"
@@ -167,6 +182,8 @@ class ClassifierLayer(BaseLayer):
             min_chars=config.min_chars,
             min_words=config.min_words,
             max_chars=config.max_unit_chars,
+            overlap=config.unit_overlap_chars,
+            normalize_separators=config.short_text == "normalized",
         )
         if len(units) > config.max_units:
             return Deny(DenyCode.CLASSIFIER_OVERSIZE, POLICY_BLOCK_MESSAGE, score=len(units))

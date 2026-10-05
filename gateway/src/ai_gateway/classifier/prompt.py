@@ -85,40 +85,72 @@ def _strings(value: Any) -> list[str]:
     return []
 
 
-def is_prose(text: str, min_chars: int, min_words: int) -> bool:
+_SEPARATORS = re.compile(r"_|[\u00ad\u200b-\u200f\u2060-\u2064\ufeff]")
+"""What an attacker joins words with so a whitespace count sees one word: underscores and the
+zero-width and other invisible format characters."""
+
+
+def normalize_separators(text: str) -> str:
+    """The text with each separator (see `_SEPARATORS`) read as a space and runs of whitespace
+    collapsed. Only the *length decision* uses it: the unit the model is shown is the original."""
+    return " ".join(_SEPARATORS.sub(" ", text).split())
+
+
+def is_prose(text: str, min_chars: int, min_words: int, *, normalize: bool = False) -> bool:
     """Whether a value is worth judging: long enough, with enough words. Identifiers, dates and
-    names are skipped: they carry no instruction a model could follow."""
-    stripped = text.strip()
+    names are skipped: they carry no instruction a model could follow. With `normalize`, length
+    and words are counted after separators are read as spaces, so `ignore_all_previous_rules` is
+    four words and not one; the value is still judged as written. Hyphens, dots and `@` are not
+    separators: an email address, a date or a UUID is still one word."""
+    stripped = normalize_separators(text) if normalize else text.strip()
     return len(stripped) >= min_chars and len(stripped.split()) >= min_words
 
 
-def split_text(text: str, max_chars: int) -> list[str]:
-    """A long value cut into units of at most `max_chars`, at whitespace where there is any."""
+def split_text(text: str, max_chars: int, overlap: int = 0) -> list[str]:
+    """A long value cut into units of at most `max_chars`, at whitespace where there is any. Each
+    unit after the first starts at least `overlap` characters before the end of the one before it
+    (at a whitespace, where there is one), so a span of up to `overlap` characters lies whole in
+    some unit: an instruction cannot be hidden by sitting on a boundary. `overlap` must be less
+    than half of `max_chars` (the configuration checks it)."""
     stripped = text.strip()
     if len(stripped) <= max_chars:
         return [stripped]
     units: list[str] = []
-    rest = stripped
-    while rest:
-        if len(rest) <= max_chars:
-            units.append(rest)
-            break
-        cut = rest.rfind(" ", 0, max_chars)
-        cut = cut if cut > max_chars // 2 else max_chars
-        units.append(rest[:cut].strip())
-        rest = rest[cut:].strip()
-    return units
+    start = 0
+    while True:
+        end = min(start + max_chars, len(stripped))
+        if end < len(stripped):
+            cut = stripped.rfind(" ", start + max_chars // 2, end)
+            end = cut if cut != -1 else end
+        units.append(stripped[start:end].strip())
+        if end >= len(stripped):
+            return units
+        next_start = end - overlap
+        if overlap:
+            space = stripped.rfind(" ", start + 1, next_start)
+            next_start = space + 1 if space != -1 else next_start
+        start = max(next_start, start + 1)
+        while start < len(stripped) and stripped[start] == " ":
+            start += 1
 
 
-def units_of(value: Any, *, min_chars: int, min_words: int, max_chars: int) -> list[str]:
+def units_of(
+    value: Any,
+    *,
+    min_chars: int,
+    min_words: int,
+    max_chars: int,
+    overlap: int = 0,
+    normalize_separators: bool = False,
+) -> list[str]:
     """The units to judge in a tool's arguments or result: each prose value, cut to size, with
     duplicates within the call removed (the same text is judged once)."""
     seen: set[str] = set()
     units: list[str] = []
     for string in _strings(value):
-        if not is_prose(string, min_chars, min_words):
+        if not is_prose(string, min_chars, min_words, normalize=normalize_separators):
             continue
-        for unit in split_text(string, max_chars):
+        for unit in split_text(string, max_chars, overlap):
             if unit and unit not in seen:
                 seen.add(unit)
                 units.append(unit)

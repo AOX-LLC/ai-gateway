@@ -34,9 +34,12 @@ TOOL = "tickets__create_ticket"
 
 
 def pins_for(
-    name: str = TOOL, description: str = DESCRIPTION, schema: dict[str, Any] | None = None
+    name: str = TOOL,
+    description: str = DESCRIPTION,
+    schema: dict[str, Any] | None = None,
+    output_schema: dict[str, Any] | None = None,
 ) -> ToolPins:
-    text = render_tool_pins([(name, description, schema or TICKET_SCHEMA, None)])
+    text = render_tool_pins([(name, description, schema or TICKET_SCHEMA, output_schema)])
     import tomllib
 
     return parse_tool_pins(tomllib.loads(text))

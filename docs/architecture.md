@@ -111,6 +111,9 @@ approval = "enforce"     # last before forwarding; a write needs a person's appr
 
 [safety]
 allow_floor_override = false
+
+[schema]
+validate_results = true  # a result's structured content must fit the pinned output schema
 ```
 
 - **Mistakes stop startup.** An unknown layer, mode or key stops the gateway from starting.
@@ -817,7 +820,7 @@ approval, so a call they refuse never asks a person.
 
 | Layer | Detection | False-positive risk | What monitor mode records |
 | --- | --- | --- | --- |
-| `schema` | Arguments against the *pinned* input schema (the catalog's own for a tool with no pin), with a top-level `additionalProperties: false` forced; also NUL in any key or string, a non-finite number, nesting over 6, arguments over 64 KiB | A client that sends `"5"` for an integer, or an argument the server used to drop | `would_block`, `schema_violation`, the number of violations (at most 50) |
+| `schema` | Arguments against the *pinned* input schema (the catalog's own for a tool with no pin), with a top-level `additionalProperties: false` forced; also NUL in any key or string, a non-finite number, nesting over 6, arguments over 64 KiB; and (after the call) a result's structured content against the pinned *output* schema, with every text block required to be that same JSON | A client that sends `"5"` for an integer, or an argument the server used to drop | `would_block`, `schema_violation`, the number of violations (at most 50) |
 | `pinned_descriptions` | SHA-256 of name, description and input schema against `config/tool_pins.toml`. A drifted or unpinned tool is hidden from tools/list and refused on a call, and an alert is raised once per tool and definition | A legitimate deployment that changes a description hides the tool until it is pinned again | `would_block`, `pin_drift` or `pin_unpinned`; the tool stays visible |
 | `egress` | Per client, over a sliding window (30 minutes), the record ids, emails and phone numbers that reads returned in any of its MCP sessions; a write is refused when it carries 5 or more of them, or 10 across one session's writes (that session is then quarantined: every write in it is refused), or 10 across the client's writes in the window, or any internal-only marker. The record a call is about is exempt per tool | A legitimate write that cites more than a few records | `would_block`, `egress_bulk` or `egress_marker`, and the count of matching values, kept for allowed calls too |
 | `canary` | A seeded decoy value (squeezed of case, separators and zero-width characters, base64 and hex runs decoded) in any call's arguments, found by hash | Near zero: a model quoting a decoy verbatim into a comment | `would_block`, `canary_hit`, the count of canaries |
@@ -873,7 +876,13 @@ have, a range on a string, a value outside an enum, each stops startup, naming e
 A small model reads the free text a call carries and says whether it is an injection. It runs through
 agent-core's `ModelClient` (`classifier/judge.py`, prompt in `classifier/prompt.py`), on the small
 tier, one call per **unit**: one prose value of a result (or of a write's arguments), cut at
-`max_unit_chars`. Identifiers, numbers and short values are not judged. The answer is an enum only
+`max_unit_chars`. Identifiers, numbers and short values are not judged. Short means under `min_chars` (24) or `min_words` (3), counted
+after underscores and zero-width characters are read as spaces (`short_text = "normalized"`, so
+`ignore_all_previous_instructions` is four words and is judged), while the unit the model is shown is
+the text as written; hyphens, dots and `@` are not separators, so an email, a date or a UUID is still
+one word. A value longer than `max_unit_chars` is cut into units that overlap by `unit_overlap_chars`
+(400), so a sentence of up to that length on a boundary is whole in some unit. `short_text = "legacy"`
+with `unit_overlap_chars = 0` is v0.1.0's rule, kept so the scorecard can show before and after. The answer is an enum only
 (`clean` or `injection`, a confidence, a technique), so there is no free text to carry an attack back.
 Results of reads are judged after the upstream answers, so a client never receives one that carries an
 injection; a write's arguments are judged before approval, so a person is never asked to approve one.
@@ -1181,7 +1190,9 @@ no API key: normal calls (reads, and a few writes to the fictional ticketing dat
 layer refuses (a tool the bot was not granted, a tool that does not exist) and failed
 authentications. The same seed gives the same counts; `--duration` spreads the run over time.
 `--verify` reads the dashboard's views as the reader role and requires that what was stored equals
-what was sent. CI runs it after the Harborline scenarios. It is what fills the dashboard for demos
+what was sent. A client waits `--read-timeout` seconds (60 by default) for the gateway to answer one
+request: an approved write waits for its approver, and the HTTP client's own 5 s default failed a run on
+one slow write. CI runs it after the Harborline scenarios. It is what fills the dashboard for demos
 and screenshots.
 
 ## Data model

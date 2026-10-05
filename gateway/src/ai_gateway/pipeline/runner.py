@@ -187,7 +187,7 @@ class Pipeline:
             if issubclass(layer_class, RateLimitLayer):
                 return layer_class(rate_limits)
             if issubclass(layer_class, SchemaLayer):
-                return layer_class(pins)
+                return layer_class(pins, config.validate_results)
             if issubclass(layer_class, PinnedDescriptionsLayer):
                 return layer_class(pins, alerts)
             if issubclass(layer_class, EgressLayer):

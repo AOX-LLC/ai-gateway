@@ -246,3 +246,20 @@ def test_the_decoys_wrong_secrets_get_the_marked_answers_at_any_pace(  # type: i
     if seconds_between >= 30.0:
         # Without the burst, a slow run never reaches the limit and the marks are wrong.
         assert _answers_of_a_throttle(list(plan), seconds_between, sim) != expected
+
+
+def test_the_read_timeout_defaults_well_above_a_slow_approved_write_and_can_be_set(sim) -> None:  # type: ignore[no-untyped-def]
+    assert sim.DEFAULT_READ_TIMEOUT_S >= 30
+    assert sim._parser().parse_args([]).read_timeout == sim.DEFAULT_READ_TIMEOUT_S
+    assert sim._parser().parse_args(["--read-timeout", "90"]).read_timeout == 90
+
+
+def test_a_session_waits_for_the_read_timeout_it_was_given(sim) -> None:  # type: ignore[no-untyped-def]
+    session = sim._session("http://127.0.0.1:4401/mcp", "token", read_timeout=75.0)
+
+    assert session._http.timeout.read == 75.0
+
+
+def test_a_read_timeout_that_is_not_positive_is_refused(sim) -> None:  # type: ignore[no-untyped-def]
+    with pytest.raises(SystemExit):
+        sim.main(["--read-timeout", "0"])

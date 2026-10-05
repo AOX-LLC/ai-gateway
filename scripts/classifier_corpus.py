@@ -87,6 +87,8 @@ def _units(value: Any, config: JudgeConfig) -> list[str]:
         min_chars=config.min_chars,
         min_words=config.min_words,
         max_chars=config.max_unit_chars,
+        overlap=config.unit_overlap_chars,
+        normalize_separators=config.short_text == "normalized",
     )
 
 
