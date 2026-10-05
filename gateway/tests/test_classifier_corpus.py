@@ -18,7 +18,7 @@ import classifier_corpus as corpus  # noqa: E402
 def test_every_item_is_scored_by_some_layer_or_is_clean() -> None:
     units = corpus.must_cover()
 
-    assert len(units) == 38
+    assert len(units) == 39
     for unit in units:
         assert bool(unit.catchers) == (unit.expect == "injection"), unit.item_id
 
