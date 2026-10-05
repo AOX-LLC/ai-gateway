@@ -35,11 +35,12 @@ AI client ──HTTPS──► bearer auth ──► protocol version guard ─�
                                          (unknown: same answer as out of scope)
                                                                      ▼
               ┌──────────────── pipeline, one run per request ────────────────┐
-  tools/list  │ filter_tools:  scope → … → pinned descriptions                │
+  tools/list  │ filter_tools:  scope → pinned descriptions                    │
   tools/call  │ before_call:   scope → allowlist → rate limit → schema →      │
-              │                egress → canary → classifier → approval        │
+              │                pinned descriptions → egress → canary →        │
+              │                classifier → approval                          │
               │ ── forward exactly the checked arguments to the upstream ──   │
-              │ after_call:    egress → canary → classifier (on results)      │
+              │ after_call:    schema → egress → classifier (on results)      │
               └───────────────────────────────────────────────────────────────┘
                  every layer's verdict → one decision record → event sink + span
 ```
