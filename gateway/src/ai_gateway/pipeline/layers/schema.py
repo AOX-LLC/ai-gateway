@@ -172,7 +172,7 @@ def _blocks_repeat(result: CallToolResult, structured: Any) -> bool:
 class SchemaLayer(BaseLayer):
     name = "schema"
 
-    def __init__(self, pins: ToolPins | None = None, validate_results: bool = False) -> None:
+    def __init__(self, pins: ToolPins | None = None, validate_results: bool = True) -> None:
         self._pins = pins if pins is not None else ToolPins({})
         self._validate_results = validate_results
         # One validator per pin, built (and the schema itself checked) at startup: a pinned schema

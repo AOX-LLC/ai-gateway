@@ -377,12 +377,10 @@ def test_the_default_environment_and_the_workflow_do_not_switch_it_on_globally()
         "LAB_MUTABLE_UPSTREAM": "yes",
         "LAB_FLOOR_OVERRIDE": "yes",
     }
-    assert (
-        "pull_request"
-        in yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())["jobs"][
-            "scorecard"
-        ]["if"]
-    ), "never on a pull request"
+    job = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())["jobs"][
+        "scorecard"
+    ]
+    assert job["if"] == "github.event_name != 'pull_request'", "never on a pull request"
 
 
 def test_no_script_sets_the_switch_and_nothing_writes_the_workflow_environment() -> None:

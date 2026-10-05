@@ -52,7 +52,11 @@ def current_lab_pins_text() -> str:
         (f"lab__{tool.name}", tool.description, tool.input_schema, tool.output_schema)
         for tool in lab_tools("reviewed")
     ]
-    return render_tool_pins([*_product_definitions(), *reviewed])
+    header = (
+        "# LAB-ONLY: the pins of the red-team scorecard gateway: the product tools, and the lab\n"
+        "# upstream's reviewed tools (servers/lab). Never used by the product's own gateway.\n"
+    )
+    return header + render_tool_pins([*_product_definitions(), *reviewed])
 
 
 def _product_definitions() -> list[Definition]:

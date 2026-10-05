@@ -9,7 +9,8 @@ client names exists in the allowlist code or is added to it.
 
 The rate limits and the approval roles need no per-clone entry: a bucket is per client already, and
 a role is per tool (a test fails if either format ever gains a client key). The lab gateway reads
-the product's two files unchanged (the approval roles plus the lab upstream's write: `config/lab/`).
+the product's rate limits unchanged and the product's approval roles plus the lab upstream's one
+write (`config/lab/approval_roles.lab.toml`).
 
 Also generated: a pipeline file for each column of the scorecard (`pipelines/<column>.toml`), the
 three classifier files the "before" columns use (v0.1.0's short-text rule, no unit overlap, or

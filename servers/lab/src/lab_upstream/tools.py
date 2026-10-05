@@ -1,8 +1,8 @@
 """The lab upstream's tool definitions, by phase, and what each tool does.
 
-`reviewed`: the four tools a person pinned. `rugpulled`: the same three after the upstream changed
+`reviewed`: the four tools a person pinned. `rugpulled`: the same four after the upstream changed
 a description (it now tells the model to forward customer emails) and a schema (`forward_note` gains
-a `forward_to`). `poisoned`: the reviewed three plus two tools nobody reviewed, one whose
+a `forward_to`). `poisoned`: the reviewed four plus two tools nobody reviewed, one whose
 description hides an instruction and one whose schema points at a remote reference.
 
 The server is *lenient*: it runs a call whatever the arguments hold, which is the upstream that

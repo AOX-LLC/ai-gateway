@@ -1031,7 +1031,7 @@ filled from what an attack read cannot be known in advance and is data only: whe
 classifier it is unclassified, which the scorecard counts apart.
 
 **The lab upstream** (`servers/lab`, module `lab_upstream`) is a deliberately lenient MCP server
-whose tool definitions change between phases: `reviewed` (the three tools a person pinned),
+whose tool definitions change between phases: `reviewed` (the four tools a person pinned),
 `rugpulled` (a description and a schema changed after review) and `poisoned` (two tools nobody
 reviewed: one whose description hides an instruction in zero-width characters, one whose schema has a
 remote `$ref`). It runs a call whatever the arguments hold, counts what it executed (`GET /effects`,
@@ -1156,8 +1156,9 @@ dropped and made again: agent-core's login mapping is by the role's OID and is n
 `audit-verify` accepts for `approval.resolved` and for nothing else, and says so when it finds any:
 a stack that was used as a lab is not quietly mistaken for one that was not. Setup records it as
 approver `lab-approver` (inactive when the role is gone). Never use it
-against anything real: it defeats approval. CI sets the switch on the Harborline step only, for the
-test approver (`scripts/auto_approver.py`), and a test pins that.
+against anything real: it defeats approval. CI sets the switch on two named steps only, both on the fictional
+stack (the Harborline and acceptance step, and the scorecard's regeneration, which also turns on the
+lab upstream's and the floor override's switches), and a test pins exactly those.
 
 ### Tamper evidence
 
