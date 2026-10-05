@@ -38,8 +38,13 @@ const HEIGHT = 696;
 const SANS = "'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif";
 const MONO = "'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace";
 
-const BEFORE_CALL = ["scope", "allowlist", "rate limit", "schema", "egress", "canary", "classifier", "approval"];
-const AFTER_CALL = ["egress", "canary", "classifier"];
+// The order is gateway/src/ai_gateway/pipeline/registry.py's LAYER_ORDER; the hooks are the ones each layer
+// implements: canary only reads what a call sends, schema also checks a result against the pinned output schema.
+const BEFORE_CALL = ["scope", "allowlist", "rate limit", "schema", "pinned", "egress", "canary", "classifier", "approval"];
+const AFTER_CALL = ["schema", "egress", "classifier"];
+const CHIPS_PER_ROW = 5;
+const CHIP_WIDTH = 100;
+const CHIP_PITCH = 108;
 
 function escapeXml(text: string): string {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -129,13 +134,13 @@ function draw(theme: Theme): string {
   d.text(350, 202, "PIPELINE  ·  each layer: enforce, monitor or off", { ...label });
   d.text(350, 232, "before the call", { size: 14, weight: 600, color: p.secondary });
   BEFORE_CALL.forEach((name, i) => {
-    const x = 350 + (i % 4) * 134;
-    const y = 244 + Math.floor(i / 4) * 48;
-    d.chip(x, y, 124, 38, name, { accent: name === "approval" });
+    const x = 350 + (i % CHIPS_PER_ROW) * CHIP_PITCH;
+    const y = 244 + Math.floor(i / CHIPS_PER_ROW) * 48;
+    d.chip(x, y, CHIP_WIDTH, 38, name, { accent: name === "approval" });
   });
   d.text(350, 358, "after the call, on the result", { size: 14, weight: 600, color: p.secondary });
-  AFTER_CALL.forEach((name, i) => d.chip(350 + i * 134, 368, 124, 30, name));
-  d.text(350, 416, "tools/list is filtered by scope and pinned descriptions", { size: 13.5, color: p.faint });
+  AFTER_CALL.forEach((name, i) => d.chip(350 + i * CHIP_PITCH, 368, CHIP_WIDTH, 30, name));
+  d.text(350, 416, "pinned: pinned tool descriptions. tools/list is filtered by scope and pinned.", { size: 13.5, color: p.faint });
 
   d.box(334, 444, 562, 56, { fill: p.accentSoft, stroke: p.accent });
   d.text(350, 469, "One decision record per request", { size: 15, weight: 600 });

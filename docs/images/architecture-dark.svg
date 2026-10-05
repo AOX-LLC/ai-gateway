@@ -23,30 +23,32 @@
 <rect x="334" y="176" width="562" height="250" rx="6" fill="#0E1012" stroke="#3A4148" stroke-width="1.5"/>
 <text x="350" y="202" font-family="'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace" font-size="12" font-weight="500" fill="#9AA1A9" text-anchor="start" letter-spacing="1">PIPELINE  ·  each layer: enforce, monitor or off</text>
 <text x="350" y="232" font-family="'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="14" font-weight="600" fill="#C3C8CD" text-anchor="start">before the call</text>
-<rect x="350" y="244" width="124" height="38" rx="4" fill="#1C2024" stroke="#3A4148" stroke-width="1.5"/>
-<text x="412" y="268" font-family="'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace" font-size="14.5" font-weight="500" fill="#E6E8EA" text-anchor="middle">scope</text>
-<rect x="484" y="244" width="124" height="38" rx="4" fill="#1C2024" stroke="#3A4148" stroke-width="1.5"/>
-<text x="546" y="268" font-family="'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace" font-size="14.5" font-weight="500" fill="#E6E8EA" text-anchor="middle">allowlist</text>
-<rect x="618" y="244" width="124" height="38" rx="4" fill="#1C2024" stroke="#3A4148" stroke-width="1.5"/>
-<text x="680" y="268" font-family="'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace" font-size="14.5" font-weight="500" fill="#E6E8EA" text-anchor="middle">rate limit</text>
-<rect x="752" y="244" width="124" height="38" rx="4" fill="#1C2024" stroke="#3A4148" stroke-width="1.5"/>
-<text x="814" y="268" font-family="'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace" font-size="14.5" font-weight="500" fill="#E6E8EA" text-anchor="middle">schema</text>
-<rect x="350" y="292" width="124" height="38" rx="4" fill="#1C2024" stroke="#3A4148" stroke-width="1.5"/>
-<text x="412" y="316" font-family="'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace" font-size="14.5" font-weight="500" fill="#E6E8EA" text-anchor="middle">egress</text>
-<rect x="484" y="292" width="124" height="38" rx="4" fill="#1C2024" stroke="#3A4148" stroke-width="1.5"/>
-<text x="546" y="316" font-family="'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace" font-size="14.5" font-weight="500" fill="#E6E8EA" text-anchor="middle">canary</text>
-<rect x="618" y="292" width="124" height="38" rx="4" fill="#1C2024" stroke="#3A4148" stroke-width="1.5"/>
-<text x="680" y="316" font-family="'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace" font-size="14.5" font-weight="500" fill="#E6E8EA" text-anchor="middle">classifier</text>
-<rect x="752" y="292" width="124" height="38" rx="4" fill="#12302C" stroke="#3FC1B0" stroke-width="1.5"/>
-<text x="814" y="316" font-family="'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace" font-size="14.5" font-weight="500" fill="#E6E8EA" text-anchor="middle">approval</text>
+<rect x="350" y="244" width="100" height="38" rx="4" fill="#1C2024" stroke="#3A4148" stroke-width="1.5"/>
+<text x="400" y="268" font-family="'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace" font-size="14.5" font-weight="500" fill="#E6E8EA" text-anchor="middle">scope</text>
+<rect x="458" y="244" width="100" height="38" rx="4" fill="#1C2024" stroke="#3A4148" stroke-width="1.5"/>
+<text x="508" y="268" font-family="'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace" font-size="14.5" font-weight="500" fill="#E6E8EA" text-anchor="middle">allowlist</text>
+<rect x="566" y="244" width="100" height="38" rx="4" fill="#1C2024" stroke="#3A4148" stroke-width="1.5"/>
+<text x="616" y="268" font-family="'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace" font-size="14.5" font-weight="500" fill="#E6E8EA" text-anchor="middle">rate limit</text>
+<rect x="674" y="244" width="100" height="38" rx="4" fill="#1C2024" stroke="#3A4148" stroke-width="1.5"/>
+<text x="724" y="268" font-family="'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace" font-size="14.5" font-weight="500" fill="#E6E8EA" text-anchor="middle">schema</text>
+<rect x="782" y="244" width="100" height="38" rx="4" fill="#1C2024" stroke="#3A4148" stroke-width="1.5"/>
+<text x="832" y="268" font-family="'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace" font-size="14.5" font-weight="500" fill="#E6E8EA" text-anchor="middle">pinned</text>
+<rect x="350" y="292" width="100" height="38" rx="4" fill="#1C2024" stroke="#3A4148" stroke-width="1.5"/>
+<text x="400" y="316" font-family="'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace" font-size="14.5" font-weight="500" fill="#E6E8EA" text-anchor="middle">egress</text>
+<rect x="458" y="292" width="100" height="38" rx="4" fill="#1C2024" stroke="#3A4148" stroke-width="1.5"/>
+<text x="508" y="316" font-family="'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace" font-size="14.5" font-weight="500" fill="#E6E8EA" text-anchor="middle">canary</text>
+<rect x="566" y="292" width="100" height="38" rx="4" fill="#1C2024" stroke="#3A4148" stroke-width="1.5"/>
+<text x="616" y="316" font-family="'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace" font-size="14.5" font-weight="500" fill="#E6E8EA" text-anchor="middle">classifier</text>
+<rect x="674" y="292" width="100" height="38" rx="4" fill="#12302C" stroke="#3FC1B0" stroke-width="1.5"/>
+<text x="724" y="316" font-family="'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace" font-size="14.5" font-weight="500" fill="#E6E8EA" text-anchor="middle">approval</text>
 <text x="350" y="358" font-family="'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="14" font-weight="600" fill="#C3C8CD" text-anchor="start">after the call, on the result</text>
-<rect x="350" y="368" width="124" height="30" rx="4" fill="#1C2024" stroke="#3A4148" stroke-width="1.5"/>
-<text x="412" y="388" font-family="'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace" font-size="14.5" font-weight="500" fill="#E6E8EA" text-anchor="middle">egress</text>
-<rect x="484" y="368" width="124" height="30" rx="4" fill="#1C2024" stroke="#3A4148" stroke-width="1.5"/>
-<text x="546" y="388" font-family="'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace" font-size="14.5" font-weight="500" fill="#E6E8EA" text-anchor="middle">canary</text>
-<rect x="618" y="368" width="124" height="30" rx="4" fill="#1C2024" stroke="#3A4148" stroke-width="1.5"/>
-<text x="680" y="388" font-family="'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace" font-size="14.5" font-weight="500" fill="#E6E8EA" text-anchor="middle">classifier</text>
-<text x="350" y="416" font-family="'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="13.5" font-weight="400" fill="#9AA1A9" text-anchor="start">tools/list is filtered by scope and pinned descriptions</text>
+<rect x="350" y="368" width="100" height="30" rx="4" fill="#1C2024" stroke="#3A4148" stroke-width="1.5"/>
+<text x="400" y="388" font-family="'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace" font-size="14.5" font-weight="500" fill="#E6E8EA" text-anchor="middle">schema</text>
+<rect x="458" y="368" width="100" height="30" rx="4" fill="#1C2024" stroke="#3A4148" stroke-width="1.5"/>
+<text x="508" y="388" font-family="'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace" font-size="14.5" font-weight="500" fill="#E6E8EA" text-anchor="middle">egress</text>
+<rect x="566" y="368" width="100" height="30" rx="4" fill="#1C2024" stroke="#3A4148" stroke-width="1.5"/>
+<text x="616" y="388" font-family="'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace" font-size="14.5" font-weight="500" fill="#E6E8EA" text-anchor="middle">classifier</text>
+<text x="350" y="416" font-family="'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="13.5" font-weight="400" fill="#9AA1A9" text-anchor="start">pinned: pinned tool descriptions. tools/list is filtered by scope and pinned.</text>
 <rect x="334" y="444" width="562" height="56" rx="6" fill="#12302C" stroke="#3FC1B0" stroke-width="1.5"/>
 <text x="350" y="469" font-family="'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="15" font-weight="600" fill="#E6E8EA" text-anchor="start">One decision record per request</text>
 <text x="350" y="488" font-family="'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="13.5" font-weight="400" fill="#C3C8CD" text-anchor="start">which layer decided, how long it took; never the arguments or the results</text>
