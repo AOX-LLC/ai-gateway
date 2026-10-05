@@ -44,10 +44,16 @@ POLICY_BLOCKED = -32010
 """JSON-RPC code for calls a pipeline layer blocked, other than unavailable tools."""
 
 REQUEST_ID_META_KEY = "io.aox.ai-gateway/request_id"
-"""Where the gateway's own request id travels: the `_meta` of every tool result, and of the `data`
-of every error it answers a call with. The id is minted by the gateway for each call; nothing a
-client sends is ever used for it or echoed back (a client's `_meta` is dropped before it reaches the
-pipeline). It is the id the call's audit and telemetry rows carry."""
+"""Where the gateway's own request id travels: the `_meta` of every tool result, and the `data` of
+every error it answers a call with once the caller is authenticated. The value under this key is
+always the gateway's: it is minted for each call, and nothing a client sends is used for it or
+echoed back (a client's `_meta` is dropped before it reaches the pipeline). It is the id the call's
+audit and telemetry rows carry."""
+
+META_NAMESPACE = "io.aox.ai-gateway/"
+"""Keys under this prefix belong to the gateway. An upstream's own `_meta` is passed through as it
+was in v0.1.0, except that keys in this namespace are dropped, so nothing an upstream returns can
+pass for gateway metadata. The rest of an upstream's `_meta` is not examined."""
 
 _UPSTREAM_FAILURE_MESSAGES = {
     UpstreamStatus.TIMEOUT: "The '{namespace}' service did not answer in time.",
@@ -186,9 +192,10 @@ def _pending_result(deny: Deny) -> CallToolResult:
 
 def _with_request_id(result: CallToolResult, request_id: UUID) -> CallToolResult:
     """The result with the gateway's request id in its `_meta`, whatever the call came to: a
-    success, a tool's own error, a pending write, a failed upstream. A key of ours that an upstream
-    put in its own `_meta` is overwritten, so what a client reads is always the gateway's."""
-    meta = {**(result.meta or {}), REQUEST_ID_META_KEY: str(request_id)}
+    success, a tool's own error, a pending write, a failed upstream. Keys an upstream put in the
+    gateway's namespace are dropped, so the value under ours is always the gateway's."""
+    kept = {k: v for k, v in (result.meta or {}).items() if not k.startswith(META_NAMESPACE)}
+    meta = {**kept, REQUEST_ID_META_KEY: str(request_id)}
     return result.model_copy(update={"meta": meta})
 
 

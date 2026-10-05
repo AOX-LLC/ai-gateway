@@ -339,11 +339,15 @@ async def test_a_refusal_carries_the_request_id_under_the_same_key(
         scope_row = _last_request_id(gateway)
         with pytest.raises(MCPError) as unknown:
             await client.call_tool("echo__nothing", {})
+        unknown_row = _last_request_id(gateway)
 
     for refused in (out_of_scope.value, unknown.value):
         assert refused.data["_meta"][REQUEST_ID_META_KEY] == refused.data["request_id"]
     assert out_of_scope.value.data["request_id"] == scope_row
-    assert unknown.value.data["request_id"] != scope_row
+    assert unknown.value.data["request_id"] == unknown_row != scope_row
+    # An unknown tool and one outside the client's scope stay indistinguishable.
+    assert out_of_scope.value.code == unknown.value.code == INVALID_PARAMS
+    assert set(out_of_scope.value.data) == set(unknown.value.data)
 
 
 async def test_an_id_the_client_sends_is_ignored_and_never_echoed(
