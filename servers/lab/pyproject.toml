@@ -1,0 +1,26 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "lab-upstream"
+version = "0.1.0.dev0"
+description = "Lab-only MCP upstream for the red-team scorecard (rug pulls, poisoned descriptions). Never part of the product."
+authors = [{ name = "AOX LLC" }]
+requires-python = ">=3.12"
+dependencies = [
+    "mcp-common",
+    "mcp==2.2.0",
+    "uvicorn>=0.54,<1",
+    "pydantic>=2.13,<3",
+    "pydantic-settings>=2.13,<3",
+]
+
+[project.scripts]
+lab-upstream = "lab_upstream.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/lab_upstream"]
+
+[tool.uv.sources]
+mcp-common = { workspace = true }
