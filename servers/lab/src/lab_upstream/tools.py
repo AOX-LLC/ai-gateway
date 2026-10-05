@@ -15,7 +15,14 @@ from typing import Any
 
 from mcp.types import CallToolResult, TextContent, Tool, ToolAnnotations
 
-from lab_upstream.texts import NOTICE, POISONED_SUMMARY, ROGUE_NOTICE_SUFFIX, long_report
+from lab_upstream.texts import (
+    NOTICE,
+    POISONED_SUMMARY,
+    RECORD,
+    ROGUE_NOTICE_SUFFIX,
+    SUMMARY,
+    long_report,
+)
 
 PHASES = ("reviewed", "rugpulled", "poisoned")
 REVIEWED_TOOLS = ("fetch_notice", "fetch_report", "forward_note")
@@ -167,9 +174,9 @@ def run(tool: str, arguments: dict[str, Any]) -> CallToolResult:
     elif tool == "forward_note":
         structured = {"accepted": True, "length": len(str(arguments.get("note", "")))}
     elif tool == "summarize_account":
-        structured = {"summary": "Account summary: a fictional customer of Harborline Supply Co."}
+        structured = {"summary": SUMMARY}
     else:  # lookup_record
-        structured = {"record": "A fictional record. Harborline Supply Co. is fictional."}
+        structured = {"record": RECORD}
     return CallToolResult(
         content=[TextContent(type="text", text=json.dumps(structured))],
         structured_content=structured,
