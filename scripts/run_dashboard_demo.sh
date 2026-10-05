@@ -11,8 +11,9 @@
 #
 # It always uses a Compose project of its own (ai-gateway-demo), so a real stack's data is never touched,
 # and a demo-only admin password and session secret made for this run (kept in .demo/, which is git-ignored and removed by `down`).
-# Your real admin password hash in .env is not read or changed. If the machine is shared, run this under
-# the shared Docker lock: flock ~/portfolio-projects/.locks/docker scripts/run_dashboard_demo.sh all
+# Your real admin password hash in .env is not read or changed. On a shared machine every `docker compose`
+# command here takes the shared Docker lock (DOCKER_LOCK moves it) for that one command and no longer, so
+# do not wrap the script itself in flock. Where there is no lock directory, as on a CI runner, nothing is locked.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -21,6 +22,16 @@ export COMPOSE_PROJECT_NAME=ai-gateway-demo
 STATE=.demo
 trap 'rm -f "$STATE/tokens.json"' EXIT
 COMPOSE=(docker compose -f compose.yaml -f compose.demo.yaml)
+LOCK=${DOCKER_LOCK:-$HOME/portfolio-projects/.locks/docker}
+
+# One compose command, at low priority, under the shared lock where there is one.
+dc() {
+  if [ -d "$(dirname "$LOCK")" ]; then
+    nice -n 19 flock "$LOCK" "${COMPOSE[@]}" "$@"
+  else
+    nice -n 19 "${COMPOSE[@]}" "$@"
+  fi
+}
 
 demo_password() {
   mkdir -p "$STATE"
@@ -50,7 +61,7 @@ up() {
   export GIT_COMMIT GIT_BRANCH
   GIT_COMMIT=$(git rev-parse --short HEAD) GIT_BRANCH=$(git branch --show-current)
   # A fresh Postgres volume can still be starting when a one-shot first connects: try once more.
-  nice -n 19 "${COMPOSE[@]}" up -d --build --wait || nice -n 19 "${COMPOSE[@]}" up -d --wait
+  dc up -d --build --wait || dc up -d --wait
 }
 
 # A login URL for the host: the auditor's URL with the approver's login and password swapped in.
@@ -66,7 +77,7 @@ PY
 
 add_approver() {
   local added login password
-  added=$("${COMPOSE[@]}" run --rm -T admin approver-add --name "$1")
+  added=$(dc run --rm -T admin approver-add --name "$1")
   login=$(sed -n 's/^login  *//p' <<<"$added")
   password=$(sed -n 's/^password  *//p' <<<"$added")
   approver_url "$login" "$password"
@@ -77,7 +88,7 @@ seed() {
   DEMO_APPROVER_1_URL=$(add_approver "Dana Kerr (fictional)")
   DEMO_APPROVER_2_URL=$(add_approver "Priya Nair (fictional)")
   export DEMO_APPROVER_1_URL DEMO_APPROVER_2_URL
-  (umask 077; "${COMPOSE[@]}" run --rm -T admin seed-demo > "$STATE/tokens.json")
+  (umask 077; dc run --rm -T admin seed-demo > "$STATE/tokens.json")
   nice -n 19 uv run scripts/seed_dashboard_demo.py --tokens-file "$STATE/tokens.json"
 }
 
@@ -88,7 +99,7 @@ case "${1:-}" in
   memory) demo_password; nice -n 19 python3 scripts/measure_dashboard_memory.py ;;
   down)
     export DEMO_DASHBOARD_PASSWORD_HASH=unused DEMO_SESSION_SECRET=unused
-    "${COMPOSE[@]}" down -v
+    dc down -v
     rm -rf "$STATE"
     ;;
   all) up; seed; demo_password; nice -n 19 uv run --group demo scripts/screenshots.py --out docs/images ;;
