@@ -139,11 +139,14 @@ def session_name(template: str, i: int) -> str:
     return str(TOKENS.sub(lambda m: format(i, m.group(2) or ""), template))
 
 
-async def play(attack: Attack, url: str, token: str, planted: str) -> list[CallRecord]:
+async def play(
+    attack: Attack, url: str, token: str, planted: str, partial: list[CallRecord] | None = None
+) -> list[CallRecord]:
     """Make every call of the attack, in order, each in the session its step names (one session
-    unless a step says otherwise). Returns what happened to each."""
+    unless a step says otherwise). Returns what happened to each. If a template cannot be filled the
+    attack stops (AttackStoppedError); a caller that passes `partial` still has the calls made."""
     loot = Loot()
-    records: list[CallRecord] = []
+    records: list[CallRecord] = partial if partial is not None else []
     async with AsyncExitStack() as stack:
         sessions: dict[str, Client] = {}
         for step, i in attack.calls():
