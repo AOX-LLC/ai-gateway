@@ -119,3 +119,29 @@ def test_everything_to_record_includes_the_red_team_strings() -> None:
 
     for unit in [*corpus.redteam_corpus(), *corpus.attack_strings()]:
         assert (unit.surface, unit.text) in everything
+
+
+@pytest.mark.anyio
+async def test_the_recorder_reports_each_red_team_item_under_both_rules(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    import record_classifier
+    from ai_gateway.classifier.judge import Judge
+    from ai_gateway.classifier.prompt import prepare  # noqa: F401
+    from tests.classifier_helpers import FakeClient
+
+    judge = Judge(
+        FakeClient(),
+        dataclasses.replace(corpus.judge_config(), max_calls_per_minute_per_client=10_000),
+    )
+
+    await record_classifier._report_red_team(judge)
+
+    lines = capsys.readouterr().out.splitlines()
+    by_item = {line.split()[0]: line for line in lines[1:]}
+    assert set(by_item) == {i.item_id for i in corpus.redteam_items()}
+    assert "v0.1.0 rule: not judged" in by_item["obf-zero-width"]
+    assert "current rule: 0 of 1 units flagged" in by_item["obf-zero-width"]
+    long = by_item["obf-long-boundary"]
+    assert "v0.1.0 rule:" in long
+    assert "current rule:" in long

@@ -88,6 +88,9 @@ async def _count(units: list[corpus.CorpusUnit]) -> int:
     tokens_in, tokens_out, cost, model = _estimate(missing)
     print(f"units in the corpus (distinct texts): {len(units)}")
     print(f"  attack corpus, benign look-alikes and the 09 story: {len(must)}")
+    red = {(u.surface, u.text) for u in [*corpus.redteam_corpus(), *corpus.attack_strings()]}
+    red_missing = [u for u in missing if (u.surface, u.text) in red]
+    print(f"  the red-team scorecard's strings: {len(red)} ({len(red_missing)} not yet recorded)")
     print(f"  recorded already: {len(units) - len(missing)}")
     print(f"live calls needed: {len(missing)}  (must-cover groups: {len(must_missing)})")
     print(f"model: {model} (small tier), one call per unit, answer is an enum")
@@ -181,8 +184,33 @@ async def _verify(units: list[corpus.CorpusUnit]) -> None:
     )
     for layer, items in sorted(elsewhere.items()):
         print(f"expected of {layer}, not of the classifier ({len(items)}): " + ", ".join(items))
+    await _report_red_team(judge)
     if classifier_misses or false_positives:
         sys.exit(1)
+
+
+async def _report_red_team(judge: Judge) -> None:
+    """What the judge makes of each red-team item, under v0.1.0's rule and the current one. This is
+    reported and never fails the run: how the classifier does on them is the scorecard's finding."""
+    config = corpus.judge_config()
+    legacy, current = corpus.both_rules(config)
+    print("red-team items (a finding for the scorecard, not a pass or fail):")
+    for item in corpus.redteam_items():
+        verdicts = []
+        for name, rule in (("v0.1.0 rule", legacy), ("current rule", current)):
+            units = corpus.units_of_text(item.text, rule)
+            if not units:
+                verdicts.append(f"{name}: not judged")
+                continue
+            outcomes = [
+                (
+                    await judge.judge(item.surface, unit, client_name="verify", request_id=None)
+                ).outcome
+                for unit in units
+            ]
+            flagged = sum(o is Outcome.INJECTION for o in outcomes)
+            verdicts.append(f"{name}: {flagged} of {len(units)} units flagged")
+        print(f"  {item.item_id} (expect {item.expect}): " + "; ".join(verdicts))
 
 
 def main() -> None:
