@@ -210,3 +210,35 @@ def test_long_running_services_restart_and_finished_one_shots_do_not(
         assert services[name]["restart"] == "unless-stopped", name
     for name in ("migrate", "telemetry-setup", "policy-setup", "servers-setup", "lab-approver"):
         assert services[name]["restart"] == "no", name
+
+
+def test_the_postgres_healthcheck_asks_over_tcp_with_the_right_user_and_database(
+    compose: dict[str, Any],
+) -> None:
+    """The database image runs a temporary server on a Unix socket while it initialises a new
+    volume. A check that uses the socket can report healthy then, and a setup service that starts
+    in that moment fails with "the database system is starting up". Only the real server listens
+    on TCP."""
+    postgres = compose["services"]["postgres"]
+
+    check = postgres["healthcheck"]["test"]
+
+    assert check[0] == "CMD-SHELL"
+    assert check[1].split()[:3] == ["pg_isready", "-h", "127.0.0.1"]
+    assert "-U $$POSTGRES_USER" in check[1]
+    assert "-d $$POSTGRES_DB" in check[1]
+    assert postgres["environment"]["POSTGRES_USER"]
+    assert postgres["environment"]["POSTGRES_DB"]
+
+
+def test_the_ci_database_service_checks_over_tcp_too() -> None:
+    workflow = yaml.safe_load((COMPOSE_FILE.parent / ".github/workflows/ci.yml").read_text())
+    postgres = workflow["jobs"]["test"]["services"]["postgres"]
+
+    options = " ".join(postgres["options"].split())
+
+    assert (
+        '--health-cmd "pg_isready -h 127.0.0.1 -U ai_gateway_owner -d ai_gateway_test"' in options
+    )
+    assert postgres["env"]["POSTGRES_USER"] == "ai_gateway_owner"
+    assert postgres["env"]["POSTGRES_DB"] == "ai_gateway_test"

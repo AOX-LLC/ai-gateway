@@ -2,6 +2,7 @@
 
 import json
 import logging
+from importlib.metadata import version
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -43,6 +44,13 @@ logger = logging.getLogger(__name__)
 POLICY_BLOCKED = -32010
 """JSON-RPC code for calls a pipeline layer blocked, other than unavailable tools."""
 
+REQUEST_ID_META_KEY = "io.aox.ai-gateway/request_id"
+"""Where the gateway's own request id travels: the `_meta` of every tool result, and the `data` of
+every error it answers a call with once the caller is authenticated. The value under this key is
+always the gateway's: it is minted for each call, and nothing a client sends is used for it or
+echoed back (a client's `_meta` is dropped before it reaches the pipeline). It is the id the call's
+audit and telemetry rows carry."""
+
 _UPSTREAM_FAILURE_MESSAGES = {
     UpstreamStatus.TIMEOUT: "The '{namespace}' service did not answer in time.",
     UpstreamStatus.UNAVAILABLE: "The '{namespace}' service is unavailable.",
@@ -60,7 +68,7 @@ class GatewayServer:
     def build(self) -> Server[Any]:
         return Server(
             "ai-gateway",
-            version="0.1.0",
+            version=version("ai-gateway"),
             instructions=(
                 "Tools from the fictional Harborline Supply Co., served through a gateway"
                 " that checks every call."
@@ -87,7 +95,8 @@ class GatewayServer:
     ) -> CallToolResult:
         call_ctx = _call_context(ctx)
         try:
-            return await self._call_tool(call_ctx, params)
+            result = await self._call_tool(call_ctx, params)
+            return _with_request_id(result, call_ctx.request_id)
         except MCPError:
             raise
         except Exception:
@@ -177,14 +186,28 @@ def _pending_result(deny: Deny) -> CallToolResult:
     )
 
 
+def _with_request_id(result: CallToolResult, request_id: UUID) -> CallToolResult:
+    """The result with a `_meta` that is the gateway's alone: its request id, whatever the call came
+    to (a success, a tool's own error, a pending write, a failed upstream). Whatever `_meta` an
+    upstream returned is dropped, so nothing an upstream says can reach a client as metadata, or
+    pass for the gateway's."""
+    return result.model_copy(update={"meta": {REQUEST_ID_META_KEY: str(request_id)}})
+
+
+def _error_data(request_id: UUID) -> dict[str, Any]:
+    """The `data` of an error: the id as `request_id` (as v0.1.0 gave it on a policy refusal) and
+    under the same `_meta` key as a result carries it."""
+    return {"request_id": str(request_id), "_meta": {REQUEST_ID_META_KEY: str(request_id)}}
+
+
 def _deny_error(deny: Deny, request_id: UUID) -> MCPError:
     if deny.code is DenyCode.TOOL_UNAVAILABLE:
-        return MCPError(INVALID_PARAMS, deny.public_message)
-    return MCPError(POLICY_BLOCKED, deny.public_message, {"request_id": str(request_id)})
+        return MCPError(INVALID_PARAMS, deny.public_message, _error_data(request_id))
+    return MCPError(POLICY_BLOCKED, deny.public_message, _error_data(request_id))
 
 
 def _internal_error(request_id: UUID) -> MCPError:
-    return MCPError(INTERNAL_ERROR, "Internal gateway error.", {"request_id": str(request_id)})
+    return MCPError(INTERNAL_ERROR, "Internal gateway error.", _error_data(request_id))
 
 
 def _upstream_failure(error: UpstreamCallError, request_id: UUID) -> CallToolResult:
