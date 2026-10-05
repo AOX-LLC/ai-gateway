@@ -21,7 +21,7 @@ members = [
 
 [[package]]
 name = "ai-gateway"
-version = "0.1.0.dev0"
+version = "0.1.1"
 source = { editable = "gateway" }
 dependencies = [
     { name = "aox-agent-core", extra = ["postgres"] },
@@ -532,7 +532,7 @@ wheels = [
 
 [[package]]
 name = "crm-server"
-version = "0.1.0.dev0"
+version = "0.1.1"
 source = { editable = "servers/crm" }
 dependencies = [
     { name = "mcp" },
@@ -663,7 +663,7 @@ wheels = [
 
 [[package]]
 name = "echo-server"
-version = "0.1.0.dev0"
+version = "0.1.1"
 source = { editable = "servers/echo" }
 dependencies = [
     { name = "mcp" },
@@ -789,7 +789,7 @@ wheels = [
 
 [[package]]
 name = "handbook-server"
-version = "0.1.0.dev0"
+version = "0.1.1"
 source = { editable = "servers/handbook" }
 dependencies = [
     { name = "mcp" },
@@ -818,7 +818,7 @@ requires-dist = [
 
 [[package]]
 name = "harborline-setup"
-version = "0.1.0.dev0"
+version = "0.1.1"
 source = { editable = "servers/setup" }
 dependencies = [
     { name = "crm-server" },
@@ -1338,7 +1338,7 @@ wheels = [
 
 [[package]]
 name = "mcp-common"
-version = "0.1.0.dev0"
+version = "0.1.1"
 source = { editable = "servers/common" }
 dependencies = [
     { name = "anyio" },
@@ -2395,7 +2395,7 @@ wheels = [
 
 [[package]]
 name = "ticketing-server"
-version = "0.1.0.dev0"
+version = "0.1.1"
 source = { editable = "servers/ticketing" }
 dependencies = [
     { name = "mcp" },

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ai-gateway"
-version = "0.1.0.dev0"
+version = "0.1.1"
 description = "Zero-trust gateway between AI clients and MCP tools."
 authors = [{ name = "AOX LLC" }]
 requires-python = ">=3.12"

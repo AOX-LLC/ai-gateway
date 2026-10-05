@@ -2,6 +2,7 @@
 
 import json
 import logging
+from importlib.metadata import version
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -72,7 +73,7 @@ class GatewayServer:
     def build(self) -> Server[Any]:
         return Server(
             "ai-gateway",
-            version="0.1.0",
+            version=version("ai-gateway"),
             instructions=(
                 "Tools from the fictional Harborline Supply Co., served through a gateway"
                 " that checks every call."
