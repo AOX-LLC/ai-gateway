@@ -985,6 +985,69 @@ before Phase 4b does not have. `harborline-setup` now adds the CRM's and the tic
 sentence to an already seeded volume if it is missing (`sync_canary`, idempotent: it appends only when the
 canary is not there), so `docker compose up` on an old volume is enough.
 
+### The red-team harness (Phase 6)
+
+`scripts/redteam/` runs scripted attacks against the gateway and judges them with an independent
+oracle. 4d made the format and the acceptance test; Phase 6 gives an attack its own definition of
+success and builds the scorecard on it.
+
+**An attack file** (`scripts/redteam/attacks/*.toml`, format in `attack_format.py`) decides, before
+any run, everything about what it is expected to do:
+
+- `[expect]`: its `family`, the `oracle` that judges success, the `threshold` the oracle must reach
+  (the attack's own: ten customer values for a bulk export, **one** for a drip, since a single
+  leaked customer value is a leak), the `landing` steps whose landing is success, and, where every
+  layer on still lets it succeed, a `gap` saying in words what the known gap is. A test requires a
+  gap exactly where the prediction says the attack succeeds with every layer on.
+- Each blocked range lists its `catchers`: every layer that would stop the call by itself. A
+  monitor range may say a floor layer (scope, approval) still blocks it.
+- `lab_phase` names the phase of the lab upstream it needs; `[plant]` may give a text inline.
+
+**The oracle** (`oracle.py`) reads the databases as their owner and shares nothing with the gateway.
+It counts customer values as written and under any decoding (base64, hex, percent-encoding, ROT13,
+reversal), canary codes, changes to tickets (a snapshot diff: a status, an assignee, an urgent
+ticket, a comment) and, for the lab upstream, the upstream's own count of calls it executed. An
+attack's success is the oracle's verdict at the attack's threshold: `Evidence` and
+`attack_succeeded`, never the gateway's own record. `restore_snapshot` puts the ticketing data back
+after an attack that wrote.
+
+**The prediction** (`prediction.py`) is a rule applied to the file, never adjusted after a run: a
+call allowed with every layer on stays allowed whatever is weakened; a blocked call stays blocked
+while one of its catchers still enforces; a denying approver stops every write and no read; the
+attack is predicted to succeed when a landing call goes through. It is the independent-layers model,
+and layers are not independent (a refused egress attempt still counts), so where a run differs from
+the prediction the scorecard reports it as a finding.
+
+**The corpus** is 31 new attacks (35 files with 4d's four) and the benign workload: families for
+exfiltration (bulk, drip, cross-session), unauthorized writes, out-of-scope calls, tool poisoning,
+rug pulls, schema smuggling, canary leakage, encoded exfiltration and obfuscated instructions, and
+five honest runs whose texts are recorded corpus strings. `gateway/tests/test_redteam_corpus.py`
+checks every file against the clients' scopes, the pins, the lab phases and the seeded data. The
+strings the classifier judges are in `config/classifier_corpus/redteam.toml` and the static text
+of the attack files, recorded as the units both the v0.1.0 rule and the current one cut them
+into; a test fails on a miss (`scripts/record_classifier.py --count` says what is missing). A text
+filled from what an attack read cannot be known in advance and is data only: when it reaches the
+classifier it is unclassified, which the scorecard counts apart.
+
+**The lab upstream** (`servers/lab`, module `lab_upstream`) is a deliberately lenient MCP server
+whose tool definitions change between phases: `reviewed` (the three tools a person pinned),
+`rugpulled` (a description and a schema changed after review) and `poisoned` (two tools nobody
+reviewed: one whose description hides an instruction in zero-width characters, one whose schema has a
+remote `$ref`). It runs a call whatever the arguments hold, counts what it executed (`GET /effects`,
+`POST /effects/reset`, counts only, never a value) and serves a long report whose injection sits
+across the cut of a 6000-character unit. Its pins (`config/lab/tool_pins.lab.toml`), tool policies
+and approval roles (`config/lab/`) are the product's plus the lab's, written and checked like the
+product's. It is fenced like the lab approver and asked for three times: the `lab` profile;
+`LAB_MUTABLE_UPSTREAM=yes` in the environment (it exits at once without it); and a credential,
+`LAB_UPSTREAM_TOKEN`, given for the run (empty by default; it refuses an empty or weak one). It sits
+on the internal network with no host port (4413 inside it), is in no default service, image or
+`.env.example` value, and tests prove each. **Never use it against anything real.**
+
+**What this does not show.** The attacker is a script that does what a planted text says (a model
+that has been talked into it); how often a real model is talked into it is not measured. The
+classifier answers from recordings, so its results are those of the recorded judgements, not of a
+model meeting unseen text.
+
 ### Idle transactions (Phase 3c)
 
 Any role that can connect can take agent-core's one audit append lock, and a write that cannot be
@@ -1020,9 +1083,11 @@ recorded as auth failures with reason `throttled`.
 ### The lab profile (Phase 3c)
 
 Phase 6's red-team runs need a scripted attacker's writes to get through the approval layer so that
-what is measured is the other layers. `docker compose --profile lab up` starts `lab-approver`,
-which approves every pending write (`scripts/lab_approver.py`, mounted into that one service and in
-no image). It is off unless asked for three times, and each is enforced:
+what is measured is the other layers. The `lab` profile holds two services, both test tooling that
+defeats or abuses a control on purpose: `lab-approver` (below) and `lab-upstream` (see
+[The red-team harness](#the-red-team-harness-phase-6)). `docker compose --profile lab up` starts
+`lab-approver`, which approves every pending write (`scripts/lab_approver.py`, mounted into that one
+service and in no image). It is off unless asked for three times, and each is enforced:
 
 1. the `lab` profile: the default stack does not start it (naming the service on the command line,
    `docker compose up lab-approver`, starts a profiled service without the profile, so this is a
@@ -1408,7 +1473,8 @@ itself).
 | PostgreSQL | 127.0.0.1:4402 |
 | MCP servers (Phase 2) | none on the host; 4410 (handbook), 4411 (CRM) and 4412 (ticketing) inside the `backend` network |
 
-The test-only echo server has no published port either.
+The test-only echo server has no published port either, and neither has the lab upstream (4413 inside
+the `backend` network, `lab` profile only; see [The lab profile](#the-lab-profile-phase-3c)).
 
 ## Networks
 

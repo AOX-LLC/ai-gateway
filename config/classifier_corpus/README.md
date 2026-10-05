@@ -1,6 +1,8 @@
 # The classifier corpus
 
 Hostile text (`attacks.toml`), benign look-alikes (`benign.toml`) and the 09 story (`story_09.toml`).
+A fourth file, `redteam.toml`, holds the scorecard's own strings (obfuscated instructions, what the lab
+upstream says) under the same rule; see the end of this file.
 Every string is fictional (Harborline Supply Co. is fictional). Each item has:
 
 - `expect`: the overall label, `injection` or `clean`. It is what the item *is*, and it is never
@@ -38,3 +40,16 @@ positive is a clean item the judge flagged. Items whose catchers are other layer
 those layers and not counted against the classifier. `scripts/record_classifier.py --verify` prints
 this split; Phase 6's scorecard reads the same fields. That the other layers do catch those three
 items is not shown by this corpus: it is a claim for the egress and canary tests to prove.
+
+## The red-team strings (`redteam.toml`, and the attack files)
+
+`redteam.toml` follows the same rule for `catchers` (an instruction directed at a model, in the text
+alone, fixed before any recording). An item's text is given, or built (`builder = "module:name"`): the
+long report of the lab upstream is built so that the cut of a 6000-character unit falls in the middle
+of its injection, and is recorded as the units both v0.1.0's rule (no overlap) and the current one cut
+it into. The static text of the attack files (what a write carries, what an attack plants) is recorded
+too, under both rules (`scripts/classifier_corpus.py`, `attack_strings`). An instruction split into
+pieces too short to be judged is in no file here: nothing judges the pieces, so nothing records them,
+and a test proves it. These items are not part of the 38 above and are not counted in the figures
+earlier in this file; `scripts/record_classifier.py --verify` prints what the judge made of each, as a
+finding for the scorecard and never a failure.
