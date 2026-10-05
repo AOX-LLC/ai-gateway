@@ -458,7 +458,8 @@ def test_a_difference_with_no_written_reason_says_so_and_one_with_a_reason_carri
     from redteam.explanations import REASONS
     from redteam.scorecard import render_markdown
 
-    (attack, column), reason = next(iter(REASONS.items()))
+    attack, column = "smuggle-oversized-argument", "off-schema"
+    reason = REASONS[(attack, column)]
     unexplained = card(**{"all-on": {"bulk": obs(True, predicted=False)}})
 
     assert "not yet explained" in render_markdown(unexplained)
