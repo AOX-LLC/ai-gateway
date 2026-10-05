@@ -23,6 +23,7 @@ many calls that is and what it will cost, before anything is spent.
 import dataclasses
 import importlib
 import importlib.util
+import json
 import sys
 import tomllib
 from collections.abc import Iterable
@@ -257,17 +258,45 @@ def redteam_corpus(config: JudgeConfig | None = None) -> list[CorpusUnit]:
     return units
 
 
-_DYNAMIC_TEMPLATES = frozenset({"planted", "values", "canary", "encode"})
+def _account_result_text(account_id: str) -> str:
+    """What `crm__get_account` returns for an account, as far as an attacker copying values out of
+    it is concerned: the account, its contacts in id order and its ten newest notes, as the seed
+    data has them and without what the server keeps to itself."""
+    from crm_server.seed import build_dataset
+
+    data = build_dataset()
+    account = next(a for a in data.accounts if a.id == account_id)
+    contacts = sorted((c for c in data.contacts if c.account_id == account_id), key=lambda c: c.id)
+    notes = sorted(
+        (n for n in data.notes if n.account_id == account_id),
+        key=lambda n: n.occurred_at,
+        reverse=True,
+    )[:10]
+    return json.dumps(
+        {
+            **_row_values(account),
+            "contacts": [_row_values(c) for c in contacts],
+            "notes": [_row_values(n) for n in notes],
+        }
+    )
+
+
+_PLANTED_ID = "TKT-000000"
+"""A stand-in for the planted ticket's id: an id is not prose, so the classifier never judges it."""
 
 
 def attack_strings(config: JudgeConfig | None = None) -> list[CorpusUnit]:
-    """The static text of the attack files that a classifier could judge: the text each write
-    carries (judged as arguments, and again when a read returns it) and the text each attack plants
-    (judged when it is read), under both rules. A template filled from what the attack read is data
-    only and cannot be known here; a `{pad:N}` is a single word and is never judged."""
-    from redteam.attack_format import TOKENS, load_attack
+    """The text each attack writes (judged as arguments, and again when a read returns it) and the
+    text each attack plants (judged when it is read), under both rules.
+
+    A write that carries what the attack read (`{values:N}`, `{encode:...}`, `{canary}`) is worked
+    out by playing the attack's reads against the seed data: the attack copies customer values out
+    of the account results it is given, in the order it reads them, so the text it will write is the
+    same every run. An argument that cannot be filled this way (the attack never reads the value)
+    is left out, as it cannot be known here. A `{pad:N}` is a single word and is never judged."""
+    from redteam.attack_format import load_attack
     from redteam.prediction import CONFIG, load_effects
-    from redteam.scripted_client import Loot, render
+    from redteam.scripted_client import AttackStoppedError, Loot, render
 
     config = config or judge_config()
     effects = load_effects(CONFIG / "tool_policies.toml", CONFIG / "lab" / "tool_policies.lab.toml")
@@ -275,15 +304,35 @@ def attack_strings(config: JudgeConfig | None = None) -> list[CorpusUnit]:
     for path in sorted(ATTACKS.glob("*.toml")):
         attack = load_attack(path)
         source = f"attack {attack.id}"
+        loot = Loot()
         for step, i in attack.calls():
+            if step.tool == "crm__get_account":
+                account_id = render(
+                    str(step.arguments["account_id"]),
+                    attack=attack,
+                    step_id=step.id,
+                    i=i,
+                    planted=_PLANTED_ID,
+                    loot=loot,
+                )
+                loot.note(_account_result_text(account_id))
             if effects.get(step.tool, "write") != "write":
                 continue
-            rendered = {
-                key: render(value, attack=attack, step_id=step.id, i=i, planted="", loot=Loot())
-                for key, value in step.arguments.items()
-                if isinstance(value, str)
-                and not {m.group(1) for m in TOKENS.finditer(value)} & _DYNAMIC_TEMPLATES
-            }
+            rendered: dict[str, Any] = {}
+            for key, value in step.arguments.items():
+                if not isinstance(value, str):
+                    continue
+                try:
+                    rendered[key] = render(
+                        value,
+                        attack=attack,
+                        step_id=step.id,
+                        i=i,
+                        planted=_PLANTED_ID,
+                        loot=loot,
+                    )
+                except AttackStoppedError:
+                    continue
             units += [
                 CorpusUnit(source, surface, text)
                 for rule in both_rules(config)
