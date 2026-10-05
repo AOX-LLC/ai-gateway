@@ -182,6 +182,8 @@ def test_the_demo_override_changes_only_what_it_says_and_never_the_real_admin_cr
         "GATEWAY_APPROVAL_TTL_S": "86400",
         "GATEWAY_APPROVAL_HOLD_S": "3",
         "GATEWAY_PIPELINE_FILE": "/app/config/pipeline.demo.toml",
+        "AGENT_CORE_MODE": "replay",
+        "AGENT_CORE_ANTHROPIC_API_KEY": "",
     }
     dashboard = override["services"]["dashboard"]["environment"]
     assert dashboard["DASHBOARD_DEMO"] == "1"

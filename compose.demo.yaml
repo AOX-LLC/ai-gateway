@@ -18,6 +18,10 @@ services:
       GATEWAY_APPROVAL_HOLD_S: "3"
       # Rate limiting in monitor mode, so there are calls it would have limited to show.
       GATEWAY_PIPELINE_FILE: /app/config/pipeline.demo.toml
+      # Replay, whatever .env or the shell says, and no key: the demo never calls a model, so it bills nothing
+      # and a live cost cannot turn up on a dashboard that is being photographed.
+      AGENT_CORE_MODE: replay
+      AGENT_CORE_ANTHROPIC_API_KEY: ""
   dashboard:
     environment:
       # "Now" is the newest recorded request, so the seeded state looks the same whenever it is seen.
