@@ -44,7 +44,7 @@ The dashboard's strict content security policy stays on. The recorder pins the t
 3. **Recent decisions:** every call with its outcome and the layer that decided it.
 4. **The approval queue:** writes wait for a person; the dashboard cannot approve.
 
-The GIF cuts between these four and leaves out the scrolls, because a scroll changes every pixel and a GIF cannot hold that small (about 3 MB at 800 px). The MP4 and WebM keep the scrolls. The numbers differ a little between takes, because the traffic is live; the seeded state does not.
+The README uses the GIFs; the MP4 and WebM of each theme are the same clip for places that can play a short silent loop (the website's pages). The GIF cuts between these four and leaves out the scrolls, because a scroll changes every pixel and a GIF cannot hold that small (about 3 MB at 800 px). The MP4 and WebM keep the scrolls. The numbers differ a little between takes, because the traffic is live; the seeded state does not.
 
 ## The frame check
 

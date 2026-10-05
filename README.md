@@ -21,7 +21,7 @@ Reproduce it, in replay mode with no API key (it starts the lab approver and the
   <img alt="The dashboard on fictional sample data while simulated traffic arrives: the overview and its charts, the calls each layer blocked, the recent decisions with the layer that decided each, and the approval queue" src="docs/media/dashboard-light.gif" width="800">
 </picture>
 
-Simulated traffic from the two fictional Harborline bots on the seeded demo stack (the "Sample data" pill is the dashboard's own marker). It is read-only: it cannot approve, deny or revoke anything. [MP4 of the same run](docs/media/dashboard-dark.mp4), which keeps the scrolls the GIF cuts. The recorder is `demo/record.sh`.
+Simulated traffic from the two fictional Harborline bots on the seeded demo stack (the "Sample data" pill is the dashboard's own marker): their normal reads, a few calls the gateway refuses and some failed sign-ins. The dashboard is read-only: it cannot approve, deny or revoke anything. The same run as MP4, which keeps the scrolls the GIF cuts: [light](docs/media/dashboard-light.mp4), [dark](docs/media/dashboard-dark.mp4). The recorder is `demo/record.sh`.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/overview-dark-fold.png">
@@ -91,7 +91,7 @@ Read these before relying on the numbers above.
 - **The classifier runs in replay mode.** By default it answers from recordings committed in `config/recordings/`, so the scorecard shows recorded judgements on a small corpus, not a model meeting text it has never seen. A text with no recording is counted as `unclassified`, never as clean. A real deployment must run the classifier live (`AGENT_CORE_MODE=live` and a key), where a model error refuses the call.
 - **A slow drip gets some values out.** The egress layer refuses a write carrying five or more customer values the client read, and a tally of ten across a window; so up to nine values can leave a client in one window before the tally stops it. Three of the scorecard's drip attacks succeed for that reason. Two more succeed because the canary layer does not decode ROT13, and because an instruction split into pieces shorter than the classifier's minimum is never judged. That is the five attacks the chart shows succeeding with every layer on (as of v0.2.0: [`docs/scorecard.md`](docs/scorecard.md) is the current list).
 - **The corpus is small.** A rate in the scorecard is a count of 31 attacks, not a probability. The columns that turn off `scope` or `approval` run under a lab-only override and say so, and the headline columns use a lab approver that rubber-stamps every write (the worst case).
-- **It is a demonstration, not a product.** Clients authenticate with per-client bearer tokens (OAuth 2.1 is out of scope), it runs on one node, and its data is fictional. The release notes list what else is known: [`docs/release-notes/v0.2.0.md`](docs/release-notes/v0.2.0.md).
+- **It is a demonstration, not a product.** Clients authenticate with per-client bearer tokens (there is no OAuth), the rate-limit buckets and the egress ledger live in one gateway process's memory, so it is not built to run as several replicas, and its data is fictional. The release notes list what else is known: [`docs/release-notes/v0.2.0.md`](docs/release-notes/v0.2.0.md).
 
 
 ## More
