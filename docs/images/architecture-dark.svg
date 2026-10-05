@@ -1,0 +1,88 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 696" width="1240" height="696" role="img" aria-labelledby="t d">
+<title id="t">AI Gateway architecture</title>
+<desc id="d">AI clients connect with a bearer token to the gateway, which runs a fixed pipeline of layers before and after each call to the upstream MCP servers on an internal network. Decisions, approvals and telemetry go to PostgreSQL; a read-only dashboard shows them and a person approves writes. Harborline Supply Co. and its data are fictional.</desc>
+<rect width="1240" height="696" fill="#0E1012"/>
+<rect x="24" y="150" width="210" height="250" rx="6" fill="#15181B" stroke="#3A4148" stroke-width="1.5"/>
+<text x="129" y="184" font-family="'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace" font-size="12" font-weight="500" fill="#9AA1A9" text-anchor="middle" letter-spacing="1">AI CLIENTS</text>
+<text x="129" y="222" font-family="'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="16" font-weight="600" fill="#E6E8EA" text-anchor="middle">Claude Code,</text>
+<text x="129" y="244" font-family="'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="16" font-weight="600" fill="#E6E8EA" text-anchor="middle">agents, apps</text>
+<text x="129" y="284" font-family="'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="14" font-weight="400" fill="#C3C8CD" text-anchor="middle">MCP over HTTP</text>
+<text x="129" y="306" font-family="'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="14" font-weight="400" fill="#C3C8CD" text-anchor="middle">one bearer token</text>
+<text x="129" y="328" font-family="'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="14" font-weight="400" fill="#C3C8CD" text-anchor="middle">per client, scoped</text>
+<text x="129" y="368" font-family="'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="14" font-weight="400" fill="#9AA1A9" text-anchor="middle">the client may be steered</text>
+<text x="129" y="388" font-family="'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="14" font-weight="400" fill="#9AA1A9" text-anchor="middle">by text it reads</text>
+<rect x="310" y="40" width="610" height="520" rx="6" fill="#15181B" stroke="#3FC1B0" stroke-width="1.5"/>
+<text x="334" y="76" font-family="'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace" font-size="12" font-weight="500" fill="#3FC1B0" text-anchor="start" letter-spacing="1">AI GATEWAY</text>
+<text x="334" y="100" font-family="'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="16" font-weight="600" fill="#E6E8EA" text-anchor="start">Every call is checked in a fixed order, in and out</text>
+<rect x="334" y="118" width="168" height="38" rx="4" fill="#1C2024" stroke="#3A4148" stroke-width="1.5"/>
+<text x="418" y="142" font-family="'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace" font-size="14.5" font-weight="500" fill="#E6E8EA" text-anchor="middle">bearer auth</text>
+<rect x="514" y="118" width="168" height="38" rx="4" fill="#1C2024" stroke="#3A4148" stroke-width="1.5"/>
+<text x="598" y="142" font-family="'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace" font-size="14.5" font-weight="500" fill="#E6E8EA" text-anchor="middle">protocol guard</text>
+<text x="698" y="134" font-family="'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="13.5" font-weight="400" fill="#9AA1A9" text-anchor="start">always on: no setting</text>
+<text x="698" y="151" font-family="'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="13.5" font-weight="400" fill="#9AA1A9" text-anchor="start">turns them off</text>
+<rect x="334" y="176" width="562" height="250" rx="6" fill="#0E1012" stroke="#3A4148" stroke-width="1.5"/>
+<text x="350" y="202" font-family="'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace" font-size="12" font-weight="500" fill="#9AA1A9" text-anchor="start" letter-spacing="1">PIPELINE  ·  each layer: enforce, monitor or off</text>
+<text x="350" y="232" font-family="'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="14" font-weight="600" fill="#C3C8CD" text-anchor="start">before the call</text>
+<rect x="350" y="244" width="124" height="38" rx="4" fill="#1C2024" stroke="#3A4148" stroke-width="1.5"/>
+<text x="412" y="268" font-family="'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace" font-size="14.5" font-weight="500" fill="#E6E8EA" text-anchor="middle">scope</text>
+<rect x="484" y="244" width="124" height="38" rx="4" fill="#1C2024" stroke="#3A4148" stroke-width="1.5"/>
+<text x="546" y="268" font-family="'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace" font-size="14.5" font-weight="500" fill="#E6E8EA" text-anchor="middle">allowlist</text>
+<rect x="618" y="244" width="124" height="38" rx="4" fill="#1C2024" stroke="#3A4148" stroke-width="1.5"/>
+<text x="680" y="268" font-family="'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace" font-size="14.5" font-weight="500" fill="#E6E8EA" text-anchor="middle">rate limit</text>
+<rect x="752" y="244" width="124" height="38" rx="4" fill="#1C2024" stroke="#3A4148" stroke-width="1.5"/>
+<text x="814" y="268" font-family="'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace" font-size="14.5" font-weight="500" fill="#E6E8EA" text-anchor="middle">schema</text>
+<rect x="350" y="292" width="124" height="38" rx="4" fill="#1C2024" stroke="#3A4148" stroke-width="1.5"/>
+<text x="412" y="316" font-family="'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace" font-size="14.5" font-weight="500" fill="#E6E8EA" text-anchor="middle">egress</text>
+<rect x="484" y="292" width="124" height="38" rx="4" fill="#1C2024" stroke="#3A4148" stroke-width="1.5"/>
+<text x="546" y="316" font-family="'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace" font-size="14.5" font-weight="500" fill="#E6E8EA" text-anchor="middle">canary</text>
+<rect x="618" y="292" width="124" height="38" rx="4" fill="#1C2024" stroke="#3A4148" stroke-width="1.5"/>
+<text x="680" y="316" font-family="'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace" font-size="14.5" font-weight="500" fill="#E6E8EA" text-anchor="middle">classifier</text>
+<rect x="752" y="292" width="124" height="38" rx="4" fill="#12302C" stroke="#3FC1B0" stroke-width="1.5"/>
+<text x="814" y="316" font-family="'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace" font-size="14.5" font-weight="500" fill="#E6E8EA" text-anchor="middle">approval</text>
+<text x="350" y="358" font-family="'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="14" font-weight="600" fill="#C3C8CD" text-anchor="start">after the call, on the result</text>
+<rect x="350" y="368" width="124" height="30" rx="4" fill="#1C2024" stroke="#3A4148" stroke-width="1.5"/>
+<text x="412" y="388" font-family="'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace" font-size="14.5" font-weight="500" fill="#E6E8EA" text-anchor="middle">egress</text>
+<rect x="484" y="368" width="124" height="30" rx="4" fill="#1C2024" stroke="#3A4148" stroke-width="1.5"/>
+<text x="546" y="388" font-family="'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace" font-size="14.5" font-weight="500" fill="#E6E8EA" text-anchor="middle">canary</text>
+<rect x="618" y="368" width="124" height="30" rx="4" fill="#1C2024" stroke="#3A4148" stroke-width="1.5"/>
+<text x="680" y="388" font-family="'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace" font-size="14.5" font-weight="500" fill="#E6E8EA" text-anchor="middle">classifier</text>
+<text x="350" y="416" font-family="'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="13.5" font-weight="400" fill="#9AA1A9" text-anchor="start">tools/list is filtered by scope and pinned descriptions</text>
+<rect x="334" y="444" width="562" height="56" rx="6" fill="#12302C" stroke="#3FC1B0" stroke-width="1.5"/>
+<text x="350" y="469" font-family="'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="15" font-weight="600" fill="#E6E8EA" text-anchor="start">One decision record per request</text>
+<text x="350" y="488" font-family="'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="13.5" font-weight="400" fill="#C3C8CD" text-anchor="start">which layer decided, how long it took; never the arguments or the results</text>
+<text x="334" y="530" font-family="'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="13.5" font-weight="400" fill="#9AA1A9" text-anchor="start">A write waits for a person; the arguments forwarded are the ones every layer saw.</text>
+<rect x="980" y="110" width="236" height="310" rx="6" fill="#15181B" stroke="#3A4148" stroke-width="1.5" stroke-dasharray="6 5"/>
+<text x="998" y="140" font-family="'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace" font-size="12" font-weight="500" fill="#9AA1A9" text-anchor="start" letter-spacing="1">UPSTREAM MCP SERVERS</text>
+<text x="998" y="162" font-family="'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="13.5" font-weight="400" fill="#C3C8CD" text-anchor="start">internal network, no route out</text>
+<rect x="998" y="182" width="200" height="38" rx="4" fill="#1C2024" stroke="#3A4148" stroke-width="1.5"/>
+<text x="1098" y="206" font-family="'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace" font-size="14.5" font-weight="500" fill="#E6E8EA" text-anchor="middle">ticketing</text>
+<rect x="998" y="232" width="200" height="38" rx="4" fill="#1C2024" stroke="#3A4148" stroke-width="1.5"/>
+<text x="1098" y="256" font-family="'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace" font-size="14.5" font-weight="500" fill="#E6E8EA" text-anchor="middle">crm</text>
+<rect x="998" y="282" width="200" height="38" rx="4" fill="#1C2024" stroke="#3A4148" stroke-width="1.5"/>
+<text x="1098" y="306" font-family="'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace" font-size="14.5" font-weight="500" fill="#E6E8EA" text-anchor="middle">handbook</text>
+<text x="998" y="352" font-family="'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="14" font-weight="600" fill="#E6E8EA" text-anchor="start">Harborline Supply Co.</text>
+<text x="998" y="372" font-family="'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="14" font-weight="400" fill="#C3C8CD" text-anchor="start">(fictional), synthetic data</text>
+<text x="998" y="396" font-family="'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="13.5" font-weight="400" fill="#9AA1A9" text-anchor="start">each with its own role</text>
+<rect x="310" y="600" width="610" height="84" rx="6" fill="#15181B" stroke="#3A4148" stroke-width="1.5"/>
+<text x="334" y="628" font-family="'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace" font-size="12" font-weight="500" fill="#9AA1A9" text-anchor="start" letter-spacing="1">POSTGRESQL + PGVECTOR</text>
+<text x="334" y="652" font-family="'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="15" font-weight="600" fill="#E6E8EA" text-anchor="start">policy · approvals · audit log · telemetry</text>
+<text x="334" y="672" font-family="'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="13.5" font-weight="400" fill="#C3C8CD" text-anchor="start">a separate database role for the gateway, the approver and the dashboard</text>
+<rect x="24" y="600" width="250" height="84" rx="6" fill="#15181B" stroke="#3A4148" stroke-width="1.5"/>
+<text x="44" y="628" font-family="'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace" font-size="12" font-weight="500" fill="#9AA1A9" text-anchor="start" letter-spacing="1">DASHBOARD</text>
+<text x="44" y="656" font-family="'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="15" font-weight="600" fill="#E6E8EA" text-anchor="start">read-only · signed in</text>
+<rect x="956" y="600" width="260" height="84" rx="6" fill="#15181B" stroke="#3A4148" stroke-width="1.5"/>
+<text x="976" y="628" font-family="'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace" font-size="12" font-weight="500" fill="#9AA1A9" text-anchor="start" letter-spacing="1">APPROVER (A PERSON)</text>
+<text x="976" y="656" font-family="'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="15" font-weight="600" fill="#E6E8EA" text-anchor="start">own login, decides writes</text>
+<polyline points="234,275 310,275" fill="none" stroke="#C3C8CD" stroke-width="1.8"/>
+<polygon points="310,275 301.9,271.1 301.9,278.9" fill="#C3C8CD"/>
+<polyline points="920,265 980,265" fill="none" stroke="#C3C8CD" stroke-width="1.8"/>
+<polygon points="980,265 971.9,261.1 971.9,268.9" fill="#C3C8CD"/>
+<polyline points="615,560 615,600" fill="none" stroke="#C3C8CD" stroke-width="1.8"/>
+<polygon points="615,600 618.9,591.9 611.1,591.9" fill="#C3C8CD"/>
+<polyline points="310,642 274,642" fill="none" stroke="#3FC1B0" stroke-width="1.8"/>
+<polygon points="274,642 282.1,645.9 282.1,638.1" fill="#3FC1B0"/>
+<polyline points="956,642 920,642" fill="none" stroke="#3FC1B0" stroke-width="1.8"/>
+<polygon points="920,642 928.1,645.9 928.1,638.1" fill="#3FC1B0"/>
+<text x="292" y="592" font-family="'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="12.5" font-weight="400" fill="#9AA1A9" text-anchor="middle">reads telemetry</text>
+<text x="938" y="592" font-family="'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="12.5" font-weight="400" fill="#9AA1A9" text-anchor="middle">approves</text>
+</svg>
