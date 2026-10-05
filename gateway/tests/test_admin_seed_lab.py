@@ -18,30 +18,36 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 LAB = REPO_ROOT / "config" / "lab"
 
 
-def test_it_refuses_to_run_without_the_lab_switch(
+async def _seed_lab_exits(*argv: str) -> str:
+    """Run the CLI in a worker thread, as the other admin tests do: it starts its own event loop,
+    which a thread that already has one running (a session fixture's) does not allow."""
+    with pytest.raises(SystemExit) as stopped:
+        await anyio.to_thread.run_sync(cli.main, list(argv))
+    return str(stopped.value)
+
+
+@pytest.mark.anyio
+async def test_it_refuses_to_run_without_the_lab_switch(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.setenv("GATEWAY_MIGRATE_DATABASE_URL", "postgresql://nobody@127.0.0.1:1/none")
     monkeypatch.delenv("LAB_MUTABLE_UPSTREAM", raising=False)
 
-    with pytest.raises(SystemExit) as stopped:
-        cli.main(["seed-lab"])
+    message = await _seed_lab_exits("seed-lab")
 
-    assert "LAB_MUTABLE_UPSTREAM" in str(stopped.value)
+    assert "LAB_MUTABLE_UPSTREAM" in message
     assert capsys.readouterr().out == ""
 
 
+@pytest.mark.anyio
 @pytest.mark.parametrize("value", ["", "no", "true", "YES", "yes "])
-def test_only_the_exact_word_yes_opens_the_gate(
+async def test_only_the_exact_word_yes_opens_the_gate(
     monkeypatch: pytest.MonkeyPatch, value: str
 ) -> None:
     monkeypatch.setenv("GATEWAY_MIGRATE_DATABASE_URL", "postgresql://nobody@127.0.0.1:1/none")
     monkeypatch.setenv("LAB_MUTABLE_UPSTREAM", value)
 
-    with pytest.raises(SystemExit) as stopped:
-        cli.main(["seed-lab"])
-
-    assert "LAB_MUTABLE_UPSTREAM" in str(stopped.value)
+    assert "LAB_MUTABLE_UPSTREAM" in await _seed_lab_exits("seed-lab")
 
 
 def test_the_generated_clients_file_loads_one_client_for_each_attack() -> None:
