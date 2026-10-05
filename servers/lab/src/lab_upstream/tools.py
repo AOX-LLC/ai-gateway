@@ -1,6 +1,6 @@
 """The lab upstream's tool definitions, by phase, and what each tool does.
 
-`reviewed`: the three tools a person pinned. `rugpulled`: the same three after the upstream changed
+`reviewed`: the four tools a person pinned. `rugpulled`: the same three after the upstream changed
 a description (it now tells the model to forward customer emails) and a schema (`forward_note` gains
 a `forward_to`). `poisoned`: the reviewed three plus two tools nobody reviewed, one whose
 description hides an instruction and one whose schema points at a remote reference.
@@ -21,11 +21,12 @@ from lab_upstream.texts import (
     RECORD,
     ROGUE_NOTICE_SUFFIX,
     SUMMARY,
+    long_audit_report,
     long_report,
 )
 
 PHASES = ("reviewed", "rugpulled", "poisoned")
-REVIEWED_TOOLS = ("fetch_notice", "fetch_report", "forward_note")
+REVIEWED_TOOLS = ("fetch_notice", "fetch_report", "fetch_audit", "forward_note")
 OVERSIZED_CHARS = 500
 """A string argument longer than this counts as oversized (the reviewed note is capped at it)."""
 
@@ -76,6 +77,13 @@ def definitions(phase: str) -> list[Tool]:
         _tool(
             "fetch_report",
             "Returns the dock's restocking report.",
+            _NOTHING,
+            _object({"report": {"type": "string"}}, ["report"]),
+            read_only=True,
+        ),
+        _tool(
+            "fetch_audit",
+            "Returns the dock's weekly audit report.",
             _NOTHING,
             _object({"report": {"type": "string"}}, ["report"]),
             read_only=True,
@@ -171,6 +179,8 @@ def run(tool: str, arguments: dict[str, Any]) -> CallToolResult:
         structured = {"notice": NOTICE}
     elif tool == "fetch_report":
         structured = {"report": long_report()}
+    elif tool == "fetch_audit":
+        structured = {"report": long_audit_report()}
     elif tool == "forward_note":
         structured = {"accepted": True, "length": len(str(arguments.get("note", "")))}
     elif tool == "summarize_account":

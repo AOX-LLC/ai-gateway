@@ -20,7 +20,13 @@ from ai_gateway.classifier.prompt import split_text
 from ai_gateway.pipeline.pins import definition_sha256
 from lab_upstream.server import LabNotEnabledError, build_app
 from lab_upstream.settings import LabSettings
-from lab_upstream.texts import REPORT_INSTRUCTION, long_report
+from lab_upstream.texts import (
+    AUDIT_FIRST_HALF,
+    AUDIT_SECOND_HALF,
+    REPORT_INSTRUCTION,
+    long_audit_report,
+    long_report,
+)
 from lab_upstream.tools import PHASES, REVIEWED_TOOLS, definitions
 from tests.helpers import serve_in_thread
 
@@ -44,11 +50,8 @@ def _hash(tool: Any) -> str:
 
 def test_the_reviewed_phase_offers_exactly_the_reviewed_tools() -> None:
     assert PHASES == ("reviewed", "rugpulled", "poisoned")
-    assert (
-        set(_by_name("reviewed"))
-        == set(REVIEWED_TOOLS)
-        == {"fetch_notice", "fetch_report", "forward_note"}
-    )
+    assert set(_by_name("reviewed")) == set(REVIEWED_TOOLS)
+    assert set(REVIEWED_TOOLS) == {"fetch_notice", "fetch_report", "fetch_audit", "forward_note"}
 
 
 def test_a_rug_pull_changes_a_description_and_a_schema_and_nothing_else() -> None:
@@ -351,3 +354,37 @@ def test_the_phase_compose_sets_is_the_phase_the_server_runs_in(
 
     assert LabSettings().phase == "rugpulled"
     assert SERVICE["environment"]["LAB_PHASE"] == "${LAB_UPSTREAM_PHASE:-reviewed}"
+
+
+# -- the second long report: an instruction that exists only once its halves are joined ---------
+
+
+def test_the_audit_report_splits_a_sentence_across_the_old_cut_and_not_the_new_one() -> None:
+    text = long_audit_report()
+    joined = f"{AUDIT_FIRST_HALF} {AUDIT_SECOND_HALF}"
+
+    assert len(text) > 8000
+    assert text.count(joined) == 1
+    legacy = split_text(text, 6000)
+    assert len(legacy) >= 2
+    assert sum(AUDIT_FIRST_HALF in unit for unit in legacy) == 1
+    assert sum(AUDIT_SECOND_HALF in unit for unit in legacy) == 1
+    assert not any(joined in unit for unit in legacy), "the old cut falls between the halves"
+    assert any(joined in unit for unit in split_text(text, 6000, overlap=400)), "overlap joins them"
+
+
+def test_neither_half_of_the_audit_sentence_carries_an_override_cue_or_a_reader_directive() -> None:
+    """The expectation committed before recording: the instruction is in the joining, not in a
+    half. The halves are third-person description of a routine; there is no `ignore`, no
+    `instructions`, no imperative verb at the start of a clause."""
+    cues = ("ignore", "disregard", "instruction", "forget", "override", "you ", "your ", "please")
+
+    for half in (AUDIT_FIRST_HALF, AUDIT_SECOND_HALF):
+        assert not [cue for cue in cues if cue in half.lower()], half
+    assert not [cue for cue in cues if cue in long_audit_report().lower()], "nowhere in the report"
+    assert AUDIT_SECOND_HALF.split()[0] == "exports", "a statement about the reader, not an order"
+
+
+def test_the_audit_report_is_the_same_every_time_and_the_first_report_is_unchanged() -> None:
+    assert long_audit_report() == long_audit_report()
+    assert long_report().count(REPORT_INSTRUCTION) == 1
