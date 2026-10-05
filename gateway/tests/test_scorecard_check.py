@@ -33,7 +33,7 @@ def test_a_scorecard_made_from_synthetic_observations_passes_the_check_when_it_m
     (tmp_path / "scorecard.md").write_text(sc.render_markdown(card), encoding="utf-8")
     (tmp_path / "images" / "scorecard.svg").write_text(sc.render_svg(card), encoding="utf-8")
 
-    assert check.problems(tmp_path, compare_to_attack_files=False) == []
+    assert check.problems(tmp_path, compare_to_attack_files=False, readme=None) == []
 
 
 @pytest.mark.parametrize("which", ["md", "svg"])
@@ -50,7 +50,7 @@ def test_a_rendered_file_that_is_not_what_the_json_renders_to_is_caught(
         target.read_text(encoding="utf-8") + "\n<!-- edited by hand -->\n", encoding="utf-8"
     )
 
-    problems = check.problems(tmp_path, compare_to_attack_files=False)
+    problems = check.problems(tmp_path, compare_to_attack_files=False, readme=None)
 
     assert any("render" in p for p in problems), problems
 
@@ -63,7 +63,7 @@ def test_a_scorecard_that_does_not_cover_every_attack_and_column_is_caught(tmp_p
     (tmp_path / "scorecard.md").write_text("x", encoding="utf-8")
     (tmp_path / "images" / "scorecard.svg").write_text("x", encoding="utf-8")
 
-    problems = check.problems(tmp_path, compare_to_attack_files=False)
+    problems = check.problems(tmp_path, compare_to_attack_files=False, readme=None)
 
     assert any("all-on" in p and "bulk" in p for p in problems), problems
 
@@ -83,3 +83,35 @@ def test_the_makefile_has_the_targets_the_documentation_names() -> None:
         assert target in text
     assert "scorecard_run.py" in text
     assert "AGENT_CORE_ANTHROPIC_API_KEY" not in text, "replay mode needs no key"
+
+
+def test_the_check_compares_the_readme_section_with_what_the_json_renders_to(
+    tmp_path: Path,
+) -> None:
+    card = check.synthetic_card()
+    (tmp_path / "images").mkdir()
+    (tmp_path / "scorecard.json").write_text(json.dumps(card, indent=2) + "\n", encoding="utf-8")
+    (tmp_path / "scorecard.md").write_text(sc.render_markdown(card), encoding="utf-8")
+    (tmp_path / "images" / "scorecard.svg").write_text(sc.render_svg(card), encoding="utf-8")
+    readme = tmp_path / "README.md"
+    readme.write_text(
+        sc.replace_readme_section(
+            "# T\n\n" + sc.README_START + "\nold\n" + sc.README_END + "\n",
+            sc.render_readme_section(card),
+        ),
+        encoding="utf-8",
+    )
+
+    assert check.problems(tmp_path, compare_to_attack_files=False, readme=readme) == []
+    readme.write_text(
+        readme.read_text(encoding="utf-8").replace("make scorecard", "edited"), encoding="utf-8"
+    )
+    assert any(
+        "README" in p
+        for p in check.problems(tmp_path, compare_to_attack_files=False, readme=readme)
+    )
+    readme.write_text("# no markers\n", encoding="utf-8")
+    assert any(
+        "markers" in p
+        for p in check.problems(tmp_path, compare_to_attack_files=False, readme=readme)
+    )

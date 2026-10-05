@@ -41,7 +41,9 @@ from redteam.scorecard import (
     Observation,
     build,
     render_markdown,
+    render_readme_section,
     render_svg,
+    replace_readme_section,
 )
 from redteam.stack import (
     Stack,
@@ -428,7 +430,12 @@ def _finish(card: dict[str, Any], args: argparse.Namespace) -> int:
     (DOCS / "scorecard.md").write_text(render_markdown(card), encoding="utf-8")
     (DOCS / "images").mkdir(exist_ok=True)
     (DOCS / "images" / "scorecard.svg").write_text(render_svg(card), encoding="utf-8")
-    print("wrote docs/scorecard.json, docs/scorecard.md and docs/images/scorecard.svg")
+    readme = ROOT / "README.md"
+    readme.write_text(
+        replace_readme_section(readme.read_text(encoding="utf-8"), render_readme_section(card)),
+        encoding="utf-8",
+    )
+    print("wrote docs/scorecard.json, docs/scorecard.md, the chart and the README section")
     return 0
 
 

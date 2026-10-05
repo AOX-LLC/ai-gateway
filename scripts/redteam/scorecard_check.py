@@ -41,7 +41,12 @@ def synthetic_card() -> dict[str, Any]:
     return sc.build(COLUMNS, attacks, results, {"all-on": [1.0, 2.0], "all-off": [1.0]})
 
 
-def problems(docs: Path = DOCS, *, compare_to_attack_files: bool = True) -> list[str]:
+README = ROOT / "README.md"
+
+
+def problems(
+    docs: Path = DOCS, *, compare_to_attack_files: bool = True, readme: Path | None = README
+) -> list[str]:
     """Everything the committed scorecard gets wrong, one line each."""
     found: list[str] = []
     path = docs / "scorecard.json"
@@ -63,9 +68,22 @@ def problems(docs: Path = DOCS, *, compare_to_attack_files: bool = True) -> list
         ):
             if not target.is_file() or target.read_text(encoding="utf-8") != wanted:
                 found.append(f"{name} is not what scorecard.json renders to: run `make scorecard`")
+    if readme is not None and not found:
+        found += _readme_problems(card, readme)
     if compare_to_attack_files and not found:
         found += _against_the_attack_files(det)
     return found
+
+
+def _readme_problems(card: dict[str, Any], readme: Path) -> list[str]:
+    text = readme.read_text(encoding="utf-8")
+    try:
+        wanted = sc.replace_readme_section(text, sc.render_readme_section(card))
+    except ValueError:
+        return [f"{readme.name} has no scorecard markers ({sc.README_START} ... {sc.README_END})"]
+    if wanted != text:
+        return [f"the scorecard section of {readme.name} is not what scorecard.json renders to"]
+    return []
 
 
 def _against_the_attack_files(det: dict[str, Any]) -> list[str]:

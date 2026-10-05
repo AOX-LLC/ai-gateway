@@ -634,3 +634,52 @@ def render_svg(card: Mapping[str, Any]) -> str:
         x += 26 + 6.6 * len(text)
     out.append("</svg>")
     return "\n".join(out) + "\n"
+
+
+# -- the README section ---------------------------------------------------------------------------
+
+README_START = "<!-- scorecard:start -->"
+README_END = "<!-- scorecard:end -->"
+
+
+def render_readme_section(card: Mapping[str, Any]) -> str:
+    """The README's scorecard section, from the same JSON as everything else, between markers so
+    `make scorecard` can replace it in place and the static check can compare it."""
+    d = card["deterministic"]
+    s = d["summary"]
+    on, off = s["per_column"]["all-on"], s["per_column"]["all-off"]
+    n = on["hostile"]
+    layers = ", ".join(
+        f"`{layer}`: {len(p['contribution'])}" for layer, p in s["per_layer"].items()
+    )
+    gaps = "; ".join(f"`{g['attack']}`" for g in s["gaps"]) or "none"
+    lines = [
+        README_START,
+        "## What stops an attack",
+        "",
+        "![How many of the hostile attacks succeed in each configuration](docs/images/scorecard.svg)",
+        "",
+        f"A scripted attacker (a *compliant* model: one that has already been talked into it) runs {n} "
+        "fictional attacks against the gateway under 17 configurations, each judged by an independent "
+        f"oracle. With every layer on, **{on['succeeded']} of {n}** succeed; with every layer off, "
+        f"**{off['succeeded']} of {n}**. The ones that still succeed with every layer on are the known "
+        f"gaps, shown as successes: {gaps}. What each layer alone stops (the attacks that succeed only "
+        f"when it is off): {layers}. The approval layer is a lab approver that rubber-stamps every "
+        "write (the worst case). The classifier answers from recordings, and the corpus is small, so a "
+        "rate is a count. Everything, including the before and after of the three v0.1.0 limits and "
+        "both long-boundary attacks, is in [`docs/scorecard.md`](docs/scorecard.md).",
+        "",
+        "Reproduce it, in replay mode with no API key (it starts the lab approver and the lab upstream "
+        "on a fictional stack, so the three switches are yours to turn on): "
+        "`LAB_AUTO_APPROVE=yes LAB_MUTABLE_UPSTREAM=yes LAB_FLOOR_OVERRIDE=yes make scorecard`.",
+        README_END,
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def replace_readme_section(readme: str, section: str) -> str:
+    """The README with its marked section replaced by `section`; nothing else changes."""
+    start, end = readme.find(README_START), readme.find(README_END)
+    if start == -1 or end == -1 or end < start:
+        raise ValueError("the README has no scorecard markers")
+    return readme[:start] + section.rstrip("\n") + readme[end + len(README_END) :]

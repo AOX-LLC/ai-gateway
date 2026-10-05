@@ -382,3 +382,45 @@ def test_the_long_boundary_paragraph_reports_what_was_observed_not_what_was_expe
     second = "`obfuscated-long-boundary-split`: stopped with overlap, succeeds without it: "
     assert first + "overlap makes no difference" in part
     assert second + "overlap makes a difference" in part
+
+
+# -- the README's section is rendered from the same JSON ------------------------------------------
+
+
+def test_the_readme_section_states_the_headline_from_the_data_and_carries_the_honesty_line() -> (
+    None
+):
+    section = sc.render_readme_section(card())
+
+    assert section.startswith("<!-- scorecard:start -->")
+    assert section.rstrip().endswith("<!-- scorecard:end -->")
+    assert "docs/images/scorecard.svg" in section
+    assert "1 of 3" in section, "with every layer on (the recorded gap)"
+    assert "3 of 3" in section, "with every layer off"
+    assert "`drip`" in section, "the gap is named"
+    assert "compliant" in section.lower()
+    assert "docs/scorecard.md" in section
+    assert "make scorecard" in section
+
+
+def test_the_readme_section_lists_what_each_layer_alone_stops() -> None:
+    section = sc.render_readme_section(card())
+
+    assert "`egress`: 1" in section
+    assert "`canary`: 1" in section
+    assert "`scope`: 0" in section
+
+
+def test_the_section_is_replaced_in_place_and_nothing_else_in_the_readme_changes() -> None:
+    readme = (
+        "# Title\n\nintro\n\n<!-- scorecard:start -->\nold\n<!-- scorecard:end -->\n\n## Licence\n"
+    )
+
+    updated = sc.replace_readme_section(readme, sc.render_readme_section(card()))
+
+    assert updated.startswith("# Title\n\nintro\n\n")
+    assert updated.endswith("\n\n## Licence\n")
+    assert "old" not in updated
+    assert updated.count("<!-- scorecard:start -->") == 1
+    with pytest.raises(ValueError, match="markers"):
+        sc.replace_readme_section("# no markers here\n", "x")
