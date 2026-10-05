@@ -1,0 +1,28 @@
+# forward_note gained a forward_to argument after review. The client uses it. The schema layer holds the
+# reviewed schema, which forbids it, and the pinning layer sees the drift. Success: the lab upstream
+# executed the call.
+# Needs the lab upstream (servers/lab, the `lab` Compose profile) in the phase named below.
+# Harborline Supply Co. is fictional; so is every client, value and ticket here.
+
+id = "rug-pull-schema"
+title = "An upstream adds an argument to a reviewed write"
+client = "harborline-lab-bot"
+marker = "RT-rugschema"
+lab_phase = "rugpulled"
+
+[expect]
+family = "rug-pull"
+oracle = "lab-effect"
+threshold = 1
+landing = ["forward-note"]
+
+[[step]]
+id = "forward-note"
+tool = "lab__forward_note"
+arguments = { note = "Audit entry: forwarding a copy.", forward_to = "audit-copy" }
+[[step.enforce]]
+outcome = "blocked"
+blocked_by = "schema"
+catchers = ["schema", "pinned_descriptions"]
+[[step.monitor]]
+would_block = ["schema", "pinned_descriptions"]

@@ -15,6 +15,7 @@ members = [
     "echo-server",
     "handbook-server",
     "harborline-setup",
+    "lab-upstream",
     "mcp-common",
     "ticketing-server",
 ]
@@ -73,6 +74,7 @@ dev = [
     { name = "echo-server" },
     { name = "handbook-server" },
     { name = "harborline-setup" },
+    { name = "lab-upstream" },
     { name = "mcp-common" },
     { name = "mypy" },
     { name = "pip-audit" },
@@ -94,6 +96,7 @@ dev = [
     { name = "echo-server", editable = "servers/echo" },
     { name = "handbook-server", editable = "servers/handbook" },
     { name = "harborline-setup", editable = "servers/setup" },
+    { name = "lab-upstream", editable = "servers/lab" },
     { name = "mcp-common", editable = "servers/common" },
     { name = "mypy", specifier = ">=2.4" },
     { name = "pip-audit", specifier = "==2.10.1" },
@@ -1121,6 +1124,27 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/19/74/a633ee74eb36c44aa6d1095e7cc5569bebf04342ee146178e2d36600708b/jsonschema_specifications-2025.9.1.tar.gz", hash = "sha256:b540987f239e745613c7a9176f3edb72b832a4ac465cf02712288397832b5e8d", size = 32855, upload-time = "2025-09-08T01:34:59.186Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/41/45/1a4ed80516f02155c51f51e8cedb3c1902296743db0bbc66608a0db2814f/jsonschema_specifications-2025.9.1-py3-none-any.whl", hash = "sha256:98802fee3a11ee76ecaca44429fda8a41bff98b00a0f2838151b113f210cc6fe", size = 18437, upload-time = "2025-09-08T01:34:57.871Z" },
+]
+
+[[package]]
+name = "lab-upstream"
+version = "0.1.0.dev0"
+source = { editable = "servers/lab" }
+dependencies = [
+    { name = "mcp" },
+    { name = "mcp-common" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+    { name = "uvicorn" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "mcp", specifier = "==2.2.0" },
+    { name = "mcp-common", editable = "servers/common" },
+    { name = "pydantic", specifier = ">=2.13,<3" },
+    { name = "pydantic-settings", specifier = ">=2.13,<3" },
+    { name = "uvicorn", specifier = ">=0.54,<1" },
 ]
 
 [[package]]

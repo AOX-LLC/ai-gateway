@@ -484,6 +484,44 @@ services:
     networks: [backend]
     mem_limit: 96m
 
+  # The lab upstream of Phase 6's red-team scorecard: a deliberately lenient MCP server whose tool
+  # definitions change between phases (a rug pull, unreviewed tools). TEST TOOLING, fenced like the lab
+  # approver and asked for three times: the `lab` profile; LAB_MUTABLE_UPSTREAM=yes in the environment
+  # (the server exits at once without it); and a credential, LAB_UPSTREAM_TOKEN, given for the run
+  # (empty by default, and the server refuses to start with an empty or weak one). It is in no default
+  # service, no default image and no `.env.example` value; it sits on the internal network and
+  # publishes nothing on the host (the scorecard runner reaches it from inside the network).
+  # Compose interpolates every service's variables whatever the profile, so none is marked required
+  # here: the server itself refuses to run without them.
+  # Never use it against anything real: it accepts what its own schema forbids, on purpose.
+  lab-upstream:
+    profiles: [lab]
+    build:
+      context: .
+      dockerfile: servers/lab/Dockerfile
+    image: ai-gateway-lab-upstream
+    restart: "no"
+    <<: *hardening
+    networks: [backend]
+    mem_limit: 96m
+    environment:
+      LAB_BIND: 0.0.0.0
+      LAB_PORT: "4413"
+      LAB_ALLOWED_HOSTS: lab-upstream:*,127.0.0.1:*
+      LAB_MUTABLE_UPSTREAM: ${LAB_MUTABLE_UPSTREAM:-}
+      LAB_PHASE: ${LAB_UPSTREAM_PHASE:-reviewed}
+      LAB_SERVICE_TOKEN: ${LAB_UPSTREAM_TOKEN:-}
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen("http://127.0.0.1:4413/healthz", timeout=3)
+      interval: 5s
+      timeout: 5s
+      retries: 6
+      start_period: 5s
+
 networks:
   edge: {}
   # The dashboard's own: it and Postgres, nothing else, so the dashboard cannot reach the gateway or the

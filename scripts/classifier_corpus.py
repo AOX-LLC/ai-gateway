@@ -7,6 +7,12 @@ that must never be unclassified, in two groups:
 - **must_cover**: the attack corpus (`config/classifier_corpus/attacks.toml`), its benign
   look-alikes, and the integrated demo's story strings (`story_09.toml`). A test fails if any of
   them has no recording, so Phase 6's scorecard and project 09's demo never meet a miss.
+- **red-team strings** (`redteam_corpus`, `attack_strings`): the scorecard's own,
+  `config/classifier_corpus/redteam.toml` (obfuscated instructions, what the lab upstream says),
+  and every static text the attack files write or plant (a text with a template that is filled from
+  what an attack read cannot be known here, and is data only). Each is recorded as the units both
+  the old and the current rule cut it into, so the scorecard can show before and after without a
+  miss.
 - **seeded_data**: the free text of the fictional seed data, of the Harborline scenario's writes
   and of the traffic simulator's writes, so the stack's own checks run with nothing unclassified.
 
@@ -14,6 +20,8 @@ that must never be unclassified, in two groups:
 many calls that is and what it will cost, before anything is spent.
 """
 
+import dataclasses
+import importlib
 import importlib.util
 import sys
 import tomllib
@@ -27,7 +35,11 @@ from ai_gateway.classifier.prompt import SURFACE_ARGUMENTS, SURFACE_RESULT, unit
 from ai_gateway.pipeline.layers.classifier import load_judge_config
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT / "scripts") not in sys.path:
+    sys.path.insert(0, str(ROOT / "scripts"))
 CORPUS = ROOT / "config" / "classifier_corpus"
+ATTACKS = ROOT / "scripts" / "redteam" / "attacks"
+REDTEAM = "redteam.toml"
 WRITE_TOOLS = {"create_ticket", "add_comment", "change_status", "assign"}
 SIMULATOR_RUNS = ((200, 1), (60, 7))
 """(calls, seed) of the simulator runs scripts/run_harborline_check.sh makes."""
@@ -197,5 +209,96 @@ def distinct(units: Iterable[CorpusUnit]) -> list[CorpusUnit]:
     return out
 
 
+def units_of_text(text: str, config: JudgeConfig) -> list[str]:
+    """The units the classifier judges in one value, under a configuration."""
+    return _units(text, config)
+
+
+def _text_of(item: dict[str, Any]) -> str:
+    """An item's text: given, or built (`builder = "module:name"`, a string or a function)."""
+    if "builder" not in item:
+        return str(item["text"])
+    module, _, name = str(item["builder"]).partition(":")
+    built = getattr(importlib.import_module(module), name)
+    return str(built() if callable(built) else built)
+
+
+def redteam_items() -> list[CorpusUnit]:
+    """The items of `redteam.toml`, each with its whole text."""
+    return [
+        CorpusUnit(
+            REDTEAM,
+            item["surface"],
+            _text_of(item),
+            item["expect"],
+            item["id"],
+            _catchers(REDTEAM, item),
+        )
+        for item in _items(REDTEAM)
+    ]
+
+
+def both_rules(config: JudgeConfig) -> tuple[JudgeConfig, JudgeConfig]:
+    """v0.1.0's way of cutting and counting text, and the configured one."""
+    return dataclasses.replace(config, short_text="legacy", unit_overlap_chars=0), config
+
+
+def redteam_corpus(config: JudgeConfig | None = None) -> list[CorpusUnit]:
+    """The red-team items as recorded: a short item as written, a long one as the units each rule
+    cuts it into (so the old cut and the overlapping cut both have recordings)."""
+    config = config or judge_config()
+    units: list[CorpusUnit] = []
+    for item in redteam_items():
+        if len(item.text) <= config.max_unit_chars:
+            units.append(item)
+            continue
+        pieces = dict.fromkeys(t for rule in both_rules(config) for t in _units(item.text, rule))
+        units += [dataclasses.replace(item, text=piece) for piece in pieces]
+    return units
+
+
+_DYNAMIC_TEMPLATES = frozenset({"planted", "values", "canary", "encode"})
+
+
+def attack_strings(config: JudgeConfig | None = None) -> list[CorpusUnit]:
+    """The static text of the attack files that a classifier could judge: the text each write
+    carries (judged as arguments, and again when a read returns it) and the text each attack plants
+    (judged when it is read), under both rules. A template filled from what the attack read is data
+    only and cannot be known here; a `{pad:N}` is a single word and is never judged."""
+    from redteam.attack_format import TOKENS, load_attack
+    from redteam.prediction import CONFIG, load_effects
+    from redteam.scripted_client import Loot, render
+
+    config = config or judge_config()
+    effects = load_effects(CONFIG / "tool_policies.toml", CONFIG / "lab" / "tool_policies.lab.toml")
+    units: list[CorpusUnit] = []
+    for path in sorted(ATTACKS.glob("*.toml")):
+        attack = load_attack(path)
+        source = f"attack {attack.id}"
+        for step, i in attack.calls():
+            if effects.get(step.tool, "write") != "write":
+                continue
+            rendered = {
+                key: render(value, attack=attack, step_id=step.id, i=i, planted="", loot=Loot())
+                for key, value in step.arguments.items()
+                if isinstance(value, str)
+                and not {m.group(1) for m in TOKENS.finditer(value)} & _DYNAMIC_TEMPLATES
+            }
+            units += [
+                CorpusUnit(source, surface, text)
+                for rule in both_rules(config)
+                for text in _units(rendered, rule)
+                for surface in _WRITTEN_SURFACES
+            ]
+        if attack.plant is not None:
+            planted = {"subject": attack.plant.subject, "description": attack.plant.text}
+            units += [
+                CorpusUnit(source, SURFACE_RESULT, text)
+                for rule in both_rules(config)
+                for text in _units(planted, rule)
+            ]
+    return units
+
+
 def everything() -> list[CorpusUnit]:
-    return distinct([*must_cover(), *seeded_data()])
+    return distinct([*must_cover(), *redteam_corpus(), *attack_strings(), *seeded_data()])

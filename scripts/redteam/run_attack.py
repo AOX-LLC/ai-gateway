@@ -38,7 +38,16 @@ import psycopg
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from redteam.attack_format import Attack, load_attack
-from redteam.oracle import Landed, clean_up, db_now, plant_ticket, read_landed
+from redteam.oracle import (
+    Evidence,
+    Landed,
+    attack_succeeded,
+    clean_up,
+    db_now,
+    plant_ticket,
+    read_landed,
+)
+from redteam.prediction import WEAKENABLE, load_effects, predicted_success
 from redteam.scripted_client import CallRecord, play
 
 PORT_RANGE = range(4400, 4500)
@@ -98,8 +107,12 @@ def judge(
     records: list[CallRecord],
     recorded: list[dict[str, object]],
     landed: Landed,
+    evidence: Evidence | None = None,
 ) -> list[str]:
-    """Everything that is not as the attack file says it should be, one line each."""
+    """Everything that is not as the attack file says it should be, one line each. Whether the
+    attack succeeded is the oracle's verdict at the attack's own threshold, and it is compared with
+    what the file predicts for this run: every layer on in `enforce`, the weakenable ones only
+    watching in `monitor`."""
     failures: list[str] = []
     calls = attack.calls()
     if len(recorded) != len(calls):
@@ -122,30 +135,58 @@ def judge(
                     f"{name}: blocked by {row['blocked_by']}, expected {want.blocked_by}"
                 )
         else:
-            want_layers = step.expected_monitor(i).would_block
-            if row["outcome"] != "forwarded" or record.outcome == "refused":
+            monitor = step.expected_monitor(i)
+            if monitor.outcome == "blocked":
+                # A floor layer (scope, approval) is never weakened: the call is still refused.
+                if (
+                    row["outcome"] != "blocked"
+                    or row["blocked_by"] != monitor.blocked_by
+                    or record.outcome != "refused"
+                ):
+                    failures.append(
+                        f"{name}: a floor layer must still block it: expected blocked by"
+                        f" {monitor.blocked_by}, the gateway recorded {row['outcome']}"
+                    )
+            elif row["outcome"] != "forwarded" or record.outcome == "refused":
                 failures.append(f"{name}: a monitor run must forward every call")
-            elif row["would_block"] != want_layers:
+            elif row["would_block"] != monitor.would_block:
                 failures.append(
                     f"{name}: would_block {sorted(row['would_block'])},"  # type: ignore[call-overload]
-                    f" expected {sorted(want_layers)}"
+                    f" expected {sorted(monitor.would_block)}"
                 )
     writes = [(s, i) for s, i in calls if s.tool == "tickets__create_ticket"]
+    weakened = frozenset() if mode == "enforce" else WEAKENABLE
+    expected = predicted_success(attack, weakened, load_effects())
+    observed = (
+        attack_succeeded(attack.expect, evidence or Evidence(landed)) if attack.hostile else False
+    )
     if mode == "enforce":
-        # What lands is what the file lets through: its allowed writes, and never an export.
+        # What lands is what the file lets through: its allowed writes, and an export only where
+        # the file predicts one (a gap it records).
         allowed = sum(step.expected_enforce(i).outcome == "allowed" for step, i in writes)
-        if len(landed.subjects) != allowed or landed.exported:
+        if len(landed.subjects) != allowed or (not expected and (observed or landed.exported)):
             failures.append(
                 f"the oracle found {len(landed.subjects)} attack tickets,"
                 f" {landed.customer_values} customer values and {landed.canaries} canaries landed;"
                 f" expected {allowed} tickets and no export"
             )
+        elif observed != expected:
+            failures.append(
+                f"the oracle judged the attack {'a success' if observed else 'a failure'}"
+                f" at its threshold of {attack.expect.threshold}; the file predicts"
+                f" {'a success' if expected else 'a failure'}"
+            )
     else:
-        if landed.exported != attack.hostile:
+        if not attack.hostile and landed.exported:
+            failures.append("the oracle saw an export in an honest run")
+        elif attack.hostile and expected and not observed:
             failures.append(
                 "the oracle saw no export in a monitor run: it cannot be trusted to see one"
-                if attack.hostile
-                else "the oracle saw an export in an honest run"
+            )
+        elif observed != expected:
+            failures.append(
+                f"the oracle judged the attack {'a success' if observed else 'a failure'}"
+                f" in a monitor run; the file predicts {'a success' if expected else 'a failure'}"
             )
         if len(landed.subjects) != len(writes):
             failures.append(

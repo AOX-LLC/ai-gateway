@@ -8,12 +8,15 @@ What it collects (customer values and a canary-shaped code from the results it w
 in memory for the run and never printed. Harborline Supply Co. is fictional.
 """
 
+import base64
+import codecs
 import json
 import re
 from collections.abc import AsyncGenerator
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import quote
 
 import httpx2
 from mcp.client import Client
@@ -69,6 +72,19 @@ class Loot:
             self.canary = found.group(0)
 
 
+def _hidden(how: str, text: str) -> str:
+    """The text as the attack hides it: base64, hex, ROT13, percent-encoding or reversal."""
+    if how == "b64":
+        return base64.b64encode(text.encode()).decode()
+    if how == "hex":
+        return text.encode().hex()
+    if how == "rot13":
+        return codecs.encode(text, "rot13")
+    if how == "percent":
+        return quote(text, safe="")
+    return text[::-1]
+
+
 def render(template: str, *, attack: Attack, step_id: str, i: int, planted: str, loot: Loot) -> str:
     def fill(match: re.Match[str]) -> str:
         name, spec = match.group(1), match.group(2)
@@ -84,6 +100,15 @@ def render(template: str, *, attack: Attack, step_id: str, i: int, planted: str,
             return attack.marker
         if name == "step":
             return step_id
+        if name == "pad":
+            return "A" * int(spec)
+        if name == "encode":
+            how, _, source = spec.partition(":")
+            if source == "canary":
+                if loot.canary is None:
+                    raise AttackStoppedError("the attack never saw a canary")
+                return _hidden(how, loot.canary)
+            return _hidden(how, " ".join(loot.take(int(source.partition(":")[2]))))
         if name == "values":
             return " ".join(loot.take(int(spec or "0")))
         if loot.canary is None:  # name == "canary"

@@ -15,6 +15,7 @@ dev = [
     "pip-audit==2.10.1",
     "pre-commit>=3.6",
     "echo-server",
+    "lab-upstream",
     "mcp-common",
     "ticketing-server",
     "crm-server",
@@ -36,6 +37,7 @@ members = ["gateway", "servers/*"]
 [tool.uv.sources]
 ai-gateway = { workspace = true }
 echo-server = { workspace = true }
+lab-upstream = { workspace = true }
 mcp-common = { workspace = true }
 ticketing-server = { workspace = true }
 crm-server = { workspace = true }
@@ -45,7 +47,7 @@ harborline-setup = { workspace = true }
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-src = ["gateway/src", "gateway/tests", "servers/echo/src", "servers/common/src", "servers/ticketing/src", "servers/crm/src", "servers/handbook/src", "servers/setup/src", "scripts"]
+src = ["gateway/src", "gateway/tests", "servers/echo/src", "servers/lab/src", "servers/common/src", "servers/ticketing/src", "servers/crm/src", "servers/handbook/src", "servers/setup/src", "scripts"]
 
 [tool.ruff.lint]
 select = [
@@ -76,9 +78,9 @@ ban-relative-imports = "all"
 [tool.mypy]
 strict = true
 python_version = "3.12"
-files = ["gateway/src", "gateway/tests", "servers/echo/src", "servers/common/src", "servers/ticketing/src", "servers/crm/src", "servers/handbook/src", "servers/setup/src", "scripts"]
+files = ["gateway/src", "gateway/tests", "servers/echo/src", "servers/lab/src", "servers/common/src", "servers/ticketing/src", "servers/crm/src", "servers/handbook/src", "servers/setup/src", "scripts"]
 plugins = ["pydantic.mypy"]
-mypy_path = "scripts:gateway:gateway/src:servers/echo/src:servers/common/src:servers/ticketing/src:servers/crm/src:servers/handbook/src:servers/setup/src"
+mypy_path = "scripts:gateway:gateway/src:servers/echo/src:servers/lab/src:servers/common/src:servers/ticketing/src:servers/crm/src:servers/handbook/src:servers/setup/src"
 explicit_package_bases = true
 
 [[tool.mypy.overrides]]

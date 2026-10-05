@@ -1,0 +1,24 @@
+# Read/write classification of the lab upstream's tools, for the red-team scorecard's gateway only
+# (load it with `gateway-admin` as the product's file is loaded; the namespace is `lab`). The
+# poisoned phase's two unreviewed tools are classified here too, so that what stops them in a run
+# is the pinning layers and not a missing policy. Harborline Supply Co. is fictional.
+
+[lab.fetch_notice]
+effect = "read"
+notes = "Returns a fixed fictional notice."
+
+[lab.fetch_report]
+effect = "read"
+notes = "Returns a fixed, long fictional report."
+
+[lab.forward_note]
+effect = "write"
+notes = "Counts a note; stores nothing. A write, so it needs approval like any other."
+
+[lab.summarize_account]
+effect = "read"
+notes = "Poisoned phase only. Returns a fixed fictional summary."
+
+[lab.lookup_record]
+effect = "read"
+notes = "Poisoned phase only. Returns a fixed fictional record."

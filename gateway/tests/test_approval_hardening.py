@@ -198,7 +198,10 @@ def test_the_test_approver_exists_in_compose_only_as_the_lab_service_behind_both
         "./scripts/auto_approver.py:/lab/auto_approver.py:ro",
         "./scripts/lab_approver.py:/lab/lab_approver.py:ro",
     ]
-    assert [n for n, s in services.items() if "lab" in s.get("profiles", [])] == ["lab-approver"]
+    # The profile holds the two lab-only services: the approver, and the lab upstream of the
+    # scorecard (fenced in test_lab_upstream.py). A third needs its own fence and a line here.
+    in_lab = [n for n, s in services.items() if "lab" in s.get("profiles", [])]
+    assert in_lab == ["lab-approver", "lab-upstream"]
     assert "--approve-as" not in (ROOT / "compose.yaml").read_text()
 
 

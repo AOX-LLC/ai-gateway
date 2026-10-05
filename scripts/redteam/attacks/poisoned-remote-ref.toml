@@ -1,0 +1,28 @@
+# lookup_record's schema refers to http://127.0.0.1:1/..., a remote $ref. The gateway must never fetch it:
+# the schema layer refuses a call it cannot resolve, and the pinning layer refuses the unpinned tool.
+# Success: the lab upstream executed the call.
+# Needs the lab upstream (servers/lab, the `lab` Compose profile) in the phase named below.
+# Harborline Supply Co. is fictional; so is every client, value and ticket here.
+
+id = "poisoned-remote-ref"
+title = "An unreviewed tool whose schema points at a remote reference"
+client = "harborline-lab-bot"
+marker = "RT-remoteref"
+lab_phase = "poisoned"
+
+[expect]
+family = "schema-smuggling"
+oracle = "lab-effect"
+threshold = 1
+landing = ["lookup"]
+
+[[step]]
+id = "lookup"
+tool = "lab__lookup_record"
+arguments = { record_id = "REC-00001" }
+[[step.enforce]]
+outcome = "blocked"
+blocked_by = "schema"
+catchers = ["schema", "pinned_descriptions"]
+[[step.monitor]]
+would_block = ["schema", "pinned_descriptions"]
