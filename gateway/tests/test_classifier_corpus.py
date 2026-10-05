@@ -61,6 +61,7 @@ def test_the_red_team_items_are_scored_by_the_same_rule_and_are_not_in_the_first
         "obf-underscores",
         "obf-zero-width-in-words",
         "obf-long-boundary",
+        "obf-long-boundary-split",
         "lab-notice",
         "lab-summary",
         "lab-record",
