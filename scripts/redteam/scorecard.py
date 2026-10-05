@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from typing import Any
 from xml.sax.saxutils import escape
 
+from redteam.explanations import NOTES, REASONS
 from redteam.lab_config import FLOOR, LAYER_ORDER, Column
 
 SCHEMA_VERSION = 1
@@ -144,6 +145,7 @@ def build(
             "attack": a.id,
             "predicted": results[column.id][a.id].predicted,
             "observed": results[column.id][a.id].success,
+            "reason": REASONS.get((a.id, column.id)),
         }
         for column in columns
         for a in attacks
@@ -232,6 +234,7 @@ def build(
             "gaps": gaps,
             "undeclared_successes": undeclared,
             "mismatches": mismatches,
+            "notes": list(NOTES),
             "incomplete": incomplete,
             "before_after": before_after,
             "long_boundary": long_boundary,
@@ -405,14 +408,20 @@ def render_markdown(card: Mapping[str, Any]) -> str:
         "is a finding, listed here and never edited away.",
     ]
     if s["mismatches"]:
-        out += ["", "| Column | Attack | Predicted | Observed |", "| --- | --- | --- | --- |"]
+        out += [
+            "",
+            "| Column | Attack | Predicted | Observed | Why |",
+            "| --- | --- | --- | --- | --- |",
+        ]
         out += [
             f"| `{m['column']}` | `{m['attack']}` | {'succeeds' if m['predicted'] else 'stopped'} | "
-            f"{'succeeds' if m['observed'] else 'stopped'} |"
+            f"{'succeeds' if m['observed'] else 'stopped'} | {m.get('reason') or 'not yet explained'} |"
             for m in s["mismatches"]
         ]
     else:
         out += ["", "No differences."]
+    if s.get("notes"):
+        out += ["", "Notes on per-call outcomes:", ""] + [f"- {n}" for n in s["notes"]]
     if s["incomplete"]:
         out += [
             "",

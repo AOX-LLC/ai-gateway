@@ -174,6 +174,7 @@ def test_predicted_against_observed_lists_every_difference_without_hiding_any() 
         "attack": "bulk",
         "predicted": False,
         "observed": True,
+        "reason": None,
     } in mismatched["mismatches"]
     assert card()["deterministic"]["summary"]["per_column"]["all-on"]["mismatches"] == 0
 
@@ -451,3 +452,16 @@ def test_the_denying_approver_columns_false_positives_are_explained_not_left_to_
     text = sc.render_markdown(card())
 
     assert "rejects every write, honest ones included" in text
+
+
+def test_a_difference_with_no_written_reason_says_so_and_one_with_a_reason_carries_it() -> None:
+    from redteam.explanations import REASONS
+    from redteam.scorecard import render_markdown
+
+    (attack, column), reason = next(iter(REASONS.items()))
+    unexplained = card(**{"all-on": {"bulk": obs(True, predicted=False)}})
+
+    assert "not yet explained" in render_markdown(unexplained)
+    assert attack == "smuggle-oversized-argument"
+    assert column in {"off-schema", "monitor"}
+    assert "65 536 bytes" in reason
