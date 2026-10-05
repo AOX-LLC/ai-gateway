@@ -424,3 +424,30 @@ def test_the_section_is_replaced_in_place_and_nothing_else_in_the_readme_changes
     assert updated.count("<!-- scorecard:start -->") == 1
     with pytest.raises(ValueError, match="markers"):
         sc.replace_readme_section("# no markers here\n", "x")
+
+
+def test_the_axis_labels_sit_clear_of_the_subtitle() -> None:
+    root = ET.fromstring(sc.render_svg(card()))  # noqa: S314 - the chart is generated here
+    ns = "{http://www.w3.org/2000/svg}"
+    texts = list(root.iter(f"{ns}text"))
+    subtitle_bottom = max(
+        float(t.get("y", 0))
+        for t in texts
+        if "Harborline Supply Co. is fictional" in (t.text or "")
+    )
+    ticks = [
+        float(t.get("y", 0))
+        for t in texts
+        if (t.text or "").isdigit() and t.get("text-anchor") == "middle"
+    ]
+
+    assert ticks, "the axis has labels"
+    assert min(ticks) - 11 > subtitle_bottom, "a tick label (11px high) must not touch the subtitle"
+
+
+def test_the_denying_approver_columns_false_positives_are_explained_not_left_to_be_misread() -> (
+    None
+):
+    text = sc.render_markdown(card())
+
+    assert "rejects every write, honest ones included" in text

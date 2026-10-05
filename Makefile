@@ -4,6 +4,8 @@
 #                          run every attack against a fresh lab stack (its own Compose project, removed
 #                          at the end), replay mode, no API key; rewrite docs/scorecard.{json,md} and
 #                          docs/images/scorecard.svg. Needs Docker and ports 4400-4402 free.
+#   make scorecard-render  re-render docs/scorecard.md, the chart and the README section from the
+#                          committed JSON (no stack): for a change to how they read.
 #   make scorecard-check   the static check (no stack): the committed scorecard, its rendered files
 #                          and the generated lab configuration agree. Runs on every pull request.
 #   LAB_AUTO_APPROVE=yes LAB_MUTABLE_UPSTREAM=yes LAB_FLOOR_OVERRIDE=yes make scorecard-verify
@@ -14,13 +16,16 @@
 # The two switches are the caller's to turn on (nothing here sets them): the runner refuses to start
 # without them, and starts the tools only in the `lab` Compose profile, never against anything real.
 
-.PHONY: scorecard scorecard-check scorecard-verify lab-config
+.PHONY: scorecard scorecard-render scorecard-check scorecard-verify lab-config
 
 scorecard:
 	nice -n 19 uv run scripts/redteam/scorecard_run.py
 
 scorecard-verify:
 	nice -n 19 uv run scripts/redteam/scorecard_run.py --check
+
+scorecard-render:
+	uv run scripts/redteam/scorecard_render.py
 
 scorecard-check:
 	uv run scripts/redteam/scorecard_check.py

@@ -115,3 +115,22 @@ def test_the_check_compares_the_readme_section_with_what_the_json_renders_to(
         "markers" in p
         for p in check.problems(tmp_path, compare_to_attack_files=False, readme=readme)
     )
+
+
+def test_rendering_from_the_committed_json_writes_exactly_what_the_check_compares(
+    tmp_path: Path,
+) -> None:
+    from redteam import scorecard_render as render
+
+    card = check.synthetic_card()
+    docs = tmp_path / "docs"
+    (docs / "images").mkdir(parents=True)
+    (docs / "scorecard.json").write_text(json.dumps(card, indent=2) + "\n", encoding="utf-8")
+    readme = tmp_path / "README.md"
+    readme.write_text(
+        "# T\n\n" + sc.README_START + "\nold\n" + sc.README_END + "\n", encoding="utf-8"
+    )
+
+    render.render_all(docs, readme)
+
+    assert check.problems(docs, compare_to_attack_files=False, readme=readme) == []

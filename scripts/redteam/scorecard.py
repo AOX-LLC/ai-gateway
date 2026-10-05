@@ -332,7 +332,9 @@ def render_markdown(card: Mapping[str, Any]) -> str:
         "client of its own. An attack *succeeds* when an independent oracle says so, at the threshold its "
         f"own file set before any run. {_oracle_sentence(hostile)} The approval layer is a lab approver "
         "that **rubber-stamps every write** (the worst case, so the other layers' contribution shows); the "
-        "`denying-approver` column is the idealised opposite and says so.",
+        "`denying-approver` column is the idealised opposite and says so: it rejects every write, honest "
+        "ones included, so its false positives are every honest write and it bounds what a perfect "
+        "reviewer could add, not what a policy would do.",
         "",
         "## Attack success by column",
         "",
@@ -546,7 +548,7 @@ def render_svg(card: Mapping[str, Any]) -> str:
         "denying-approver",
     ]
     n = per["all-on"]["hostile"]
-    width, left, right, top, row = 960, 330, 150, 96, 30
+    width, left, right, top, row = 960, 330, 150, 114, 30
     plot = width - left - right
     height = top + row * len(order) + 74
     base = per["all-on"]["succeeded"]

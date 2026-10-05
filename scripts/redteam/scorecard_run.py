@@ -40,11 +40,8 @@ from redteam.scorecard import (
     AttackInfo,
     Observation,
     build,
-    render_markdown,
-    render_readme_section,
-    render_svg,
-    replace_readme_section,
 )
+from redteam.scorecard_render import render_all
 from redteam.stack import (
     Stack,
     StackError,
@@ -427,14 +424,7 @@ def _finish(card: dict[str, Any], args: argparse.Namespace) -> int:
         print("ok    the committed scorecard still matches")
         return 0
     (DOCS / "scorecard.json").write_text(text, encoding="utf-8")
-    (DOCS / "scorecard.md").write_text(render_markdown(card), encoding="utf-8")
-    (DOCS / "images").mkdir(exist_ok=True)
-    (DOCS / "images" / "scorecard.svg").write_text(render_svg(card), encoding="utf-8")
-    readme = ROOT / "README.md"
-    readme.write_text(
-        replace_readme_section(readme.read_text(encoding="utf-8"), render_readme_section(card)),
-        encoding="utf-8",
-    )
+    render_all(DOCS, ROOT / "README.md")
     print("wrote docs/scorecard.json, docs/scorecard.md, the chart and the README section")
     return 0
 
