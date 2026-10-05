@@ -499,6 +499,13 @@ TEST_HASH_KEY = "test-only-argument-hash-key-0123456789"
 
 
 @pytest.fixture(autouse=True)
+def _lab_floor_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Tests that weaken a floor layer (the approval layer's modes, the lab approver's gateways) run
+    with the lab's switch on; the tests of the gate itself take it off."""
+    monkeypatch.setenv("LAB_FLOOR_OVERRIDE", "yes")
+
+
+@pytest.fixture(autouse=True)
 def _argument_hash_key() -> None:
     """The gateway refuses to hash arguments without a key; every test gets the same one."""
     from ai_gateway.hashing import configure_hash_key

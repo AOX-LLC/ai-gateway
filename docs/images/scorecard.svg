@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 578" role="img" width="960" height="578" aria-labelledby="t d">
+<title id="t">Red-team scorecard: how many hostile attacks succeed in each configuration</title>
+<desc id="d">Of 31 fictional attacks, 6 succeed with every layer on and 31 with every layer off. Each row names a configuration and shows how many attacks succeed in it. Worst-case approver: a lab approver approves every write.</desc>
+<style>:root{--bg:#F6F7F8;--surface:#FFFFFF;--text:#15181B;--muted:#5B636B;--grid:#E6E9EC;--ok:#0F7A6F;--warn:#C2410C;--bad:#B4233A;--info:#2F5FB3;--idle:#6B4FC2;}@media (prefers-color-scheme: dark){:root{--bg:#0E1012;--surface:#15181B;--text:#E6E8EA;--muted:#9AA1A9;--grid:#22272C;--ok:#3FC1B0;--warn:#F58A4B;--bad:#F2707F;--info:#7EA6F0;--idle:#A792F2;}}text{font-family:'IBM Plex Sans',system-ui,-apple-system,'Segoe UI',sans-serif;fill:var(--text)}.muted{fill:var(--muted)}.mono{font-family:'IBM Plex Mono',ui-monospace,Menlo,monospace}.h{font-family:'Space Grotesk','IBM Plex Sans',system-ui,sans-serif;font-weight:600}</style>
+<rect width="960" height="578" fill="var(--bg)"/>
+<text x="24" y="36" class="h" font-size="20">Attack success by configuration</text>
+<text x="24" y="58" class="muted" font-size="12">31 fictional hostile attacks, each judged by an independent oracle. Worst-case approver: a lab approver approves every write.</text>
+<text x="24" y="76" class="muted" font-size="12">Replay mode, a small corpus: counts, not probabilities. Harborline Supply Co. is fictional.</text>
+<line x1="330.0" y1="106" x2="330.0" y2="498" stroke="var(--grid)"/>
+<text x="330.0" y="100" font-size="11" text-anchor="middle" class="muted">0</text>
+<line x1="407.4" y1="106" x2="407.4" y2="498" stroke="var(--grid)"/>
+<text x="407.4" y="100" font-size="11" text-anchor="middle" class="muted">5</text>
+<line x1="484.8" y1="106" x2="484.8" y2="498" stroke="var(--grid)"/>
+<text x="484.8" y="100" font-size="11" text-anchor="middle" class="muted">10</text>
+<line x1="562.3" y1="106" x2="562.3" y2="498" stroke="var(--grid)"/>
+<text x="562.3" y="100" font-size="11" text-anchor="middle" class="muted">15</text>
+<line x1="639.7" y1="106" x2="639.7" y2="498" stroke="var(--grid)"/>
+<text x="639.7" y="100" font-size="11" text-anchor="middle" class="muted">20</text>
+<line x1="717.1" y1="106" x2="717.1" y2="498" stroke="var(--grid)"/>
+<text x="717.1" y="100" font-size="11" text-anchor="middle" class="muted">25</text>
+<line x1="794.5" y1="106" x2="794.5" y2="498" stroke="var(--grid)"/>
+<text x="794.5" y="100" font-size="11" text-anchor="middle" class="muted">30</text>
+<text x="318" y="129" font-size="13" text-anchor="end">Every layer off (lab-only)</text>
+<rect x="330" y="114" width="480.0" height="20" rx="3" fill="var(--bad)"/>
+<text x="818.0" y="129" font-size="13" class="mono">31 of 31</text>
+<text x="318" y="159" font-size="13" text-anchor="end">Every layer on</text>
+<rect x="330" y="144" width="92.9" height="20" rx="3" fill="var(--ok)"/>
+<text x="430.9" y="159" font-size="13" class="mono">6 of 31</text>
+<text x="318" y="189" font-size="13" text-anchor="end">Only scope off (lab-only)</text>
+<rect x="330" y="174" width="154.8" height="20" rx="3" fill="var(--warn)"/>
+<text x="492.8" y="189" font-size="13" class="mono">10 of 31</text>
+<text x="318" y="219" font-size="13" text-anchor="end">Only allowlist off</text>
+<rect x="330" y="204" width="108.4" height="20" rx="3" fill="var(--warn)"/>
+<text x="446.4" y="219" font-size="13" class="mono">7 of 31</text>
+<text x="318" y="249" font-size="13" text-anchor="end">Only rate_limit off</text>
+<rect x="330" y="234" width="92.9" height="20" rx="3" fill="var(--ok)"/>
+<text x="430.9" y="249" font-size="13" class="mono">6 of 31</text>
+<text x="318" y="279" font-size="13" text-anchor="end">Only schema off</text>
+<rect x="330" y="264" width="108.4" height="20" rx="3" fill="var(--warn)"/>
+<text x="446.4" y="279" font-size="13" class="mono">7 of 31</text>
+<text x="318" y="309" font-size="13" text-anchor="end">Only pinned_descriptions off</text>
+<rect x="330" y="294" width="123.9" height="20" rx="3" fill="var(--warn)"/>
+<text x="461.9" y="309" font-size="13" class="mono">8 of 31</text>
+<text x="318" y="339" font-size="13" text-anchor="end">Only egress off</text>
+<rect x="330" y="324" width="185.8" height="20" rx="3" fill="var(--warn)"/>
+<text x="523.8" y="339" font-size="13" class="mono">12 of 31</text>
+<text x="318" y="369" font-size="13" text-anchor="end">Only canary off</text>
+<rect x="330" y="354" width="139.4" height="20" rx="3" fill="var(--warn)"/>
+<text x="477.4" y="369" font-size="13" class="mono">9 of 31</text>
+<text x="318" y="399" font-size="13" text-anchor="end">Only classifier off</text>
+<rect x="330" y="384" width="170.3" height="20" rx="3" fill="var(--warn)"/>
+<text x="508.3" y="399" font-size="13" class="mono">11 of 31</text>
+<text x="318" y="429" font-size="13" text-anchor="end">Only approval off (lab-only)</text>
+<rect x="330" y="414" width="92.9" height="20" rx="3" fill="var(--ok)"/>
+<text x="430.9" y="429" font-size="13" class="mono">6 of 31</text>
+<text x="318" y="459" font-size="13" text-anchor="end">Every layer only watches</text>
+<rect x="330" y="444" width="402.6" height="20" rx="3" fill="var(--info)"/>
+<text x="740.6" y="459" font-size="13" class="mono">26 of 31</text>
+<text x="318" y="489" font-size="13" text-anchor="end">All on, denying approver (idealised)</text>
+<rect x="330" y="474" width="15.5" height="20" rx="3" fill="var(--idle)"/>
+<text x="353.5" y="489" font-size="13" class="mono">1 of 31</text>
+<rect x="24" y="518" width="12" height="12" rx="2" fill="var(--ok)"/>
+<text x="42" y="529" font-size="12" class="muted">stopped as with every layer on</text>
+<rect x="248" y="518" width="12" height="12" rx="2" fill="var(--warn)"/>
+<text x="266" y="529" font-size="12" class="muted">more succeed: this layer was the one stopping them</text>
+<rect x="604" y="518" width="12" height="12" rx="2" fill="var(--bad)"/>
+<text x="622" y="529" font-size="12" class="muted">no layer</text>
+<rect x="683" y="518" width="12" height="12" rx="2" fill="var(--info)"/>
+<text x="701" y="529" font-size="12" class="muted">monitor only</text>
+<rect x="788" y="518" width="12" height="12" rx="2" fill="var(--idle)"/>
+<text x="806" y="529" font-size="12" class="muted">idealised approver</text>
+</svg>

@@ -20,6 +20,7 @@ from starlette.types import Receive, Scope, Send
 
 from lab_upstream.settings import LabSettings
 from lab_upstream.tools import PHASES, EffectLog, definitions, run
+from mcp_common.attribution import client_name_from_meta
 from mcp_common.credentials import ServiceCredentialMiddleware
 from mcp_common.http_app import build_mcp_app
 
@@ -40,23 +41,25 @@ def build_app(settings: LabSettings) -> Starlette:
         )
     if settings.phase not in PHASES:
         raise ValueError(f"the lab upstream's phase must be one of {list(PHASES)}")
-    phase = settings.phase
-    offered = {tool.name: tool for tool in definitions(phase)}
-    log = EffectLog(phase)
+    current = {"phase": settings.phase}
+    log = EffectLog(settings.phase)
+
+    def offered() -> dict[str, Any]:
+        return {tool.name: tool for tool in definitions(current["phase"])}
 
     async def list_tools(
         ctx: ServerRequestContext[Any, Any], params: PaginatedRequestParams | None
     ) -> ListToolsResult:
-        return ListToolsResult(tools=list(offered.values()))
+        return ListToolsResult(tools=list(offered().values()))
 
     async def call_tool(
         ctx: ServerRequestContext[Any, Any], params: CallToolRequestParams
     ) -> CallToolResult:
-        if params.name not in offered:
+        if params.name not in offered():
             shown = params.name[:_MAX_ECHOED_NAME]
             raise MCPError(INVALID_PARAMS, f"Unknown tool '{shown}'.")
         arguments = params.arguments or {}
-        log.record(params.name, arguments)
+        log.record(params.name, arguments, client_name_from_meta(ctx.meta))
         return run(params.name, arguments)
 
     server: Server[Any] = Server(
@@ -68,7 +71,7 @@ def build_app(settings: LabSettings) -> Starlette:
     )
 
     async def health() -> JSONResponse:
-        return JSONResponse({"status": "ok", "server": "lab-upstream", "phase": phase})
+        return JSONResponse({"status": "ok", "server": "lab-upstream", "phase": current["phase"]})
 
     token = settings.service_token.get_secret_value()
     app = build_mcp_app(
@@ -87,7 +90,25 @@ def build_app(settings: LabSettings) -> Starlette:
             response = JSONResponse(log.snapshot())
         await response(scope, receive, send)
 
+    async def switch(scope: Scope, receive: Receive, send: Send) -> None:
+        """POST /phase/<name>: put the upstream in another phase without restarting it, so the
+        gateway's catalogue never sees it down. Counts start afresh. The credential guards it."""
+        request = Request(scope, receive)
+        name = request.url.path.removeprefix("/phase/")
+        if name not in PHASES:
+            response = JSONResponse(
+                {"error": f"phase must be one of {list(PHASES)}"}, status_code=400
+            )
+        else:
+            current["phase"] = name
+            log.phase = name
+            log.reset()
+            response = JSONResponse({"phase": name})
+        await response(scope, receive, send)
+
     guarded = ServiceCredentialMiddleware(effects, token)
+    switching = ServiceCredentialMiddleware(switch, token)
     app.router.routes.append(Route("/effects", endpoint=guarded, methods=["GET"]))
     app.router.routes.append(Route("/effects/reset", endpoint=guarded, methods=["POST"]))
+    app.router.routes.append(Route("/phase/{name}", endpoint=switching, methods=["POST"]))
     return app

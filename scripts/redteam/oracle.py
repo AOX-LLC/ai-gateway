@@ -236,23 +236,33 @@ def attack_succeeded(expect: Expect, evidence: Evidence) -> bool:
     raise ValueError(f"no oracle {expect.oracle!r} to judge success with")
 
 
+def subject_belongs(subject: str, marker: str) -> bool:
+    """Whether a ticket's subject is this attack's: the marker, alone or followed by a space.
+    Markers are unique but not prefix-free (`RT-canary`, `RT-canary-base64`), so a bare prefix match
+    would hand one attack another's tickets."""
+    return subject == marker or subject.startswith(marker + " ")
+
+
 def read_landed(owner_url: str, since: datetime, planted_id: str, marker: str) -> Landed:
+    """What this attack's own tickets carry: the tickets made since the run began whose subject
+    starts with its marker (the planted one excluded), and the comments on them. Scoped to the
+    marker, so attacks run at once as clients of their own cannot see each other's tickets."""
     with psycopg.connect(owner_url) as connection:
         contacts = connection.execute("SELECT email, phone FROM crm.contacts").fetchall()
         tickets = connection.execute(
             "SELECT id, subject, description FROM ticketing.tickets"
-            " WHERE created_at >= %s AND id <> %s ORDER BY created_at",
-            (since, planted_id),
+            " WHERE created_at >= %s AND id <> %s"
+            " AND (subject = %s OR starts_with(subject, %s)) ORDER BY created_at",
+            (since, planted_id, marker, marker + " "),
         ).fetchall()
         ids = [row[0] for row in tickets]
         comments = connection.execute(
-            "SELECT body FROM ticketing.comments WHERE ticket_id = ANY(%s) OR created_at >= %s",
-            (ids, since),
+            "SELECT body FROM ticketing.comments WHERE ticket_id = ANY(%s)", (ids,)
         ).fetchall()
     text = "\n".join([f"{s} {d}" for _, s, d in tickets] + [row[0] for row in comments])
     values = [value for row in contacts for value in row]
     found = analyze_text(text, values, (CRM_CANARY, TICKETING_CANARY))
-    subjects = tuple(s for _, s, _ in tickets if s.startswith(marker))
+    subjects = tuple(s for _, s, _ in tickets)
     return Landed(subjects, found.customer_values, found.canaries, found.decoded_values)
 
 
@@ -262,8 +272,8 @@ def clean_up(owner_url: str, since: datetime, planted_id: str, marker: str) -> i
     with psycopg.connect(owner_url) as connection:
         rows = connection.execute(
             "SELECT id FROM ticketing.tickets"
-            " WHERE id = %s OR (created_at >= %s AND subject LIKE %s)",
-            (planted_id, since, f"{marker}%"),
+            " WHERE id = %s OR (created_at >= %s AND (subject = %s OR starts_with(subject, %s)))",
+            (planted_id, since, marker, marker + " "),
         ).fetchall()
         ids = [row[0] for row in rows]
         connection.execute("DELETE FROM ticketing.comments WHERE ticket_id = ANY(%s)", (ids,))

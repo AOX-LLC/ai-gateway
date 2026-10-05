@@ -11,6 +11,10 @@ notes = "Returns a fixed fictional notice."
 effect = "read"
 notes = "Returns a fixed, long fictional report."
 
+[lab.fetch_audit]
+effect = "read"
+notes = "Returns a fixed, long fictional audit report."
+
 [lab.forward_note]
 effect = "write"
 notes = "Counts a note; stores nothing. A write, so it needs approval like any other."

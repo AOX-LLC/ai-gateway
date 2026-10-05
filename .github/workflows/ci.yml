@@ -4,6 +4,9 @@ on:
   pull_request:
   push:
     branches: [main]
+  schedule:
+    # The full scorecard regeneration, nightly (it takes about 40 minutes: see the `scorecard` job).
+    - cron: "17 4 * * *"
 
 permissions:
   contents: read
@@ -282,6 +285,52 @@ jobs:
       - name: Tear down
         if: always()
         run: docker compose --profile test down -v
+
+  scorecard-static:
+    # On every pull request: the committed scorecard, its rendered files and the generated lab
+    # configuration agree with the attack files and with each other. No stack, a few seconds.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.12.10"
+          enable-cache: true
+      - run: uv sync --frozen
+      - run: make scorecard-check
+
+  scorecard:
+    # The full regeneration: every attack against a fresh lab stack, once for each of the seventeen
+    # columns, in replay mode (no API key). It takes about two minutes a column, which is more than
+    # the 20 minutes an end-to-end job can spend, so it runs on pushes to main and nightly, not on
+    # pull requests (scorecard-static covers those). It fails when the committed deterministic part
+    # of docs/scorecard.json differs from what the run observes.
+    if: github.event_name != 'pull_request'
+    needs: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.12.10"
+          enable-cache: true
+      - run: uv sync --frozen
+      - name: Create .env with fresh secrets
+        run: python3 scripts/init_env.py
+      - name: Regenerate the scorecard and compare it with the committed one
+        # The lab approver, the lab upstream and two columns that weaken a floor layer are test tooling
+        # on the fictional stack: the switches are turned on here, for this step only, as the runner
+        # will not start without them.
+        env:
+          LAB_AUTO_APPROVE: "yes"
+          LAB_MUTABLE_UPSTREAM: "yes"
+          LAB_FLOOR_OVERRIDE: "yes"
+        run: make scorecard-verify
 
   secrets:
     runs-on: ubuntu-latest

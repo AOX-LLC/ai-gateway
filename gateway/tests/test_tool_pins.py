@@ -146,6 +146,7 @@ def test_the_default_pins_hold_no_lab_tool_and_the_lab_pins_hold_the_reviewed_on
     assert {name for name in lab if name.startswith("lab__")} == {
         "lab__fetch_notice",
         "lab__fetch_report",
+        "lab__fetch_audit",
         "lab__forward_note",
     }
     assert {name for name in lab if not name.startswith("lab__")} == set(default)

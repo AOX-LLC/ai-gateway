@@ -174,10 +174,16 @@ services:
       GATEWAY_BIND: 0.0.0.0
       GATEWAY_PORT: "4401"
       GATEWAY_DATABASE_URL: postgresql://gateway_app:${GATEWAY_APP_DB_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      # Each file can be pointed elsewhere for the red-team scorecard's lab gateway (config/lab/); every
+      # default is the file that was named here before.
       GATEWAY_PIPELINE_FILE: ${GATEWAY_PIPELINE_FILE_IN_CONTAINER:-/app/config/pipeline.toml}
-      GATEWAY_APPROVAL_ROLES_FILE: /app/config/approval_roles.toml
-      GATEWAY_ALLOWLIST_FILE: /app/config/allowlist.toml
+      GATEWAY_TOOL_PINS_FILE: ${GATEWAY_TOOL_PINS_FILE_IN_CONTAINER:-/app/config/tool_pins.toml}
+      GATEWAY_APPROVAL_ROLES_FILE: ${GATEWAY_APPROVAL_ROLES_FILE_IN_CONTAINER:-/app/config/approval_roles.toml}
+      GATEWAY_ALLOWLIST_FILE: ${GATEWAY_ALLOWLIST_FILE_IN_CONTAINER:-/app/config/allowlist.toml}
       GATEWAY_RATE_LIMITS_FILE: /app/config/rate_limits.toml
+      GATEWAY_CLASSIFIER_FILE: ${GATEWAY_CLASSIFIER_FILE_IN_CONTAINER:-/app/config/classifier.toml}
+      # How often the catalogue looks for a changed upstream definition (the scorecard shortens it).
+      GATEWAY_CATALOG_REFRESH_S: ${GATEWAY_CATALOG_REFRESH_S:-60}
       # replay (the default) serves the committed recordings and needs no key. record or live need
       # AGENT_CORE_ANTHROPIC_API_KEY in .env, which only agent-core reads (it is empty by default).
       AGENT_CORE_MODE: ${AGENT_CORE_MODE:-replay}
@@ -196,6 +202,11 @@ services:
       TICKETING_SERVICE_TOKEN: ${TICKETING_SERVICE_TOKEN:?set it in .env}
       CRM_SERVICE_TOKEN: ${CRM_SERVICE_TOKEN:?set it in .env}
       HANDBOOK_SERVICE_TOKEN: ${HANDBOOK_SERVICE_TOKEN:?set it in .env}
+      # A floor layer can be weakened only with this on as well as allow_floor_override in the file
+      # (the red-team lab: empty, so never, by default).
+      LAB_FLOOR_OVERRIDE: ${LAB_FLOOR_OVERRIDE:-}
+      # The lab upstream's credential, empty unless a scorecard run gives it (the lab profile only).
+      LAB_UPSTREAM_SERVICE_TOKEN: ${LAB_UPSTREAM_TOKEN:-}
     ports:
       - "127.0.0.1:4401:4401"
     networks: [edge, backend]
@@ -435,12 +446,17 @@ services:
     mem_limit: 96m
     environment:
       POLICY_APPROVER_DATABASE_URL: postgresql://policy_lab_approver:${POLICY_LAB_APPROVER_DB_PASSWORD:-}@postgres:5432/${POSTGRES_DB}
-      APPROVAL_ROLES_FILE: /app/config/approval_roles.toml
+      # The product's roles by default; the scorecard points it at the lab roles (the lab upstream's write).
+      APPROVAL_ROLES_FILE: ${LAB_APPROVAL_ROLES_FILE_IN_CONTAINER:-/app/config/approval_roles.toml}
       LAB_AUTO_APPROVE: ${LAB_AUTO_APPROVE:-}
       LAB_APPROVER_ID: ${LAB_APPROVER_ID:-lab-approver}
+      # approve (the worst case) or reject (the scorecard's idealised approver).
+      LAB_APPROVER_DECISION: ${LAB_APPROVER_DECISION:-approve}
     volumes:
       - ./scripts/auto_approver.py:/lab/auto_approver.py:ro
       - ./scripts/lab_approver.py:/lab/lab_approver.py:ro
+      # The lab roles file (the lab upstream's write), for the scorecard: read-only, lab config only.
+      - ./config/lab:/app/config/lab:ro
     depends_on:
       policy-setup:
         condition: service_completed_successfully

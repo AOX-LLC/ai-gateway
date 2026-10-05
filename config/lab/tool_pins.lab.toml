@@ -1,3 +1,5 @@
+# LAB-ONLY: the pins of the red-team scorecard gateway: the product tools, and the lab
+# upstream's reviewed tools (servers/lab). Never used by the product's own gateway.
 # The reviewed description and schemas (input, output) of every tool the gateway offers.
 # A tool that is not here, or whose definition no longer matches, is hidden and refused
 # by the pinned_descriptions layer. Written by scripts/generate_tool_pins.py: review it.
@@ -802,6 +804,31 @@ output_schema = '''
     "results"
   ],
   "title": "SearchOutput",
+  "type": "object"
+}
+'''
+
+[tools."lab__fetch_audit"]
+sha256 = "7dbc7d0003547920b48471219236f314b02165e714d73175ab755157820c4927"
+description = "Returns the dock's weekly audit report."
+input_schema = '''
+{
+  "additionalProperties": false,
+  "properties": {},
+  "type": "object"
+}
+'''
+output_schema = '''
+{
+  "additionalProperties": false,
+  "properties": {
+    "report": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "report"
+  ],
   "type": "object"
 }
 '''

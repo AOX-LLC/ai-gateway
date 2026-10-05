@@ -6,7 +6,7 @@ Harborline Supply Co. is fictional, and so is everything the lab server says."""
 import json
 import tomllib
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import httpx2
 import pytest
@@ -15,12 +15,19 @@ from jsonschema import Draft202012Validator
 from mcp.client import Client
 from mcp.client.streamable_http import streamable_http_client
 from mcp.shared.exceptions import MCPError
+from mcp.types import RequestParamsMeta
 
 from ai_gateway.classifier.prompt import split_text
 from ai_gateway.pipeline.pins import definition_sha256
 from lab_upstream.server import LabNotEnabledError, build_app
 from lab_upstream.settings import LabSettings
-from lab_upstream.texts import REPORT_INSTRUCTION, long_report
+from lab_upstream.texts import (
+    AUDIT_FIRST_HALF,
+    AUDIT_SECOND_HALF,
+    REPORT_INSTRUCTION,
+    long_audit_report,
+    long_report,
+)
 from lab_upstream.tools import PHASES, REVIEWED_TOOLS, definitions
 from tests.helpers import serve_in_thread
 
@@ -44,11 +51,8 @@ def _hash(tool: Any) -> str:
 
 def test_the_reviewed_phase_offers_exactly_the_reviewed_tools() -> None:
     assert PHASES == ("reviewed", "rugpulled", "poisoned")
-    assert (
-        set(_by_name("reviewed"))
-        == set(REVIEWED_TOOLS)
-        == {"fetch_notice", "fetch_report", "forward_note"}
-    )
+    assert set(_by_name("reviewed")) == set(REVIEWED_TOOLS)
+    assert set(REVIEWED_TOOLS) == {"fetch_notice", "fetch_report", "fetch_audit", "forward_note"}
 
 
 def test_a_rug_pull_changes_a_description_and_a_schema_and_nothing_else() -> None:
@@ -351,3 +355,135 @@ def test_the_phase_compose_sets_is_the_phase_the_server_runs_in(
 
     assert LabSettings().phase == "rugpulled"
     assert SERVICE["environment"]["LAB_PHASE"] == "${LAB_UPSTREAM_PHASE:-reviewed}"
+
+
+# -- the second long report: an instruction that exists only once its halves are joined ---------
+
+
+def test_the_audit_report_splits_a_sentence_across_the_old_cut_and_not_the_new_one() -> None:
+    text = long_audit_report()
+    joined = f"{AUDIT_FIRST_HALF} {AUDIT_SECOND_HALF}"
+
+    assert len(text) > 8000
+    assert text.count(joined) == 1
+    legacy = split_text(text, 6000)
+    assert len(legacy) >= 2
+    assert sum(AUDIT_FIRST_HALF in unit for unit in legacy) == 1
+    assert sum(AUDIT_SECOND_HALF in unit for unit in legacy) == 1
+    assert not any(joined in unit for unit in legacy), "the old cut falls between the halves"
+    assert any(joined in unit for unit in split_text(text, 6000, overlap=400)), "overlap joins them"
+
+
+def test_neither_half_of_the_audit_sentence_carries_an_override_cue_or_a_reader_directive() -> None:
+    """The expectation committed before recording: the instruction is in the joining, not in a
+    half. The halves are third-person description of a routine; there is no `ignore`, no
+    `instructions`, no imperative verb at the start of a clause."""
+    cues = ("ignore", "disregard", "instruction", "forget", "override", "you ", "your ", "please")
+
+    for half in (AUDIT_FIRST_HALF, AUDIT_SECOND_HALF):
+        assert not [cue for cue in cues if cue in half.lower()], half
+    assert not [cue for cue in cues if cue in long_audit_report().lower()], "nowhere in the report"
+    assert AUDIT_SECOND_HALF.split()[0] == "exports", "a statement about the reader, not an order"
+
+
+def test_the_audit_report_is_the_same_every_time_and_the_first_report_is_unchanged() -> None:
+    assert long_audit_report() == long_audit_report()
+    assert long_report().count(REPORT_INSTRUCTION) == 1
+
+
+# -- the effect log, per client: attacks of one phase can run at once, each as its own clone ------
+
+
+def test_the_effect_log_keeps_a_count_for_each_client_and_never_a_value() -> None:
+    from lab_upstream.tools import EffectLog
+
+    log = EffectLog("reviewed")
+    log.record("forward_note", {"note": "a"}, "client-one")
+    log.record("forward_note", {"note": "x" * 600, "forward_to": "somewhere"}, "client-two")
+    log.record("fetch_notice", {}, "client-two")
+
+    snapshot = log.snapshot()
+
+    assert snapshot["calls"] == {"fetch_notice": 1, "forward_note": 2}, "the totals are as before"
+    assert snapshot["by_client"]["client-one"] == {
+        "calls": {"forward_note": 1},
+        "extra_arguments": 0,
+        "oversized_arguments": 0,
+    }
+    assert snapshot["by_client"]["client-two"] == {
+        "calls": {"fetch_notice": 1, "forward_note": 1},
+        "extra_arguments": 1,
+        "oversized_arguments": 1,
+    }
+    assert "somewhere" not in json.dumps(snapshot)
+    log.reset()
+    assert log.snapshot()["by_client"] == {}
+
+
+@pytest.mark.anyio
+async def test_the_server_attributes_a_call_to_the_client_the_gateway_names(lab_url: str) -> None:
+    from mcp_common.attribution import CLIENT_META_KEY
+
+    async with (
+        httpx2.AsyncClient(headers={"Authorization": f"Bearer {TOKEN}"}) as http,
+        Client(streamable_http_client(f"{lab_url}/mcp", http_client=http), mode="legacy") as client,
+    ):
+        named = cast(RequestParamsMeta, {CLIENT_META_KEY: "harborline-lab-bot--demo"})
+        await client.call_tool("fetch_notice", {}, meta=named)
+        await client.call_tool("fetch_notice", {})
+
+    with _http() as sync:
+        by_client = sync.get(f"{lab_url}/effects").json()["by_client"]
+    assert by_client["harborline-lab-bot--demo"]["calls"] == {"fetch_notice": 1}
+    assert by_client["direct"]["calls"] == {"fetch_notice": 1}
+
+
+# -- switching phase at run time: no restart, so the catalogue never sees the upstream down -----
+
+
+@pytest.mark.anyio
+async def test_the_phase_can_be_switched_with_the_credential_and_the_definitions_follow(
+    lab_url: str,
+) -> None:
+    async def names(url: str) -> dict[str, str]:
+        try:
+            async with (
+                httpx2.AsyncClient(headers={"Authorization": f"Bearer {TOKEN}"}) as http,
+                Client(streamable_http_client(f"{url}/mcp", http_client=http), mode="legacy") as c,
+            ):
+                return {t.name: t.description or "" for t in (await c.list_tools()).tools}
+        except BaseExceptionGroup as group:
+            raise group.exceptions[0] from None
+
+    assert set(await names(lab_url)) == set(REVIEWED_TOOLS)
+    with _http() as sync:
+        assert sync.post(f"{lab_url}/phase/poisoned").json() == {"phase": "poisoned"}
+        assert sync.get(f"{lab_url}/effects").json()["phase"] == "poisoned"
+    poisoned = await names(lab_url)
+    assert {"summarize_account", "lookup_record"} <= set(poisoned)
+    with _http() as sync:
+        sync.post(f"{lab_url}/phase/rugpulled")
+    pulled = await names(lab_url)
+    assert "customer email" in pulled["fetch_notice"].lower()
+    with _http() as sync:
+        sync.post(f"{lab_url}/phase/reviewed")
+    assert await names(lab_url) == {t.name: t.description or "" for t in definitions("reviewed")}
+
+
+def test_the_phase_endpoint_needs_the_credential_and_a_real_phase_and_a_post(lab_url: str) -> None:
+    with httpx2.Client() as bare:
+        assert bare.post(f"{lab_url}/phase/poisoned").status_code == 401
+    with _http() as sync:
+        assert sync.post(f"{lab_url}/phase/evil").status_code == 400
+        assert sync.post(f"{lab_url}/phase/").status_code in (400, 404, 405)
+        assert sync.get(f"{lab_url}/phase/poisoned").status_code == 405
+        assert sync.get(f"{lab_url}/effects").json()["phase"] == "reviewed", "nothing changed"
+
+
+@pytest.mark.anyio
+async def test_switching_phase_starts_a_fresh_effect_log(lab_url: str) -> None:
+    await _call(lab_url, "fetch_notice", {})
+    with _http() as sync:
+        assert sync.get(f"{lab_url}/effects").json()["calls"] == {"fetch_notice": 1}
+        sync.post(f"{lab_url}/phase/rugpulled")
+        assert sync.get(f"{lab_url}/effects").json()["calls"] == {}

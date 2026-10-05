@@ -572,3 +572,18 @@ async def test_a_wrapped_result_whose_text_says_more_or_other_is_refused(
     verdict = await layer.after_call(ctx(), call({"subject": "x"}), _wrapped(structured, *texts))
 
     assert isinstance(verdict, Deny)
+
+
+def test_a_schema_layer_built_with_no_argument_validates_results_as_the_config_default_does() -> (
+    None
+):
+    """The pipeline's own default is on; a layer constructed bare must not quietly be the v0.1.0
+    one that never looks at a result."""
+    import asyncio
+
+    layer = SchemaLayer(pins_for(output_schema=NOTE_SCHEMA))
+    forged = result(json.dumps({"id": "forged"}), {"id": "forged"})
+
+    verdict = asyncio.run(layer.after_call(ctx(), call({"subject": "x"}), forged))
+
+    assert isinstance(verdict, Deny)

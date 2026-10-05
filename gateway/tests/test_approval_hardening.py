@@ -194,9 +194,12 @@ def test_the_test_approver_exists_in_compose_only_as_the_lab_service_behind_both
         lab["environment"]["POLICY_APPROVER_DATABASE_URL"]
     ), "the lab role's password, empty unless set"
     assert lab["restart"] == "no"
+    # The two scripts, and the lab config directory read-only (the lab roles file: the lab
+    # upstream's write, for the scorecard). Nothing of the product's config, nothing writable.
     assert lab["volumes"] == [
         "./scripts/auto_approver.py:/lab/auto_approver.py:ro",
         "./scripts/lab_approver.py:/lab/lab_approver.py:ro",
+        "./config/lab:/app/config/lab:ro",
     ]
     # The profile holds the two lab-only services: the approver, and the lab upstream of the
     # scorecard (fenced in test_lab_upstream.py). A third needs its own fence and a line here.
@@ -352,8 +355,32 @@ def test_the_default_environment_and_the_workflow_do_not_switch_it_on_globally()
         )
     ]
     assert len(named) == 1
-    assert paths == [f"ci.yml:jobs.e2e.steps[{named[0]}].env.LAB_AUTO_APPROVE"]
+    scorecard = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())["jobs"][
+        "scorecard"
+    ]["steps"]
+    regenerate = [
+        index
+        for index, step in enumerate(scorecard)
+        if step.get("name") == "Regenerate the scorecard and compare it with the committed one"
+    ]
+    assert len(regenerate) == 1
+    # Exactly two places, both named steps on the fictional stack: the acceptance attack, and the
+    # scorecard's regeneration (which also needs LAB_MUTABLE_UPSTREAM and LAB_FLOOR_OVERRIDE, on
+    # beside it).
+    assert paths == [
+        f"ci.yml:jobs.e2e.steps[{named[0]}].env.LAB_AUTO_APPROVE",
+        f"ci.yml:jobs.scorecard.steps[{regenerate[0]}].env.LAB_AUTO_APPROVE",
+    ]
     assert steps[named[0]]["env"]["LAB_AUTO_APPROVE"] == "yes"
+    assert scorecard[regenerate[0]]["env"] == {
+        "LAB_AUTO_APPROVE": "yes",
+        "LAB_MUTABLE_UPSTREAM": "yes",
+        "LAB_FLOOR_OVERRIDE": "yes",
+    }
+    job = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())["jobs"][
+        "scorecard"
+    ]
+    assert job["if"] == "github.event_name != 'pull_request'", "never on a pull request"
 
 
 def test_no_script_sets_the_switch_and_nothing_writes_the_workflow_environment() -> None:

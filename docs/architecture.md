@@ -119,7 +119,8 @@ validate_results = true  # a result's structured content must fit the pinned out
 - **Mistakes stop startup.** An unknown layer, mode or key stops the gateway from starting.
 - **Fail safe.** A layer the file does not mention runs in `enforce`.
 - **Floor layers are guarded.** `scope` and `approval` are floor layers: setting either to
-  monitor or off needs `allow_floor_override = true` and logs a warning. In `monitor` the
+  monitor or off needs `allow_floor_override = true` and, since Phase 6c, `LAB_FLOOR_OVERRIDE=yes` in
+  the environment (the red-team lab's switch: a file alone cannot weaken a floor), and logs a warning. In `monitor` the
   approval layer reports that a write would have needed approval, asks nobody, and lets it go on.
 
 To produce the scorecard, the red-team harness writes one file per column and restarts the
@@ -1030,7 +1031,7 @@ filled from what an attack read cannot be known in advance and is data only: whe
 classifier it is unclassified, which the scorecard counts apart.
 
 **The lab upstream** (`servers/lab`, module `lab_upstream`) is a deliberately lenient MCP server
-whose tool definitions change between phases: `reviewed` (the three tools a person pinned),
+whose tool definitions change between phases: `reviewed` (the four tools a person pinned),
 `rugpulled` (a description and a schema changed after review) and `poisoned` (two tools nobody
 reviewed: one whose description hides an instruction in zero-width characters, one whose schema has a
 remote `$ref`). It runs a call whatever the arguments hold, counts what it executed (`GET /effects`,
@@ -1047,6 +1048,57 @@ on the internal network with no host port (4413 inside it), is in no default ser
 that has been talked into it); how often a real model is talked into it is not measured. The
 classifier answers from recordings, so its results are those of the recorded judgements, not of a
 model meeting unseen text.
+
+### The scorecard (Phase 6c)
+
+`make scorecard` (with `LAB_AUTO_APPROVE=yes LAB_MUTABLE_UPSTREAM=yes LAB_FLOOR_OVERRIDE=yes` in front: the
+runner sets none and refuses to start without all three) runs every attack against a fresh lab Compose project
+(`ai-gateway-scorecard`, its own volume, removed at the end; never the real stack), once for each of
+seventeen *columns*, in replay mode with no API key, and writes `docs/scorecard.json`,
+`docs/scorecard.md` (rendered from the JSON alone) and `docs/images/scorecard.svg`.
+
+- **Columns** (`scripts/redteam/lab_config.py`): every layer on; every layer off; each layer off in
+  turn (nine, `scope` and `approval` under a lab-only `allow_floor_override`, labelled lab-only in
+  every file and table); the weakenable layers only watching (monitor); every layer on with an
+  approver that rejects every write (idealised: assumes a person who never misses an attack); and the
+  three 6a changes turned back to v0.1.0's behaviour, each alone and all together (the short-text
+  rule, unit overlap, result validation). The headline columns use a lab approver that **approves
+  every write**, the worst case, so the other layers' contribution shows.
+- **Isolation.** Each attack runs as a client of its own, a clone of its original
+  (`harborline-support-bot--exfil-bulk-write`), because the egress ledger, the rate limits and the
+  classifier's call rate are per client and the allowlist rules name their client exactly. The
+  allowlist rules of each original are copied under each clone's exact name into a generated lab-only
+  file (`config/lab/allowlist.lab.toml`); the product's allowlist code gains no pattern matching. The
+  rate-limit and approval-role formats have no per-client entry (a bucket is per client already, a
+  role is per tool), and a test fails if either ever gains one. `gateway-admin seed-lab` (lab-only,
+  gated on `LAB_MUTABLE_UPSTREAM=yes`) registers the lab upstream, its policies and the clones.
+  The gateway restarts once per column, on that column's generated pipeline
+  (`config/lab/pipelines/`); attacks that cannot disturb each other run at once, those judged by a
+  diff of the ticketing data run alone and the data is restored after each, and the lab upstream is put
+  in each of its phases in turn. All of it is generated from the attack files
+  (`scripts/generate_lab_config.py`, checked by a test).
+- **Reading the result.** An attack succeeds when the independent oracle says so, at the threshold
+  its own file set before any run. The runner reads the oracle's evidence (what landed in the
+  databases, what changed in them, how many calls of the landing steps were answered, how many the
+  lab upstream itself says it executed for that client) and the gateway's own telemetry (which layer
+  refused each call, which would have, which text had no recording). `scripts/redteam/scorecard.py`
+  turns observations into figures: per column, per layer (what it *contributes*: the attacks it alone
+  stops; what it catches *redundantly*), the false-positive rate on the honest runs, unclassified
+  counts, predicted against observed (a difference is a finding, listed and never edited away), the
+  before and after of the three flags, and both long-boundary attacks side by side.
+- **Deterministic and indicative.** The JSON has a `deterministic` part, which CI compares, and an
+  `indicative` part (latency: one machine, a handful of calls) which it does not.
+- **CI.** Every pull request runs the static check (`make scorecard-check`: the committed scorecard
+  covers exactly the attacks and columns in the repository, its predictions are the attack files', the
+  Markdown and chart are what the JSON renders to, the generated lab configuration is current). The
+  full regeneration (`make scorecard-verify`) takes about two minutes a column, so it runs on pushes
+  to `main` and nightly rather than on a pull request.
+- **Honesty.** The attacker is a script that does what a planted text says (a compliant model); the
+  classifier answers from recordings, so the figures are those of the recorded judgements; the known
+  gaps (the drip of up to nine values per egress window, a ROT13 canary, values written backwards,
+  an instruction split into pieces too short to be judged) are shown as successes; the floor-layer
+  columns are lab-only; the corpus is small, so a rate is a count; and the original long-boundary
+  attack and the second one, whose halves are innocent alone, are reported side by side.
 
 ### Idle transactions (Phase 3c)
 
@@ -1104,8 +1156,9 @@ dropped and made again: agent-core's login mapping is by the role's OID and is n
 `audit-verify` accepts for `approval.resolved` and for nothing else, and says so when it finds any:
 a stack that was used as a lab is not quietly mistaken for one that was not. Setup records it as
 approver `lab-approver` (inactive when the role is gone). Never use it
-against anything real: it defeats approval. CI sets the switch on the Harborline step only, for the
-test approver (`scripts/auto_approver.py`), and a test pins that.
+against anything real: it defeats approval. CI sets the switch on two named steps only, both on the fictional
+stack (the Harborline and acceptance step, and the scorecard's regeneration, which also turns on the
+lab upstream's and the floor override's switches), and a test pins exactly those.
 
 ### Tamper evidence
 
