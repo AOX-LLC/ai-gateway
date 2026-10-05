@@ -17,6 +17,7 @@ from mcp.shared.exceptions import MCPError
 from mcp.types import INVALID_PARAMS, TextContent
 
 from ai_gateway.auth.tokens import IssuedToken
+from ai_gateway.proxy.server import REQUEST_ID_META_KEY
 from ai_gateway.registry import MIGRATIONS_PACKAGE
 from ai_gateway.registry.repo import AdminRegistry
 from echo_server.server import cancellations
@@ -305,3 +306,67 @@ async def test_a_client_that_cancels_mid_call_cancels_the_upstream_call(
     assert len(answers) == 1
     assert cancellations.started == started_before + 1
     assert cancellations.count == cancelled_before + 1
+
+
+def _last_request_id(gateway: RunningGateway) -> str:
+    calls = [e for e in gateway.events.events if e.action == "gateway.tool_call"]
+    return str(calls[-1].payload["request_id"])
+
+
+async def test_a_result_carries_the_gateways_own_request_id_which_the_audit_row_keeps(
+    gateway: RunningGateway, tokens: dict[str, IssuedToken]
+) -> None:
+    async with connect(gateway.url, tokens["support"].plaintext) as client:
+        first = await client.call_tool("echo__say", {"text": "dock 7 is clear"})
+        first_row = _last_request_id(gateway)
+        second = await client.call_tool("echo__say", {"text": "dock 7 is clear"})
+        second_row = _last_request_id(gateway)
+
+    assert first.meta is not None
+    assert second.meta is not None
+    assert first.meta[REQUEST_ID_META_KEY] == first_row
+    assert second.meta[REQUEST_ID_META_KEY] == second_row
+    assert first_row != second_row
+    assert str(UUID(first_row)) == first_row
+
+
+async def test_a_refusal_carries_the_request_id_under_the_same_key(
+    gateway: RunningGateway, tokens: dict[str, IssuedToken]
+) -> None:
+    async with connect(gateway.url, tokens["support"].plaintext) as client:
+        with pytest.raises(MCPError) as out_of_scope:
+            await client.call_tool("echo__shout", {"text": "x"})
+        scope_row = _last_request_id(gateway)
+        with pytest.raises(MCPError) as unknown:
+            await client.call_tool("echo__nothing", {})
+
+    for refused in (out_of_scope.value, unknown.value):
+        assert refused.data["_meta"][REQUEST_ID_META_KEY] == refused.data["request_id"]
+    assert out_of_scope.value.data["request_id"] == scope_row
+    assert unknown.value.data["request_id"] != scope_row
+
+
+async def test_an_id_the_client_sends_is_ignored_and_never_echoed(
+    gateway: RunningGateway, tokens: dict[str, IssuedToken]
+) -> None:
+    chosen = "00000000-0000-4000-8000-0000c11e0001"
+    sent: Any = {
+        REQUEST_ID_META_KEY: chosen,
+        "request_id": chosen,
+        "io.aox.ops-kit/run_id": chosen,
+        "correlation_id": chosen,
+    }
+    async with connect(gateway.url, tokens["support"].plaintext) as client:
+        answered = await client.call_tool("echo__say", {"text": "dock 7 is clear"}, meta=sent)
+        answered_row = _last_request_id(gateway)
+        with pytest.raises(MCPError) as refused:
+            await client.call_tool("echo__shout", {"text": "x"}, meta=sent)
+        refused_row = _last_request_id(gateway)
+
+    assert answered.meta is not None
+    assert answered.meta[REQUEST_ID_META_KEY] == answered_row != chosen
+    assert refused.value.data["request_id"] == refused_row != chosen
+    assert chosen not in answered.model_dump_json()
+    assert chosen not in refused.value.error.model_dump_json()
+    for event in gateway.events.events:
+        assert chosen not in event.model_dump_json()
