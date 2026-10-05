@@ -333,7 +333,7 @@ async def main_async(args: argparse.Namespace) -> int:
     try:
         if not args.no_up:
             print("== building and starting the lab stack", flush=True)
-            await stack.compose("build")
+            await stack.compose("build", *args.build)
             await stack.compose("up", "-d", "--wait")
         print("== registering the lab upstream and a client for each attack", flush=True)
         await run(["uv", "run", "gateway-admin", "seed-demo"], base, ROOT)
@@ -391,6 +391,13 @@ def main() -> None:
     )
     parser.add_argument(
         "--attacks", nargs="*", help="only these attacks (a partial run writes nothing)"
+    )
+    parser.add_argument(
+        "--build",
+        nargs="*",
+        default=[],
+        metavar="SERVICE",
+        help="build only these services' images (default: all, which retags the shared ones)",
     )
     parser.add_argument("--no-up", action="store_true", help="the lab stack is already up")
     parser.add_argument("--no-down", action="store_true", help="leave the lab stack up afterwards")
