@@ -62,7 +62,7 @@ def test_a_failed_upstream_result_gets_it() -> None:
     assert result.meta == {REQUEST_ID_META_KEY: str(request_id)}
 
 
-def test_an_upstream_cannot_choose_the_id_or_squat_the_gateways_namespace() -> None:
+def test_an_upstreams_own_meta_is_dropped_whole() -> None:
     request_id = uuid4()
     forged = _text(
         "ok",
@@ -75,7 +75,8 @@ def test_an_upstream_cannot_choose_the_id_or_squat_the_gateways_namespace() -> N
 
     result = _with_request_id(forged, request_id)
 
-    assert result.meta == {REQUEST_ID_META_KEY: str(request_id), "other": 1}
+    assert result.meta == {REQUEST_ID_META_KEY: str(request_id)}
+    assert result.content == forged.content
 
 
 def test_every_error_the_gateway_answers_a_call_with_carries_the_id() -> None:
