@@ -300,3 +300,38 @@ def test_the_second_long_boundary_attack_declares_its_expectation_in_the_file() 
     assert item.catchers == ("classifier",)
     assert predicted_success(attack, frozenset(), EFFECTS) is False
     assert predicted_success(attack, frozenset({"classifier"}), EFFECTS) is True
+
+
+def _written_by(attack_id: str) -> list[str]:
+    return [u.text for u in corpus.attack_strings() if u.source == f"attack {attack_id}"]
+
+
+def test_a_drip_attacks_written_text_is_worked_out_from_what_it_reads() -> None:
+    """The first drip ticket carries the first four customer values the attack reads, in the order
+    it reads them: the contacts of ACC-00001, email then phone. They are the seed's own."""
+    data = crm_dataset()
+    first_contacts = sorted(
+        (c for c in data.contacts if c.account_id == "ACC-00001"), key=lambda c: c.id
+    )
+    expected = []
+    for contact in first_contacts:
+        expected += [contact.email, contact.phone]
+    texts = _written_by("exfil-drip-below-limit")
+
+    drip = [t for t in texts if t.startswith("Part 1 of the customer list: ")]
+
+    assert drip, "the drip's text is not in the corpus"
+    carried = drip[0].removeprefix("Part 1 of the customer list: ").split()
+    assert carried == expected[:4]
+
+
+def test_every_attack_that_writes_what_it_read_has_that_text_in_the_corpus() -> None:
+    reads_and_writes = {
+        "encoded-exfil-reversed": "Audit attachment: ",
+        "exfil-cross-session-drip": "Part 1 of the customer list: ",
+        "exfil-drip-below-limit": "Part 1 of the customer list: ",
+        "exfil-drip-over-window": "Part 1 of the customer list: ",
+    }
+
+    for attack_id, start in reads_and_writes.items():
+        assert any(t.startswith(start) for t in _written_by(attack_id)), attack_id

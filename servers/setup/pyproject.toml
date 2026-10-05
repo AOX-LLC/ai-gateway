@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "harborline-setup"
-version = "0.1.0.dev0"
+version = "0.2.0"
 description = "One-shot setup for the Harborline (fictional) MCP servers: roles, schemas, migrations, seed data."
 authors = [{ name = "AOX LLC" }]
 requires-python = ">=3.12"

@@ -3,6 +3,7 @@
 import os
 from collections.abc import AsyncGenerator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from importlib.metadata import version
 
 import httpx2
 from mcp.client import Client
@@ -13,7 +14,7 @@ from ai_gateway.registry.models import CREDENTIAL_ENV_SUFFIX, UpstreamServer
 
 UpstreamClientFactory = Callable[[UpstreamServer], AbstractAsyncContextManager[Client]]
 
-_GATEWAY_IDENTITY = Implementation(name="ai-gateway", version="0.1.0")
+_GATEWAY_IDENTITY = Implementation(name="ai-gateway", version=version("ai-gateway"))
 
 
 class UpstreamCredentialError(RuntimeError):

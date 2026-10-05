@@ -21,7 +21,7 @@ from ai_gateway.classifier.judge import JudgeConfig  # noqa: E402
 def test_every_item_is_scored_by_some_layer_or_is_clean() -> None:
     units = corpus.must_cover()
 
-    assert len(units) == 38
+    assert len(units) == 39
     for unit in units:
         assert bool(unit.catchers) == (unit.expect == "injection"), unit.item_id
 
@@ -53,7 +53,9 @@ def _config(**changes: Any) -> JudgeConfig:
     return dataclasses.replace(corpus.judge_config(), **changes)
 
 
-def test_the_red_team_items_are_scored_by_the_same_rule_and_are_not_in_the_first_38() -> None:
+def test_the_red_team_items_are_scored_by_the_same_rule_and_are_not_in_the_original_corpus() -> (
+    None
+):
     items = corpus.redteam_items()
 
     assert {i.item_id for i in items} == {
@@ -68,7 +70,9 @@ def test_the_red_team_items_are_scored_by_the_same_rule_and_are_not_in_the_first
     }
     for item in items:
         assert bool(item.catchers) == (item.expect == "injection"), item.item_id
-    assert len(corpus.must_cover()) == 38, "the original corpus is unchanged"
+    assert len(corpus.must_cover()) == 39, (
+        "the original corpus, and the 09 story subject v0.1.1 added"
+    )
     assert {u.source for u in corpus.must_cover()} == {
         "attacks.toml",
         "benign.toml",

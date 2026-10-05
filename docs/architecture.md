@@ -126,10 +126,22 @@ validate_results = true  # a result's structured content must fit the pinned out
 To produce the scorecard, the red-team harness writes one file per column and restarts the
 gateway between runs. There is no runtime or per-request switch for an attacker to flip.
 
+### The request id
+
+Every tool result carries the gateway's own request id in its `_meta`, under
+`io.aox.ai-gateway/request_id`: a success, a tool's own error, a write waiting for approval and an
+upstream failure alike. Every error the gateway answers a call with, once the caller is
+authenticated, carries it in its `data`, as `request_id` and under the same `_meta` key. It is the id
+the call's audit and telemetry rows carry, so a client can join its own record to the gateway's. The
+gateway mints it for each call: a correlation key a client sends is ignored and never echoed. A
+result's `_meta` is the gateway's alone: whatever `_meta` an upstream returned is dropped, so nothing an
+upstream says reaches a client as metadata or can pass for the gateway's.
+
 ### Errors clients see
 
 - **Unknown or out-of-scope tool:** JSON-RPC `-32602`, `Tool 'x' is not available to this
-  client.` It is the same text in both cases, so it cannot be used to discover tools.
+  client.` It is the same text in both cases, so it cannot be used to discover tools. Both carry a
+  request id in `data`.
 - **Blocked by any other layer** (the allowlist, an audit log that cannot take a write): `-32010`,
   `Request blocked by gateway policy.`, with a request id. The layer name appears only in the
   decision record.

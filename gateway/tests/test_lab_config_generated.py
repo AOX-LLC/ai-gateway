@@ -212,11 +212,139 @@ def test_the_rate_limit_and_role_files_have_no_per_client_entry_so_the_lab_uses_
     assert all(re.fullmatch(r"[a-z]+__[a-z_]+", tool) for tool in roles["roles_by_action"])
 
 
-def test_production_code_has_no_client_name_matching_beyond_the_single_star() -> None:
-    source = (
-        ROOT / "gateway" / "src" / "ai_gateway" / "pipeline" / "layers" / "allowlist.py"
-    ).read_text(encoding="utf-8")
+# Clients an allowlist rule could be mistaken for matching if the production code ever matched
+# names by pattern, prefix or substring instead of exactly. A rule is built directly, without the
+# loader (which refuses most of these), so the matching itself is what is tested.
+_RULE_CLIENTS = [
+    "harborline-ops-bot",
+    "harborline-*",
+    "harborline-ops-bot*",
+    "harborline-?ps-bot",
+    "harborline-[a-z]ps-bot",
+    "harborline-.*",
+    "harborline-ops-bot--.*",
+    "(harborline-ops-bot)|(harborline-support-bot)",
+]
+_CALLERS = [
+    "harborline-ops-bot",
+    "harborline-ops-bot--export-every-customer",
+    "harborline-ops-bot-2",
+    "xharborline-ops-bot",
+    "harborline-support-bot",
+    "harborline-aps-bot",
+    "harborline-ops-bot*",
+    "harborline-*",
+    "harborline-.*",
+    "harborline-ops-bot--.*",
+    "",
+]
 
-    assert "fnmatch" not in source
-    assert "glob" not in source.lower()
-    assert 'client == "*"' in source or '"*"' in source
+
+def _rule(client: str) -> Any:
+    from ai_gateway.pipeline.layers.allowlist import AllowlistRule
+
+    return AllowlistRule(
+        name="r", client=client, tool="tickets__create_ticket", argument="priority", required=True
+    )
+
+
+@pytest.mark.parametrize("client", _RULE_CLIENTS)
+def test_a_rule_covers_exactly_the_client_it_names_whatever_the_name_looks_like(
+    client: str,
+) -> None:
+    """Fails if glob, regular-expression, prefix or substring matching of client names is ever added
+    to the production allowlist: only the literal name (and the single `*`) may match."""
+    rule = _rule(client)
+
+    for caller in _CALLERS:
+        assert rule.covers(caller, "tickets__create_ticket") == (caller == client), (client, caller)
+        assert not rule.covers(caller, "tickets__add_comment")
+
+
+def test_the_star_alone_covers_every_client_and_no_other_name_is_a_wildcard() -> None:
+    assert all(_rule("*").covers(caller, "tickets__create_ticket") for caller in _CALLERS)
+    assert not _rule("**").covers("harborline-ops-bot", "tickets__create_ticket")
+    assert not _rule("harborline-ops-bot").covers("*", "tickets__create_ticket")
+
+
+@pytest.mark.anyio
+async def test_a_rule_for_an_original_does_not_reach_its_clone_but_the_clones_own_copy_does() -> (
+    None
+):
+    """The reason the lab allowlist copies each rule by exact name: nothing in the product lets a
+    rule for `harborline-ops-bot` bind `harborline-ops-bot--x`."""
+    from uuid import uuid4
+
+    from ai_gateway.pipeline.layers.allowlist import AllowlistLayer
+    from ai_gateway.pipeline.types import ALLOW, CallContext, ClientIdentity, Deny, ToolCall
+
+    def ctx(name: str) -> CallContext:
+        return CallContext(
+            request_id=uuid4(),
+            client=ClientIdentity(id=uuid4(), name=name, scopes=frozenset()),
+            session_id=None,
+            protocol_version="2025-11-25",
+        )
+
+    call = ToolCall.create(
+        "tickets__create_ticket", "tickets", "create_ticket", {}, "write"
+    )  # the rule requires `priority`, which is missing
+    clone = "harborline-ops-bot--x"
+    original_only = AllowlistLayer([_rule("harborline-ops-bot")])
+    with_copy = AllowlistLayer([_rule("harborline-ops-bot"), dataclasses.replace(_rule(clone))])
+
+    assert isinstance(await original_only.before_call(ctx("harborline-ops-bot"), call), Deny)
+    assert await original_only.before_call(ctx(clone), call) is ALLOW
+    assert isinstance(await with_copy.before_call(ctx(clone), call), Deny)
+
+
+@pytest.mark.parametrize(
+    "client",
+    ["harborline-*", "harborline-?ps-bot", "harborline-[a-z]ps-bot", "harborline-.*", "**"],
+)
+def test_the_loader_refuses_a_client_that_is_a_pattern(client: str, tmp_path: Path) -> None:
+    from ai_gateway.pipeline.layers.allowlist import AllowlistError
+
+    path = tmp_path / "allowlist.toml"
+    path.write_text(
+        f'[[rule]]\nname = "r"\nclient = "{client}"\ntool = "tickets__create_ticket"\n'
+        'argument = "priority"\none_of = ["normal"]\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(AllowlistError, match="not a client name"):
+        load_allowlist(path)
+
+
+def test_the_lab_allowlist_agrees_with_the_pins_the_lab_gateway_runs_with() -> None:
+    """Every rule, the product's and each copy, names a tool the lab gateway has a pin for and an
+    argument that tool's pinned input schema has; each clone is scoped to pinned tools only."""
+    from ai_gateway.pipeline.pins import load_tool_pins
+
+    pins = load_tool_pins(LAB / "tool_pins.lab.toml")
+    product_pins = load_tool_pins(ROOT / "config" / "tool_pins.toml")
+    lab = load_allowlist(LAB / "allowlist.lab.toml")
+
+    assert pins.names() >= product_pins.names(), "the lab pins hold the product's, and more"
+    for name in product_pins.names():
+        assert pins.get(name) == product_pins.get(name), f"{name}: the lab pin differs"
+    assert lab
+    for rule in lab:
+        pin = pins.get(rule.tool)
+        assert pin is not None, f"{rule.name}: no pin for {rule.tool}"
+        assert rule.argument in pin.input_schema.get("properties", {}), (
+            f"{rule.name}: {rule.tool} has no argument {rule.argument!r}"
+        )
+    # The lab client may call every tool the lab upstream can offer in any phase. The only ones
+    # with no pin are the tools it offers in the poisoned phase alone: unreviewed on purpose, so the
+    # pinned-descriptions layer has something to hide. Any other unpinned scope is a mistake.
+    from lab_upstream.tools import definitions as lab_definitions
+
+    reviewed = {f"lab__{t.name}" for t in lab_definitions("reviewed")}
+    unreviewed = {f"lab__{t.name}" for t in lab_definitions("poisoned")} - reviewed
+    assert unreviewed
+    for clone in lab_config.clones():
+        unpinned = set(clone.scopes) - pins.names()
+        assert unpinned <= unreviewed, f"{clone.name}: scoped to unpinned tools {sorted(unpinned)}"
+    assert reviewed <= pins.names(), "every reviewed lab tool is pinned"
+    assert not unreviewed & pins.names(), "no unreviewed lab tool is pinned"
