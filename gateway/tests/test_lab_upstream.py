@@ -269,7 +269,7 @@ def test_the_switch_and_the_credential_come_from_the_environment_and_are_never_d
 
     assert env["LAB_MUTABLE_UPSTREAM"] == "${LAB_MUTABLE_UPSTREAM:-}"
     assert env["LAB_SERVICE_TOKEN"] == "${LAB_UPSTREAM_TOKEN:-}"  # noqa: S105
-    assert env["LAB_UPSTREAM_PHASE"] == "${LAB_UPSTREAM_PHASE:-reviewed}"
+    assert env["LAB_PHASE"] == "${LAB_UPSTREAM_PHASE:-reviewed}"
     assert SERVICE["restart"] == "no"
     assert SERVICE["read_only"] is True
     assert SERVICE["cap_drop"] == ["ALL"]
@@ -328,3 +328,26 @@ def test_the_lab_upstream_is_not_a_dependency_of_any_other_workspace_member() ->
         assert not any("lab-upstream" in dep for dep in deps), pyproject
     gateway = tomllib.loads((ROOT / "gateway" / "pyproject.toml").read_text(encoding="utf-8"))
     assert not any("lab-upstream" in dep for dep in gateway["project"]["dependencies"])
+
+
+def test_every_variable_compose_gives_the_lab_upstream_is_one_it_reads() -> None:
+    """A variable compose sets that the settings class never reads is silently ignored: the phase
+    was once set as LAB_UPSTREAM_PHASE while the server read LAB_PHASE, so every run stayed in
+    `reviewed`. The host's name for it may differ (`${LAB_UPSTREAM_PHASE}`); the container's must
+    be a field of LabSettings under its prefix."""
+    fields = set(LabSettings.model_fields)
+
+    for name in SERVICE["environment"]:
+        assert name.startswith("LAB_"), name
+        assert name.removeprefix("LAB_").lower() in fields, f"{name} is never read"
+
+
+def test_the_phase_compose_sets_is_the_phase_the_server_runs_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LAB_PHASE", "rugpulled")
+    monkeypatch.setenv("LAB_SERVICE_TOKEN", TOKEN)
+    monkeypatch.setenv("LAB_MUTABLE_UPSTREAM", "yes")
+
+    assert LabSettings().phase == "rugpulled"
+    assert SERVICE["environment"]["LAB_PHASE"] == "${LAB_UPSTREAM_PHASE:-reviewed}"

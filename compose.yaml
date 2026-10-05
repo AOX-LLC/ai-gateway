@@ -509,7 +509,7 @@ services:
       LAB_PORT: "4413"
       LAB_ALLOWED_HOSTS: lab-upstream:*,127.0.0.1:*
       LAB_MUTABLE_UPSTREAM: ${LAB_MUTABLE_UPSTREAM:-}
-      LAB_UPSTREAM_PHASE: ${LAB_UPSTREAM_PHASE:-reviewed}
+      LAB_PHASE: ${LAB_UPSTREAM_PHASE:-reviewed}
       LAB_SERVICE_TOKEN: ${LAB_UPSTREAM_TOKEN:-}
     healthcheck:
       test:
