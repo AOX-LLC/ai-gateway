@@ -135,13 +135,24 @@ def judge(
                     f"{name}: blocked by {row['blocked_by']}, expected {want.blocked_by}"
                 )
         else:
-            want_layers = step.expected_monitor(i).would_block
-            if row["outcome"] != "forwarded" or record.outcome == "refused":
+            monitor = step.expected_monitor(i)
+            if monitor.outcome == "blocked":
+                # A floor layer (scope, approval) is never weakened: the call is still refused.
+                if (
+                    row["outcome"] != "blocked"
+                    or row["blocked_by"] != monitor.blocked_by
+                    or record.outcome != "refused"
+                ):
+                    failures.append(
+                        f"{name}: a floor layer must still block it: expected blocked by"
+                        f" {monitor.blocked_by}, the gateway recorded {row['outcome']}"
+                    )
+            elif row["outcome"] != "forwarded" or record.outcome == "refused":
                 failures.append(f"{name}: a monitor run must forward every call")
-            elif row["would_block"] != want_layers:
+            elif row["would_block"] != monitor.would_block:
                 failures.append(
                     f"{name}: would_block {sorted(row['would_block'])},"  # type: ignore[call-overload]
-                    f" expected {sorted(want_layers)}"
+                    f" expected {sorted(monitor.would_block)}"
                 )
     writes = [(s, i) for s, i in calls if s.tool == "tickets__create_ticket"]
     weakened = frozenset() if mode == "enforce" else WEAKENABLE

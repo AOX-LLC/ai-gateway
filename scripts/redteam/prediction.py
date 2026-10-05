@@ -19,11 +19,11 @@ import tomllib
 from collections.abc import Mapping
 from pathlib import Path
 
-from redteam.attack_format import LAYERS, Attack, Step
+from redteam.attack_format import FLOOR_LAYERS, LAYERS, Attack, Step
 
 CONFIG = Path(__file__).resolve().parents[2] / "config"
 
-FLOOR = frozenset({"scope", "approval"})
+FLOOR = FLOOR_LAYERS
 """Layers a pipeline configuration cannot weaken without `allow_floor_override`."""
 WEAKENABLE = LAYERS - FLOOR
 

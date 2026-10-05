@@ -40,8 +40,10 @@ expected of the gateway in each of the two runs the acceptance test makes:
 Argument templates: `{i}` the iteration (with a format, `{i:05d}`), `{planted}` the planted ticket's
 id, `{marker}`, `{step}` the step's id, `{values:N}` the next N customer values (emails and phone
 numbers) that earlier results carried, in the order read, `{canary}` the first canary-shaped code an
-earlier result carried, and `{text:name}` a string named in the file's `[texts]` table (a recorded
-corpus string, so replay has it). A template that cannot be filled stops the run: the attack never
+earlier result carried, `{text:name}` a string named in the file's `[texts]` table (a recorded
+corpus string, so replay has it), `{pad:N}` N letters A (an oversized argument), and
+`{encode:how:what}`: `what` (`canary` or `values:N`, as above) hidden by `how` (`b64`, `hex`,
+`rot13`, `percent` or `reverse`). A template that cannot be filled stops the run: the attack never
 guesses.
 
 `session = "name"` runs a step in a named MCP session (default `main`); the client opens each name
@@ -95,7 +97,12 @@ LAYERS = frozenset(
     }
 )
 TOKENS = re.compile(r"\{(\w+)(?::([^{}]*))?\}")
-KNOWN_TOKENS = frozenset({"i", "planted", "marker", "step", "values", "canary", "text"})
+KNOWN_TOKENS = frozenset(
+    {"i", "planted", "marker", "step", "values", "canary", "text", "pad", "encode"}
+)
+FLOOR_LAYERS = frozenset({"scope", "approval"})
+ENCODERS = frozenset({"b64", "hex", "rot13", "percent", "reverse"})
+MAX_PAD = 200_000
 FAMILIES = frozenset(
     {
         "acceptance",
@@ -128,10 +135,10 @@ _TOP = frozenset(
     {"id", "title", "client", "marker", "hostile", "plant", "texts", "step", "expect", "lab_phase"}
 )
 _EXPECT = frozenset({"family", "oracle", "threshold", "landing", "gap"})
-_PLANT = frozenset({"account_id", "subject", "text_from"})
+_PLANT = frozenset({"account_id", "subject", "text_from", "text"})
 _STEP = frozenset({"id", "tool", "session", "arguments", "repeat", "enforce", "monitor"})
 _ENFORCE = frozenset({"first", "last", "outcome", "blocked_by", "catchers"})
-_MONITOR = frozenset({"first", "last", "would_block"})
+_MONITOR = frozenset({"first", "last", "would_block", "outcome", "blocked_by"})
 CORPUS = Path(__file__).resolve().parents[2] / "config" / "classifier_corpus"
 
 
@@ -154,6 +161,10 @@ class Monitor:
     first: int
     last: int
     would_block: frozenset[str]
+    outcome: str = "forwarded"
+    """`forwarded`, or `blocked` when a floor layer (scope, approval) stops the call even though
+    every other layer only watches."""
+    blocked_by: str | None = None
 
 
 @dataclass(frozen=True)
@@ -178,6 +189,8 @@ class Plant:
     account_id: str
     subject: str
     text: str
+    """A recorded corpus string (`text_from`), or one given inline (`text`): an inline text is for
+    pieces too short to be judged, and a test proves they are."""
 
 
 @dataclass(frozen=True)
@@ -299,7 +312,10 @@ def _corpus_text(source: dict[str, Any], where: str) -> str:
 
 def _plant(raw: dict[str, Any], where: str) -> Plant:
     _keys(raw, _PLANT, f"{where} [plant]")
-    return Plant(str(raw["account_id"]), str(raw["subject"]), _corpus_text(raw["text_from"], where))
+    if ("text_from" in raw) == ("text" in raw):
+        raise AttackFormatError(f"{where} [plant]: give exactly one of text_from and text")
+    text = _corpus_text(raw["text_from"], where) if "text_from" in raw else str(raw["text"])
+    return Plant(str(raw["account_id"]), str(raw["subject"]), text)
 
 
 def _step(raw: dict[str, Any], where: str, texts: dict[str, str]) -> Step:
@@ -318,6 +334,10 @@ def _step(raw: dict[str, Any], where: str, texts: dict[str, str]) -> Step:
                 raise AttackFormatError(f"{here}: unknown template {{{name}}}")
             if name == "text" and spec not in texts:
                 raise AttackFormatError(f"{here}: {{text:{spec}}} is not in [texts]")
+            if name == "pad" and not (spec.isdigit() and 1 <= int(spec) <= MAX_PAD):
+                raise AttackFormatError(f"{here}: {{pad:N}} needs N from 1 to {MAX_PAD}")
+            if name == "encode":
+                _check_encode(spec, here)
     enforce = tuple(_enforce(e, repeat, here) for e in raw.get("enforce", []))
     monitor = tuple(_monitor(m, repeat, here) for m in raw.get("monitor", []))
     _covers(enforce, repeat, here, "enforce")
@@ -326,6 +346,14 @@ def _step(raw: dict[str, Any], where: str, texts: dict[str, str]) -> Step:
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,40}(\{i(:[0-9]*d)?\}[A-Za-z0-9_-]{0,20})?", session):
         raise AttackFormatError(f"{here}: session is a name, with {{i}} at most once at its end")
     return Step(step_id, str(raw["tool"]), arguments, repeat, enforce, monitor, session)
+
+
+def _check_encode(spec: str, where: str) -> None:
+    encoder, _, source = spec.partition(":")
+    if encoder not in ENCODERS:
+        raise AttackFormatError(f"{where}: encoder must be one of {sorted(ENCODERS)}")
+    if not re.fullmatch(r"canary|values:[0-9]{1,3}", source):
+        raise AttackFormatError(f"{where}: {{encode:{encoder}:...}} encodes `canary` or `values:N`")
 
 
 def _enforce(raw: dict[str, Any], repeat: int, where: str) -> Enforce:
@@ -360,7 +388,19 @@ def _monitor(raw: dict[str, Any], repeat: int, where: str) -> Monitor:
     layers = frozenset(str(x) for x in raw["would_block"])
     if not layers <= LAYERS:
         raise AttackFormatError(f"{where}: unknown layers {sorted(layers - LAYERS)}")
-    return Monitor(int(raw.get("first", 1)), int(raw.get("last", repeat)), layers)
+    outcome = raw.get("outcome", "forwarded")
+    blocked_by = raw.get("blocked_by")
+    if outcome not in ("forwarded", "blocked"):
+        raise AttackFormatError(f"{where}: a monitor outcome is forwarded or blocked")
+    if (outcome == "blocked") != (blocked_by is not None):
+        raise AttackFormatError(f"{where}: a blocked call names blocked_by, a forwarded one not")
+    if blocked_by is not None and blocked_by not in FLOOR_LAYERS:
+        raise AttackFormatError(
+            f"{where}: only a floor layer {sorted(FLOOR_LAYERS)} still blocks in a monitor run"
+        )
+    return Monitor(
+        int(raw.get("first", 1)), int(raw.get("last", repeat)), layers, outcome, blocked_by
+    )
 
 
 def _covers(ranges: tuple[Any, ...], repeat: int, where: str, what: str) -> None:

@@ -126,6 +126,7 @@ class Snapshot:
 
     tickets: Mapping[str, TicketState]
     comments: int
+    last_comment_id: int = 0
 
 
 @dataclass(frozen=True)
@@ -160,9 +161,48 @@ def take_snapshot(owner_url: str) -> Snapshot:
         rows = connection.execute(
             "SELECT id, status, priority, assignee FROM ticketing.tickets"
         ).fetchall()
-        comments = connection.execute("SELECT count(*) FROM ticketing.comments").fetchone()
+        comments = connection.execute(
+            "SELECT count(*), coalesce(max(id), 0) FROM ticketing.comments"
+        ).fetchone()
     assert comments is not None
-    return Snapshot({r[0]: TicketState(r[1], r[2], r[3]) for r in rows}, int(comments[0]))
+    return Snapshot(
+        {r[0]: TicketState(r[1], r[2], r[3]) for r in rows}, int(comments[0]), int(comments[1])
+    )
+
+
+def restore_snapshot(owner_url: str, before: Snapshot) -> int:
+    """Put the ticketing data back as the snapshot had it, so one attack's unauthorized writes
+    cannot change what the next one sees: tickets and comments made since are removed, and the
+    status, priority and assignee of the others are set back. Returns how many rows it touched.
+    (A ticket's `updated_at` is not restored.)"""
+    ids = list(before.tickets)
+    touched = 0
+    with psycopg.connect(owner_url) as connection:
+        deleted = connection.execute(
+            "DELETE FROM ticketing.comments WHERE id > %s OR NOT (ticket_id = ANY(%s))",
+            (before.last_comment_id, ids),
+        )
+        touched += deleted.rowcount
+        deleted = connection.execute(
+            "DELETE FROM ticketing.tickets WHERE NOT (id = ANY(%s))", (ids,)
+        )
+        touched += deleted.rowcount
+        for ticket_id, state in before.tickets.items():
+            updated = connection.execute(
+                "UPDATE ticketing.tickets SET status = %s, priority = %s, assignee = %s"
+                " WHERE id = %s AND (status, priority, assignee) IS DISTINCT FROM (%s, %s, %s)",
+                (
+                    state.status,
+                    state.priority,
+                    state.assignee,
+                    ticket_id,
+                    state.status,
+                    state.priority,
+                    state.assignee,
+                ),
+            )
+            touched += updated.rowcount
+    return touched
 
 
 @dataclass(frozen=True)
