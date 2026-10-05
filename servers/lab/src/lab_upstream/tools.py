@@ -128,34 +128,50 @@ def definitions(phase: str) -> list[Tool]:
 
 
 @dataclass
-class EffectLog:
-    """What the lab upstream has executed: counts, never an argument or a value. This is the
-    oracle's own view of the lab tools, apart from the gateway's records."""
-
-    phase: str
+class ClientEffects:
     calls: dict[str, int] = field(default_factory=dict)
     extra_arguments: int = 0
     oversized_arguments: int = 0
 
-    def record(self, tool: str, arguments: dict[str, Any]) -> None:
+    def snapshot(self) -> dict[str, Any]:
+        return {
+            "calls": dict(sorted(self.calls.items())),
+            "extra_arguments": self.extra_arguments,
+            "oversized_arguments": self.oversized_arguments,
+        }
+
+
+@dataclass
+class EffectLog:
+    """What the lab upstream has executed: counts, never an argument or a value, in total and for
+    each client (the gateway names the caller in `_meta`, so attacks of one phase can run at once,
+    each as a client of its own). This is the oracle's own view of the lab tools, apart from the
+    gateway's records."""
+
+    phase: str
+    total: ClientEffects = field(default_factory=ClientEffects)
+    by_client: dict[str, ClientEffects] = field(default_factory=dict)
+
+    def record(self, tool: str, arguments: dict[str, Any], client: str = "direct") -> None:
         named = _reviewed_arguments(tool)
-        self.calls[tool] = self.calls.get(tool, 0) + 1
-        self.extra_arguments += int(any(key not in named for key in arguments))
-        self.oversized_arguments += int(
+        extra = int(any(key not in named for key in arguments))
+        oversized = int(
             any(isinstance(v, str) and len(v) > OVERSIZED_CHARS for v in arguments.values())
         )
+        for effects in (self.total, self.by_client.setdefault(client, ClientEffects())):
+            effects.calls[tool] = effects.calls.get(tool, 0) + 1
+            effects.extra_arguments += extra
+            effects.oversized_arguments += oversized
 
     def reset(self) -> None:
-        self.calls.clear()
-        self.extra_arguments = 0
-        self.oversized_arguments = 0
+        self.total = ClientEffects()
+        self.by_client.clear()
 
     def snapshot(self) -> dict[str, Any]:
         return {
             "phase": self.phase,
-            "calls": dict(sorted(self.calls.items())),
-            "extra_arguments": self.extra_arguments,
-            "oversized_arguments": self.oversized_arguments,
+            **self.total.snapshot(),
+            "by_client": {name: e.snapshot() for name, e in sorted(self.by_client.items())},
         }
 
 

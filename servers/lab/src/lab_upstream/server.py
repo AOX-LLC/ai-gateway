@@ -20,6 +20,7 @@ from starlette.types import Receive, Scope, Send
 
 from lab_upstream.settings import LabSettings
 from lab_upstream.tools import PHASES, EffectLog, definitions, run
+from mcp_common.attribution import client_name_from_meta
 from mcp_common.credentials import ServiceCredentialMiddleware
 from mcp_common.http_app import build_mcp_app
 
@@ -56,7 +57,7 @@ def build_app(settings: LabSettings) -> Starlette:
             shown = params.name[:_MAX_ECHOED_NAME]
             raise MCPError(INVALID_PARAMS, f"Unknown tool '{shown}'.")
         arguments = params.arguments or {}
-        log.record(params.name, arguments)
+        log.record(params.name, arguments, client_name_from_meta(ctx.meta))
         return run(params.name, arguments)
 
     server: Server[Any] = Server(

@@ -6,7 +6,7 @@ Harborline Supply Co. is fictional, and so is everything the lab server says."""
 import json
 import tomllib
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import httpx2
 import pytest
@@ -15,6 +15,7 @@ from jsonschema import Draft202012Validator
 from mcp.client import Client
 from mcp.client.streamable_http import streamable_http_client
 from mcp.shared.exceptions import MCPError
+from mcp.types import RequestParamsMeta
 
 from ai_gateway.classifier.prompt import split_text
 from ai_gateway.pipeline.pins import definition_sha256
@@ -388,3 +389,50 @@ def test_neither_half_of_the_audit_sentence_carries_an_override_cue_or_a_reader_
 def test_the_audit_report_is_the_same_every_time_and_the_first_report_is_unchanged() -> None:
     assert long_audit_report() == long_audit_report()
     assert long_report().count(REPORT_INSTRUCTION) == 1
+
+
+# -- the effect log, per client: attacks of one phase can run at once, each as its own clone ------
+
+
+def test_the_effect_log_keeps_a_count_for_each_client_and_never_a_value() -> None:
+    from lab_upstream.tools import EffectLog
+
+    log = EffectLog("reviewed")
+    log.record("forward_note", {"note": "a"}, "client-one")
+    log.record("forward_note", {"note": "x" * 600, "forward_to": "somewhere"}, "client-two")
+    log.record("fetch_notice", {}, "client-two")
+
+    snapshot = log.snapshot()
+
+    assert snapshot["calls"] == {"fetch_notice": 1, "forward_note": 2}, "the totals are as before"
+    assert snapshot["by_client"]["client-one"] == {
+        "calls": {"forward_note": 1},
+        "extra_arguments": 0,
+        "oversized_arguments": 0,
+    }
+    assert snapshot["by_client"]["client-two"] == {
+        "calls": {"fetch_notice": 1, "forward_note": 1},
+        "extra_arguments": 1,
+        "oversized_arguments": 1,
+    }
+    assert "somewhere" not in json.dumps(snapshot)
+    log.reset()
+    assert log.snapshot()["by_client"] == {}
+
+
+@pytest.mark.anyio
+async def test_the_server_attributes_a_call_to_the_client_the_gateway_names(lab_url: str) -> None:
+    from mcp_common.attribution import CLIENT_META_KEY
+
+    async with (
+        httpx2.AsyncClient(headers={"Authorization": f"Bearer {TOKEN}"}) as http,
+        Client(streamable_http_client(f"{lab_url}/mcp", http_client=http), mode="legacy") as client,
+    ):
+        named = cast(RequestParamsMeta, {CLIENT_META_KEY: "harborline-lab-bot--demo"})
+        await client.call_tool("fetch_notice", {}, meta=named)
+        await client.call_tool("fetch_notice", {})
+
+    with _http() as sync:
+        by_client = sync.get(f"{lab_url}/effects").json()["by_client"]
+    assert by_client["harborline-lab-bot--demo"]["calls"] == {"fetch_notice": 1}
+    assert by_client["direct"]["calls"] == {"fetch_notice": 1}
