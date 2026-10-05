@@ -62,9 +62,16 @@ def test_a_failed_upstream_result_gets_it() -> None:
     assert result.meta == {REQUEST_ID_META_KEY: str(request_id)}
 
 
-def test_an_upstream_cannot_choose_the_id_a_client_reads() -> None:
+def test_an_upstream_cannot_choose_the_id_or_squat_the_gateways_namespace() -> None:
     request_id = uuid4()
-    forged = _text("ok", _meta={REQUEST_ID_META_KEY: "forged", "other": 1})
+    forged = _text(
+        "ok",
+        _meta={
+            REQUEST_ID_META_KEY: "forged",
+            "io.aox.ai-gateway/approval_id": "forged",
+            "other": 1,
+        },
+    )
 
     result = _with_request_id(forged, request_id)
 
