@@ -73,3 +73,29 @@ def test_the_lab_approver_approves_unless_a_run_says_reject() -> None:
 def test_any_other_decision_stops_the_lab_approver(value: str) -> None:
     with pytest.raises(SystemExit):
         lab_approver.decision_from_env(value)
+
+
+def test_the_lab_approver_says_when_it_is_ready_and_the_runner_waits_for_that_line() -> None:
+    """Writes made before the approver is connected get a pending result and are not approved: the
+    first column of an early scorecard run lost four benign writes to exactly that. The approver
+    prints a line once it has checked its login; the runner waits for it."""
+    from redteam.stack import APPROVER_READY
+
+    source = (ROOT / "scripts" / "auto_approver.py").read_text(encoding="utf-8")
+
+    assert APPROVER_READY in source
+    assert source.index(APPROVER_READY) > source.index("principal.id != f"), "after the login check"
+
+
+def test_changing_the_approver_never_re_runs_the_policy_setup_it_depends_on() -> None:
+    """`up --force-recreate lab-approver` alone also recreates policy-setup, which resets the lab
+    role's grants while attacks are running. Every compose call that names the lab approver in the
+    runner must pass --no-deps."""
+    import re
+
+    text = (ROOT / "scripts" / "redteam" / "scorecard_run.py").read_text(encoding="utf-8")
+    calls = re.findall(r"compose\((.*?)\)\s*$", text, flags=re.S | re.M)
+    naming = [call for call in calls if '"lab-approver"' in call]
+
+    assert naming, "the runner no longer starts the approver: update this test"
+    assert all('"--no-deps"' in call for call in naming)

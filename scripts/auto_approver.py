@@ -54,6 +54,9 @@ async def auto_approving(
     principal = await approvals.principal()
     if principal.id != f"human:{approver_id}":
         sys.exit(f"auto approval: the login is {principal.id}, not {approver_id}")
+    print(
+        f"READY: lab approver {approver_id} will {decision.value} every pending write", flush=True
+    )
 
     async def loop() -> None:
         while True:

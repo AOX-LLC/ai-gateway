@@ -16,6 +16,8 @@ from typing import Any
 
 import anyio
 
+APPROVER_READY = "READY: lab approver"
+"""The line the lab approver prints once its login is checked: the runner waits for it."""
 LOCK = Path.home() / "portfolio-projects" / ".locks" / "docker"
 _TOKEN = re.compile(r"aig_[a-z0-9]+_[A-Za-z0-9_-]{20,}")
 
@@ -76,6 +78,15 @@ class Stack:
         out = await self.compose("exec", "-T", "lab-upstream", "python", "-c", script)
         snapshot: dict[str, Any] = json.loads(out.strip().splitlines()[-1])
         return snapshot
+
+    async def wait_for_approver(self, attempts: int = 60) -> None:
+        """Wait until the lab approver says it is connected and approving."""
+        for _ in range(attempts):
+            logs = await self.compose("logs", "--no-color", "lab-approver")
+            if APPROVER_READY in logs:
+                return
+            await anyio.sleep(2)
+        raise StackError("the lab approver never said it was ready")
 
 
 def read_env_file(path: Path) -> dict[str, str]:

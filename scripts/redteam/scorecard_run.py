@@ -204,6 +204,9 @@ class Context:
     effects: Mapping[str, str]
     latency: dict[str, list[float]] = field(default_factory=dict)
     results: dict[str, dict[str, Observation]] = field(default_factory=dict)
+    approver: str = "approve"
+    """What the running lab approver does with a write: the stack starts it approving."""
+    approver_ready: bool = False
 
 
 def clone_of(attack: Attack) -> str:
@@ -245,7 +248,14 @@ async def run_column(ctx: Context, column: Column, attacks: Sequence[Attack]) ->
     print(f"== column {column.id}: {column.label}", flush=True)
     env = column_env(column)
     stack = ctx.stack
-    await stack.compose("up", "-d", "--force-recreate", "lab-approver", extra=env)
+    if column.approver != ctx.approver:
+        # Only the approver: its dependency, policy-setup, would reset the lab role's grants.
+        await stack.compose("up", "-d", "--force-recreate", "--no-deps", "lab-approver", extra=env)
+        ctx.approver = column.approver
+        ctx.approver_ready = False
+    if not ctx.approver_ready:
+        await stack.wait_for_approver()
+        ctx.approver_ready = True
     await stack.compose("up", "-d", "--force-recreate", "--wait", "gateway", extra=env)
     await _wait_for_gateway(ctx)
     snapshot = await anyio.to_thread.run_sync(take_snapshot, ctx.owner_url)
@@ -331,23 +341,24 @@ async def main_async(args: argparse.Namespace) -> int:
         ),
     )
     try:
-        if not args.no_up:
-            print("== building and starting the lab stack", flush=True)
+        print("== building and starting the lab stack", flush=True)
+        if not args.no_build:
             await stack.compose("build", *args.build)
-            await stack.compose("up", "-d", "--wait")
+        # `up` also reconciles a stack left running by an earlier run: what a new run's credentials
+        # change (the lab upstream, the gateway, the one-shot that makes the lab approver's role) is
+        # recreated.
+        await stack.compose("up", "-d", "--wait")
         print("== registering the lab upstream and a client for each attack", flush=True)
         await run(["uv", "run", "gateway-admin", "seed-demo"], base, ROOT)
         out = await run(["uv", "run", "gateway-admin", "seed-lab"], base, ROOT)
         ctx.tokens = json.loads(out[out.index("{") :])
         for column in columns:
             await run_column(ctx, column, attacks)
-        card = build(
-            COLUMNS if full else columns,
-            [attack_info(a) for a in attacks],
-            ctx.results,
-            ctx.latency,
-        )
-        return _finish(card, args, full)
+        if not full:
+            _print_partial(ctx.results, attacks)
+            return 0
+        card = build(COLUMNS, [attack_info(a) for a in attacks], ctx.results, ctx.latency)
+        return _finish(card, args)
     finally:
         if not args.no_down:
             try:
@@ -356,11 +367,24 @@ async def main_async(args: argparse.Namespace) -> int:
                 print(f"(the stack could not be removed: {redact(str(error))})", file=sys.stderr)
 
 
-def _finish(card: dict[str, Any], args: argparse.Namespace, full: bool) -> int:
+def _print_partial(
+    results: Mapping[str, Mapping[str, Observation]], attacks: Sequence[Attack]
+) -> None:
+    """A partial run writes nothing: it prints what each attack did, observed and predicted."""
+    print("(a partial run: nothing is written or checked)")
+    for column, rows in results.items():
+        for attack in attacks:
+            o = rows[attack.id]
+            flag = "" if o.success == o.predicted else "   <-- differs from the prediction"
+            print(
+                f"  {column:18} {attack.id:34} success={o.success!s:5} predicted={o.predicted!s:5} "
+                f"blocked={dict(o.blocked_by)} would_block={dict(o.would_block)} "
+                f"unclassified={o.unclassified}{' INCOMPLETE' if o.incomplete else ''}{flag}"
+            )
+
+
+def _finish(card: dict[str, Any], args: argparse.Namespace) -> int:
     text = json.dumps(card, indent=2, ensure_ascii=False) + "\n"
-    if not full:
-        print("(a partial run: nothing is written or checked)")
-        return 0
     if args.check:
         committed = json.loads((DOCS / "scorecard.json").read_text(encoding="utf-8"))
         if committed["deterministic"] != card["deterministic"]:
@@ -399,7 +423,7 @@ def main() -> None:
         metavar="SERVICE",
         help="build only these services' images (default: all, which retags the shared ones)",
     )
-    parser.add_argument("--no-up", action="store_true", help="the lab stack is already up")
+    parser.add_argument("--no-build", action="store_true", help="do not build any image")
     parser.add_argument("--no-down", action="store_true", help="leave the lab stack up afterwards")
     args = parser.parse_args()
     sys.exit(anyio.run(main_async, args))
