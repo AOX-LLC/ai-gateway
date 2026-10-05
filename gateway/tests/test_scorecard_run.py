@@ -255,3 +255,57 @@ def test_the_runner_never_sets_either_switch_itself() -> None:
 
     assert '"LAB_AUTO_APPROVE":' not in code
     assert '"LAB_MUTABLE_UPSTREAM":' not in code
+
+
+# -- the Docker side: what the runner refuses, and the shape of what it runs ---------------------
+
+
+def test_the_runner_never_names_the_real_project_and_always_passes_the_project_flag() -> None:
+    from redteam.stack import Stack
+
+    for name in ("ai-gateway", "ai-gateway-demo", "ai-gateway-verify"):
+        with pytest.raises(ValueError, match="holds data"):
+            Stack(ROOT, name, {})
+    stack = Stack(ROOT, "ai-gateway-scorecard", {})
+
+    assert stack.command("up", "-d")[:5] == [
+        "docker",
+        "compose",
+        "-p",
+        "ai-gateway-scorecard",
+        "--profile",
+    ]
+
+
+def test_the_approver_must_say_it_will_do_what_the_column_asks() -> None:
+    from redteam.stack import approver_ready_line
+
+    assert (
+        approver_ready_line("approve")
+        in "READY: lab approver lab-approver will approve every pending write"
+    )
+    assert (
+        approver_ready_line("reject")
+        not in "READY: lab approver lab-approver will approve every pending write"
+    )
+    assert (
+        approver_ready_line("reject")
+        in "READY: lab approver lab-approver will reject every pending write"
+    )
+
+
+def test_the_owner_url_quotes_a_password_with_awkward_characters() -> None:
+    url = run.owner_url(
+        {"POSTGRES_USER": "owner", "POSTGRES_PASSWORD": "p@ss/w:rd#1", "POSTGRES_DB": "db"}
+    )
+
+    assert url == "postgresql://owner:p%40ss%2Fw%3Ard%231@127.0.0.1:4402/db"
+
+
+def test_a_check_with_no_committed_scorecard_fails_before_any_stack_is_started(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(SystemExit) as stopped:
+        run.require_committed(tmp_path / "scorecard.json")
+
+    assert "make scorecard" in str(stopped.value)

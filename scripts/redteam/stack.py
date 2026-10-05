@@ -18,6 +18,14 @@ import anyio
 
 APPROVER_READY = "READY: lab approver"
 """The line the lab approver prints once its login is checked: the runner waits for it."""
+PROTECTED_PROJECTS = frozenset({"ai-gateway", "ai-gateway-demo", "ai-gateway-verify"})
+
+
+def approver_ready_line(decision: str) -> str:
+    """What the lab approver says when it is connected and about to `approve` or `reject`."""
+    return f"{APPROVER_READY} lab-approver will {decision} every pending write"
+
+
 LOCK = Path.home() / "portfolio-projects" / ".locks" / "docker"
 _TOKEN = re.compile(r"aig_[a-z0-9]+_[A-Za-z0-9_-]{20,}")
 
@@ -56,15 +64,30 @@ class Stack:
     """One Compose project (never the real `ai-gateway` one) with the lab profile."""
 
     def __init__(self, repo: Path, project: str, env: Mapping[str, str]) -> None:
+        if project in PROTECTED_PROJECTS:
+            raise ValueError(f"{project} holds data: the scorecard removes its volume at the end")
         self.repo = repo
         self.project = project
         self.env = {**env, "COMPOSE_PROJECT_NAME": project}
 
+    def command(self, *args: str) -> list[str]:
+        """`docker compose -p <project> --profile lab ...`: the project is always passed as a flag,
+        never left to the environment."""
+        return ["docker", "compose", "-p", self.project, "--profile", "lab", *args]
+
     async def compose(self, *args: str, extra: Mapping[str, str] | None = None) -> str:
         env = {**self.env, **(extra or {})}
-        return await run(
-            ["docker", "compose", "--profile", "lab", *args], env, self.repo, locked=True
+        return await run(self.command(*args), env, self.repo, locked=True)
+
+    async def set_lab_phase(self, phase: str) -> None:
+        """Put the lab upstream in a phase without restarting it (counts start afresh)."""
+        script = (
+            "import os,urllib.request;"
+            f"r=urllib.request.Request('http://127.0.0.1:4413/phase/{phase}',method='POST',"
+            "headers={'Authorization':'Bearer '+os.environ['LAB_SERVICE_TOKEN']});"
+            "urllib.request.urlopen(r,timeout=10).read()"
         )
+        await self.compose("exec", "-T", "lab-upstream", "python", "-c", script)
 
     async def lab_effects(self) -> dict[str, Any]:
         """The lab upstream's own count of what it executed, read from inside the network (it
@@ -79,12 +102,12 @@ class Stack:
         snapshot: dict[str, Any] = json.loads(out.strip().splitlines()[-1])
         return snapshot
 
-    async def wait_for_approver(self, attempts: int = 60) -> None:
-        """Wait until the lab approver says it is connected and approving."""
+    async def wait_for_approver(self, decision: str, attempts: int = 60) -> None:
+        """Wait until the lab approver says it is connected and will `decision` every write."""
         logs = ""
         for _ in range(attempts):
             logs = await self.compose("logs", "--no-color", "lab-approver")
-            if APPROVER_READY in logs:
+            if approver_ready_line(decision) in logs:
                 return
             await anyio.sleep(2)
         tail = redact("\n".join(logs.splitlines()[-6:]))

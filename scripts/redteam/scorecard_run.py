@@ -26,6 +26,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import anyio
 
@@ -80,6 +81,19 @@ def column_env(column: Column) -> dict[str, str]:
         "GATEWAY_CATALOG_REFRESH_S": str(CATALOG_REFRESH_S),
         "LAB_APPROVER_DECISION": column.approver,
     }
+
+
+def owner_url(env_file: Mapping[str, str]) -> str:
+    """The database owner's URL on 04's port, with the user and password quoted."""
+    user = quote(env_file["POSTGRES_USER"], safe="")
+    password = quote(env_file["POSTGRES_PASSWORD"], safe="")
+    return f"postgresql://{user}:{password}@127.0.0.1:4402/{env_file['POSTGRES_DB']}"
+
+
+def require_committed(path: Path) -> None:
+    """A check against an uncommitted scorecard cannot pass: say so before a stack starts."""
+    if not path.is_file():
+        sys.exit(f"scorecard_run: {path} is not committed yet: run `make scorecard` first")
 
 
 def approver_env() -> dict[str, str]:
@@ -261,9 +275,10 @@ async def run_column(ctx: Context, column: Column, attacks: Sequence[Attack]) ->
         ctx.approver = column.approver
         ctx.approver_ready = False
     if not ctx.approver_ready:
-        await stack.wait_for_approver()
+        await stack.wait_for_approver(ctx.approver)
         ctx.approver_ready = True
-    await stack.compose("up", "-d", "--force-recreate", "--wait", "gateway", extra=env)
+    # Only the gateway: its dependencies (migrate, the setups) would run again and reset the roles.
+    await stack.compose("up", "-d", "--force-recreate", "--no-deps", "--wait", "gateway", extra=env)
     await _wait_for_gateway(ctx)
     snapshot = await anyio.to_thread.run_sync(take_snapshot, ctx.owner_url)
     made = plan(attacks)
@@ -279,17 +294,8 @@ async def run_column(ctx: Context, column: Column, attacks: Sequence[Attack]) ->
         record(attack, await _one(ctx, column, attack))
         await anyio.to_thread.run_sync(restore_snapshot, ctx.owner_url, snapshot)
     for phase, group in made.lab.items():
-        await stack.compose(
-            "up",
-            "-d",
-            "--force-recreate",
-            "--wait",
-            "lab-upstream",
-            extra={**env, "LAB_UPSTREAM_PHASE": phase},
-        )
-        await anyio.sleep(
-            2 * CATALOG_REFRESH_S + 2
-        )  # the gateway's catalogue sees the new definitions
+        await stack.set_lab_phase(phase)
+        await anyio.sleep(2 * CATALOG_REFRESH_S + 1)  # the catalogue sees the new definitions
         ran_group = await _concurrently(ctx, column, group)
         counts = await stack.lab_effects()
         for attack in group:
@@ -332,6 +338,8 @@ def require_switches(env: Mapping[str, str]) -> None:
 
 async def main_async(args: argparse.Namespace) -> int:
     require_switches(os.environ)
+    if args.check:
+        require_committed(DOCS / "scorecard.json")
     attacks = load_attacks(args.attacks)
     columns = [c for c in COLUMNS if not args.columns or c.id in args.columns]
     full = not args.attacks and not args.columns
@@ -346,10 +354,7 @@ async def main_async(args: argparse.Namespace) -> int:
         }
     )
     stack = Stack(ROOT, PROJECT, base)
-    owner = (
-        f"postgresql://{env_file['POSTGRES_USER']}:{env_file['POSTGRES_PASSWORD']}"
-        f"@127.0.0.1:4402/{env_file['POSTGRES_DB']}"
-    )
+    owner = owner_url(env_file)
     ctx = Context(
         stack=stack,
         owner_url=owner,

@@ -436,3 +436,54 @@ async def test_the_server_attributes_a_call_to_the_client_the_gateway_names(lab_
         by_client = sync.get(f"{lab_url}/effects").json()["by_client"]
     assert by_client["harborline-lab-bot--demo"]["calls"] == {"fetch_notice": 1}
     assert by_client["direct"]["calls"] == {"fetch_notice": 1}
+
+
+# -- switching phase at run time: no restart, so the catalogue never sees the upstream down -----
+
+
+@pytest.mark.anyio
+async def test_the_phase_can_be_switched_with_the_credential_and_the_definitions_follow(
+    lab_url: str,
+) -> None:
+    async def names(url: str) -> dict[str, str]:
+        try:
+            async with (
+                httpx2.AsyncClient(headers={"Authorization": f"Bearer {TOKEN}"}) as http,
+                Client(streamable_http_client(f"{url}/mcp", http_client=http), mode="legacy") as c,
+            ):
+                return {t.name: t.description or "" for t in (await c.list_tools()).tools}
+        except BaseExceptionGroup as group:
+            raise group.exceptions[0] from None
+
+    assert set(await names(lab_url)) == set(REVIEWED_TOOLS)
+    with _http() as sync:
+        assert sync.post(f"{lab_url}/phase/poisoned").json() == {"phase": "poisoned"}
+        assert sync.get(f"{lab_url}/effects").json()["phase"] == "poisoned"
+    poisoned = await names(lab_url)
+    assert {"summarize_account", "lookup_record"} <= set(poisoned)
+    with _http() as sync:
+        sync.post(f"{lab_url}/phase/rugpulled")
+    pulled = await names(lab_url)
+    assert "customer email" in pulled["fetch_notice"].lower()
+    with _http() as sync:
+        sync.post(f"{lab_url}/phase/reviewed")
+    assert await names(lab_url) == {t.name: t.description or "" for t in definitions("reviewed")}
+
+
+def test_the_phase_endpoint_needs_the_credential_and_a_real_phase_and_a_post(lab_url: str) -> None:
+    with httpx2.Client() as bare:
+        assert bare.post(f"{lab_url}/phase/poisoned").status_code == 401
+    with _http() as sync:
+        assert sync.post(f"{lab_url}/phase/evil").status_code == 400
+        assert sync.post(f"{lab_url}/phase/").status_code in (400, 404, 405)
+        assert sync.get(f"{lab_url}/phase/poisoned").status_code == 405
+        assert sync.get(f"{lab_url}/effects").json()["phase"] == "reviewed", "nothing changed"
+
+
+@pytest.mark.anyio
+async def test_switching_phase_starts_a_fresh_effect_log(lab_url: str) -> None:
+    await _call(lab_url, "fetch_notice", {})
+    with _http() as sync:
+        assert sync.get(f"{lab_url}/effects").json()["calls"] == {"fetch_notice": 1}
+        sync.post(f"{lab_url}/phase/rugpulled")
+        assert sync.get(f"{lab_url}/effects").json()["calls"] == {}
