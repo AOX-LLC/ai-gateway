@@ -2,7 +2,7 @@
 // Usage: node edit.ts <light|dark>
 // Outputs (under out/<theme>/): dashboard.gif, dashboard.mp4, dashboard.webm
 import { mkdirSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { FPS, HEIGHT, WIDTH, ffmpeg, kilobytes, parseTheme, probeDurationSeconds, readTimeline, themeDir } from "./lib.ts";
 import type { Scene } from "./lib.ts";
 
@@ -41,7 +41,7 @@ function buildSceneClip(raw: string, work: string, scene: Scene): string {
 
 // Concat demuxer with stream copy: every clip shares codec, size and frame rate.
 function concatClips(clips: string[], out: string, work: string): void {
-  const list = join(work, `${out.split("/").pop()}.txt`);
+  const list = join(work, `${basename(out)}.txt`);
   writeFileSync(list, clips.map((clip) => `file '${clip}'\n`).join(""));
   ffmpeg(["-f", "concat", "-safe", "0", "-i", list, "-c", "copy", out]);
 }

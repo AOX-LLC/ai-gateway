@@ -11,7 +11,7 @@
 // It checks what it is filming and fails rather than record the wrong thing: the "Sample data" pill is
 // on screen at the end of every scene, no hostname or address is in the page text, the fonts loaded and
 // the browser's console shows no error. (OCR of the finished frames is a second check: check-frames.ts.)
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { chromium } from "playwright";
 import type { Browser, Page } from "playwright";
@@ -22,15 +22,18 @@ const BASE_URL = process.env.DASHBOARD_URL ?? "http://127.0.0.1:4400";
 const PASSWORD_FILE = join(REPO_DIR, ".demo", "password");
 const VIEWPORT = { width: WIDTH, height: HEIGHT };
 
-/** The panels the clip visits, in order. The traffic simulator runs under all of them. */
+/** How the clip moves: a scroll takes SCROLL_MS and stops BELOW_TOPBAR_PX under the pinned topbar. */
 const SCROLL_MS = 1400;
 const SETTLE_MS = 600;
 const BELOW_TOPBAR_PX = 72;
+
+/** How long each panel is held, in recorded time. The traffic simulator runs under all of them. */
 const LIVE_HOLD_MS = 20_000;
 const LAYERS_HOLD_MS = 6_000;
 const DECISIONS_HOLD_MS = 14_000;
 const APPROVALS_HOLD_MS = 6_000;
 
+/** Above the page content, which has its own sticky table headers (z-index 1). */
 const TOPBAR_STACKING = "20";
 
 const HOSTNAME = /127\.0\.0\.1|localhost|\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b|tailscale|\.ts\.net|\.local\b/;
@@ -61,6 +64,7 @@ async function signInOffCamera(browser: Browser): Promise<string> {
   if (themeName === "light") await page.getByRole("button", { name: "Switch to light theme" }).click();
   const statePath = join(outDir, "state.json");
   await context.storageState({ path: statePath });
+  chmodSync(statePath, 0o600); // it holds a session cookie
   await context.close();
   return statePath;
 }
@@ -166,11 +170,7 @@ async function recordScenes(page: Page): Promise<void> {
   );
 }
 
-async function main(): Promise<void> {
-  rmSync(outDir, { recursive: true, force: true });
-  mkdirSync(outDir, { recursive: true });
-  const browser = await chromium.launch();
-  const statePath = await signInOffCamera(browser);
+async function recordTake(browser: Browser, statePath: string): Promise<void> {
   const context = await browser.newContext({
     viewport: VIEWPORT,
     colorScheme: themeName,
@@ -191,9 +191,20 @@ async function main(): Promise<void> {
   const video = page.video();
   await context.close();
   await video?.saveAs(join(outDir, "raw.webm"));
-  rmSync(join(outDir, "video-tmp"), { recursive: true, force: true });
-  rmSync(statePath, { force: true });
-  await browser.close();
+}
+
+async function main(): Promise<void> {
+  rmSync(outDir, { recursive: true, force: true });
+  mkdirSync(outDir, { recursive: true });
+  const browser = await chromium.launch();
+  try {
+    await recordTake(browser, await signInOffCamera(browser));
+  } finally {
+    // The session cookie and the scratch video go whether or not the take worked.
+    rmSync(join(outDir, "state.json"), { force: true });
+    rmSync(join(outDir, "video-tmp"), { recursive: true, force: true });
+    await browser.close();
+  }
   writeFileSync(
     join(outDir, "timeline.json"),
     JSON.stringify({ project: "ai-gateway", theme: themeName, scenes }, null, 2),

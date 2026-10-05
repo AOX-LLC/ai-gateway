@@ -5,7 +5,7 @@
 #   scripts/run_dashboard_demo.sh up        # build and start the stack (compose.yaml + compose.demo.yaml)
 #   scripts/run_dashboard_demo.sh seed      # two demo approvers, a week of telemetry, the approval queue
 #   scripts/run_dashboard_demo.sh traffic [simulate_traffic.py options]
-#                                           # live, read-only simulated traffic as the fictional bots (default: 120 calls over 60 s)
+#                                           # live simulated traffic as the fictional bots, no writes of its own (default: 120 calls over 60 s)
 #   scripts/run_dashboard_demo.sh shots     # sign in, exercise the dashboard, save docs/images/*.png
 #   scripts/run_dashboard_demo.sh memory    # measure the dashboard container's memory under load
 #   scripts/run_dashboard_demo.sh down      # remove the stack and its data
@@ -94,8 +94,8 @@ seed() {
   nice -n 19 uv run scripts/seed_dashboard_demo.py --tokens-file "$STATE/tokens.json"
 }
 
-# Live traffic on the seeded stack, for the clips. Read-only, because a write waits for a person and
-# the simulator only sends one with an approver. It issues new demo tokens (and so revokes the old ones).
+# Live traffic on the seeded stack, for the clips. It sends no writes of its own (a write waits for a person,
+# and the simulator sends one only with an approver); the refused attempts and failed logins stay. It issues new demo tokens (and so revokes the old ones).
 traffic() {
   local options=("$@")
   [ ${#options[@]} -gt 0 ] || options=(--calls 120 --duration 60)

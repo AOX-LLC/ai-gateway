@@ -19,9 +19,12 @@ for theme in "${themes[@]}"; do
   case "$theme" in light|dark) ;; *) echo "theme must be light or dark, got: $theme" >&2; exit 2 ;; esac
 done
 
+# Job control, so the traffic stream (a shell, uv and the simulator) is one process group that cleanup can
+# stop whole: killing only the shell would leave the simulator sending at the next stack, with revoked tokens.
+set -m
 traffic_pid=""
 cleanup() {
-  [ -z "$traffic_pid" ] || kill "$traffic_pid" 2>/dev/null || true
+  [ -z "$traffic_pid" ] || kill -- "-$traffic_pid" 2>/dev/null || true
   $RUN down
 }
 trap cleanup EXIT
@@ -37,5 +40,5 @@ for theme in "${themes[@]}"; do
   echo "== record $theme"
   THEME=$theme nice -n 19 node demo/record.ts
 done
-wait "$traffic_pid" || true
+wait "$traffic_pid" || echo "warning: the traffic stream ended with an error, so the clips may show less live traffic" >&2
 traffic_pid=""
