@@ -581,3 +581,43 @@ def test_result_validation_is_a_setting_of_the_pipeline_file_and_part_of_its_fin
     for bad in ({"schema": {"validate_results": "yes"}}, {"schema": {"nope": 1}}, {"schema": 3}):
         with pytest.raises(PipelineConfigError):
             parse_pipeline_config(bad, LAYER_ORDER)
+
+
+# -- weakening a floor layer needs two things: the flag, and the lab's own switch -----------------
+
+
+def test_a_floor_layer_is_weakened_only_with_the_flag_and_the_lab_switch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw = {"layers": {"floor": "off"}, "safety": {"allow_floor_override": True}}
+    monkeypatch.delenv("LAB_FLOOR_OVERRIDE", raising=False)
+
+    with pytest.raises(PipelineConfigError, match="LAB_FLOOR_OVERRIDE=yes"):
+        parse_pipeline_config(raw, (FloorLayer,))
+    for wrong in ("", "no", "true", "YES", "yes "):
+        monkeypatch.setenv("LAB_FLOOR_OVERRIDE", wrong)
+        with pytest.raises(PipelineConfigError, match="LAB_FLOOR_OVERRIDE=yes"):
+            parse_pipeline_config(raw, (FloorLayer,))
+    monkeypatch.setenv("LAB_FLOOR_OVERRIDE", "yes")
+    assert parse_pipeline_config(raw, (FloorLayer,)).modes["floor"] is LayerMode.OFF
+
+
+def test_the_lab_switch_is_not_needed_when_no_floor_layer_is_weakened(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("LAB_FLOOR_OVERRIDE", raising=False)
+
+    config = parse_pipeline_config(
+        {"layers": {"floor": "enforce"}, "safety": {"allow_floor_override": True}}, (FloorLayer,)
+    )
+
+    assert config.modes["floor"] is LayerMode.ENFORCE
+
+
+def test_the_flag_alone_never_weakens_a_floor_layer_even_with_the_switch_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LAB_FLOOR_OVERRIDE", "yes")
+
+    with pytest.raises(PipelineConfigError, match="allow_floor_override"):
+        parse_pipeline_config({"layers": {"floor": "monitor"}}, (FloorLayer,))

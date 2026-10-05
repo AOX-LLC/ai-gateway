@@ -324,15 +324,20 @@ async def _wait_for_gateway(ctx: Context) -> None:
     raise StackError(f"the lab gateway never offered the lab tools ({last})")
 
 
+SWITCHES = ("LAB_AUTO_APPROVE", "LAB_MUTABLE_UPSTREAM", "LAB_FLOOR_OVERRIDE")
+
+
 def require_switches(env: Mapping[str, str]) -> None:
-    """The two lab switches are the caller's to turn on, as for every lab script: this refuses to
-    start unless both are exactly `yes` in its environment, and sets neither."""
-    if env.get("LAB_AUTO_APPROVE") != "yes" or env.get("LAB_MUTABLE_UPSTREAM") != "yes":
+    """The three lab switches are the caller's to turn on, as for every lab script: this refuses
+    to start unless each is exactly `yes` in its environment, and sets none. They start the lab
+    approver and the lab upstream and let two columns weaken a floor layer: test tooling that
+    defeats or abuses a control on purpose, on a fictional stack."""
+    if any(env.get(name) != "yes" for name in SWITCHES):
+        given = " ".join(f"{name}=yes" for name in SWITCHES)
         sys.exit(
-            "scorecard_run: this starts the lab approver and the lab upstream, test tooling that"
-            " defeats or abuses a control on purpose, on a fictional stack. Run it with"
-            " LAB_AUTO_APPROVE=yes and LAB_MUTABLE_UPSTREAM=yes in front, e.g."
-            " `LAB_AUTO_APPROVE=yes LAB_MUTABLE_UPSTREAM=yes make scorecard`."
+            "scorecard_run: this starts the lab approver and the lab upstream and weakens floor "
+            f"layers in two columns, on a fictional stack. Run it with {given} in front, e.g. "
+            f"`{given} make scorecard`."
         )
 
 

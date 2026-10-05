@@ -202,6 +202,9 @@ services:
       TICKETING_SERVICE_TOKEN: ${TICKETING_SERVICE_TOKEN:?set it in .env}
       CRM_SERVICE_TOKEN: ${CRM_SERVICE_TOKEN:?set it in .env}
       HANDBOOK_SERVICE_TOKEN: ${HANDBOOK_SERVICE_TOKEN:?set it in .env}
+      # A floor layer can be weakened only with this on as well as allow_floor_override in the file
+      # (the red-team lab: empty, so never, by default).
+      LAB_FLOOR_OVERRIDE: ${LAB_FLOOR_OVERRIDE:-}
       # The lab upstream's credential, empty unless a scorecard run gives it (the lab profile only).
       LAB_UPSTREAM_SERVICE_TOKEN: ${LAB_UPSTREAM_TOKEN:-}
     ports:

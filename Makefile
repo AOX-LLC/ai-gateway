@@ -1,12 +1,12 @@
 # Reproducible scorecard targets. Harborline Supply Co. is fictional.
 #
-#   LAB_AUTO_APPROVE=yes LAB_MUTABLE_UPSTREAM=yes make scorecard
+#   LAB_AUTO_APPROVE=yes LAB_MUTABLE_UPSTREAM=yes LAB_FLOOR_OVERRIDE=yes make scorecard
 #                          run every attack against a fresh lab stack (its own Compose project, removed
 #                          at the end), replay mode, no API key; rewrite docs/scorecard.{json,md} and
 #                          docs/images/scorecard.svg. Needs Docker and ports 4400-4402 free.
 #   make scorecard-check   the static check (no stack): the committed scorecard, its rendered files
 #                          and the generated lab configuration agree. Runs on every pull request.
-#   LAB_AUTO_APPROVE=yes LAB_MUTABLE_UPSTREAM=yes make scorecard-verify
+#   LAB_AUTO_APPROVE=yes LAB_MUTABLE_UPSTREAM=yes LAB_FLOOR_OVERRIDE=yes make scorecard-verify
 #                          regenerate on a stack and fail if the committed deterministic part differs.
 #   make lab-config        rewrite the generated lab configuration (config/lab/).
 #

@@ -4,7 +4,7 @@
     scope = "enforce"        # enforce | monitor | off
 
     [safety]
-    allow_floor_override = false
+    allow_floor_override = false     # weakening a floor layer also needs LAB_FLOOR_OVERRIDE=yes
     allow_unaudited_writes = false   # a write is refused when its audit record cannot be written
 
     [schema]
@@ -18,6 +18,7 @@ the override flag. A layer the file does not mention runs in enforce mode.
 import hashlib
 import json
 import logging
+import os
 import tomllib
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -31,6 +32,7 @@ logger = logging.getLogger(__name__)
 
 _TOP_LEVEL_KEYS = frozenset({"layers", "safety", "schema"})
 _SCHEMA_KEYS = frozenset({"validate_results"})
+LAB_FLOOR_OVERRIDE_ENV = "LAB_FLOOR_OVERRIDE"
 _SAFETY_KEYS = frozenset({"allow_floor_override", "allow_unaudited_writes"})
 
 
@@ -130,6 +132,13 @@ def _check_floor_layers(
         raise PipelineConfigError(
             f"floor layers {weakened} can only be weakened with"
             " [safety] allow_floor_override = true"
+        )
+    if os.environ.get(LAB_FLOOR_OVERRIDE_ENV) != "yes":
+        # A second, separate switch: a file that says allow_floor_override = true is not enough on
+        # its own, so no one variable pointing the gateway at a lab pipeline can weaken a floor.
+        raise PipelineConfigError(
+            f"floor layers {weakened} can only be weakened by the red-team lab: it also needs"
+            f" {LAB_FLOOR_OVERRIDE_ENV}=yes in the environment"
         )
     logger.warning("floor layers weakened by configuration: %s", weakened)
 

@@ -223,38 +223,43 @@ def test_a_token_in_the_output_of_a_command_is_never_what_the_runner_prints() ->
     assert redact("plain text") == "plain text"
 
 
+ALL_THREE = {"LAB_AUTO_APPROVE": "yes", "LAB_MUTABLE_UPSTREAM": "yes", "LAB_FLOOR_OVERRIDE": "yes"}
+
+
 @pytest.mark.parametrize(
     "env",
     [
         {},
         {"LAB_AUTO_APPROVE": "yes"},
-        {"LAB_MUTABLE_UPSTREAM": "yes"},
-        {"LAB_AUTO_APPROVE": "true", "LAB_MUTABLE_UPSTREAM": "yes"},
-        {"LAB_AUTO_APPROVE": "yes", "LAB_MUTABLE_UPSTREAM": "YES"},
-        {"LAB_AUTO_APPROVE": "yes ", "LAB_MUTABLE_UPSTREAM": "yes"},
+        {"LAB_MUTABLE_UPSTREAM": "yes", "LAB_FLOOR_OVERRIDE": "yes"},
+        {"LAB_AUTO_APPROVE": "yes", "LAB_MUTABLE_UPSTREAM": "yes"},
+        {**ALL_THREE, "LAB_FLOOR_OVERRIDE": "true"},
+        {**ALL_THREE, "LAB_MUTABLE_UPSTREAM": "YES"},
+        {**ALL_THREE, "LAB_AUTO_APPROVE": "yes "},
     ],
 )
-def test_the_runner_refuses_to_start_unless_the_caller_switched_both_lab_tools_on(
+def test_the_runner_refuses_to_start_unless_the_caller_switched_all_three_lab_tools_on(
     env: dict[str, str],
 ) -> None:
     """The switches are the caller's to turn on, as for every lab script: nothing here sets them."""
     with pytest.raises(SystemExit) as stopped:
         run.require_switches(env)
 
-    assert "LAB_AUTO_APPROVE=yes" in str(stopped.value)
-    assert "LAB_MUTABLE_UPSTREAM=yes" in str(stopped.value)
+    for name in ("LAB_AUTO_APPROVE", "LAB_MUTABLE_UPSTREAM", "LAB_FLOOR_OVERRIDE"):
+        assert f"{name}=yes" in str(stopped.value)
 
 
-def test_both_switches_exactly_yes_let_the_runner_start() -> None:
-    run.require_switches({"LAB_AUTO_APPROVE": "yes", "LAB_MUTABLE_UPSTREAM": "yes"})
+def test_all_three_switches_exactly_yes_let_the_runner_start() -> None:
+    run.require_switches(ALL_THREE)
 
 
-def test_the_runner_never_sets_either_switch_itself() -> None:
+def test_the_runner_never_sets_any_switch_itself() -> None:
     text = (ROOT / "scripts" / "redteam" / "scorecard_run.py").read_text(encoding="utf-8")
     code = "\n".join(line.split("#", 1)[0] for line in text.splitlines())
 
     assert '"LAB_AUTO_APPROVE":' not in code
     assert '"LAB_MUTABLE_UPSTREAM":' not in code
+    assert '"LAB_FLOOR_OVERRIDE":' not in code
 
 
 # -- the Docker side: what the runner refuses, and the shape of what it runs ---------------------

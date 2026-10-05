@@ -114,3 +114,7 @@ def test_the_lab_approver_reads_the_lab_roles_when_a_scorecard_run_says_so() -> 
     assert env["LAB_APPROVAL_ROLES_FILE_IN_CONTAINER"] == "/app/config/lab/approval_roles.lab.toml"
     assert (ROOT / "config" / "lab" / "approval_roles.lab.toml").is_file()
     assert "lab__forward_note" in (ROOT / "config" / "lab" / "approval_roles.lab.toml").read_text()
+
+
+def test_the_floor_override_switch_reaches_the_gateway_empty_unless_a_run_gives_it() -> None:
+    assert GATEWAY["LAB_FLOOR_OVERRIDE"] == "${LAB_FLOOR_OVERRIDE:-}"

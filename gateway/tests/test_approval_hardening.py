@@ -365,7 +365,8 @@ def test_the_default_environment_and_the_workflow_do_not_switch_it_on_globally()
     ]
     assert len(regenerate) == 1
     # Exactly two places, both named steps on the fictional stack: the acceptance attack, and the
-    # scorecard's regeneration (which also needs LAB_MUTABLE_UPSTREAM, turned on beside it).
+    # scorecard's regeneration (which also needs LAB_MUTABLE_UPSTREAM and LAB_FLOOR_OVERRIDE, on
+    # beside it).
     assert paths == [
         f"ci.yml:jobs.e2e.steps[{named[0]}].env.LAB_AUTO_APPROVE",
         f"ci.yml:jobs.scorecard.steps[{regenerate[0]}].env.LAB_AUTO_APPROVE",
@@ -374,6 +375,7 @@ def test_the_default_environment_and_the_workflow_do_not_switch_it_on_globally()
     assert scorecard[regenerate[0]]["env"] == {
         "LAB_AUTO_APPROVE": "yes",
         "LAB_MUTABLE_UPSTREAM": "yes",
+        "LAB_FLOOR_OVERRIDE": "yes",
     }
     assert (
         "pull_request"

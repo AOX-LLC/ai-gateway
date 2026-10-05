@@ -323,11 +323,13 @@ jobs:
       - name: Create .env with fresh secrets
         run: python3 scripts/init_env.py
       - name: Regenerate the scorecard and compare it with the committed one
-        # The lab approver and the lab upstream are test tooling on the fictional stack: the switches
-        # are turned on here, for this step only, as the runner will not start without them.
+        # The lab approver, the lab upstream and two columns that weaken a floor layer are test tooling
+        # on the fictional stack: the switches are turned on here, for this step only, as the runner
+        # will not start without them.
         env:
           LAB_AUTO_APPROVE: "yes"
           LAB_MUTABLE_UPSTREAM: "yes"
+          LAB_FLOOR_OVERRIDE: "yes"
         run: make scorecard-verify
 
   secrets:

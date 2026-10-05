@@ -119,7 +119,8 @@ validate_results = true  # a result's structured content must fit the pinned out
 - **Mistakes stop startup.** An unknown layer, mode or key stops the gateway from starting.
 - **Fail safe.** A layer the file does not mention runs in `enforce`.
 - **Floor layers are guarded.** `scope` and `approval` are floor layers: setting either to
-  monitor or off needs `allow_floor_override = true` and logs a warning. In `monitor` the
+  monitor or off needs `allow_floor_override = true` and, since Phase 6c, `LAB_FLOOR_OVERRIDE=yes` in
+  the environment (the red-team lab's switch: a file alone cannot weaken a floor), and logs a warning. In `monitor` the
   approval layer reports that a write would have needed approval, asks nobody, and lets it go on.
 
 To produce the scorecard, the red-team harness writes one file per column and restarts the
@@ -1050,8 +1051,8 @@ model meeting unseen text.
 
 ### The scorecard (Phase 6c)
 
-`make scorecard` (with `LAB_AUTO_APPROVE=yes LAB_MUTABLE_UPSTREAM=yes` in front: the runner sets
-neither and refuses to start without both) runs every attack against a fresh lab Compose project
+`make scorecard` (with `LAB_AUTO_APPROVE=yes LAB_MUTABLE_UPSTREAM=yes LAB_FLOOR_OVERRIDE=yes` in front: the
+runner sets none and refuses to start without all three) runs every attack against a fresh lab Compose project
 (`ai-gateway-scorecard`, its own volume, removed at the end; never the real stack), once for each of
 seventeen *columns*, in replay mode with no API key, and writes `docs/scorecard.json`,
 `docs/scorecard.md` (rendered from the JSON alone) and `docs/images/scorecard.svg`.
