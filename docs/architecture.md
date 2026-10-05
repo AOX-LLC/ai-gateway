@@ -129,9 +129,9 @@ Every tool result carries the gateway's own request id in its `_meta`, under
 upstream failure alike. Every error the gateway answers a call with, once the caller is
 authenticated, carries it in its `data`, as `request_id` and under the same `_meta` key. It is the id
 the call's audit and telemetry rows carry, so a client can join its own record to the gateway's. The
-gateway mints it for each call: a correlation key a client sends is ignored and never echoed. Keys an
-upstream returns in its own result `_meta` under the `io.aox.ai-gateway/` prefix are dropped; the rest
-of an upstream's `_meta` is passed through as it always was and is not scanned by any layer.
+gateway mints it for each call: a correlation key a client sends is ignored and never echoed. A
+result's `_meta` is the gateway's alone: whatever `_meta` an upstream returned is dropped, so nothing an
+upstream says reaches a client as metadata or can pass for the gateway's.
 
 ### Errors clients see
 

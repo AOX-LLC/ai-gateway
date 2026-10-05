@@ -51,11 +51,6 @@ always the gateway's: it is minted for each call, and nothing a client sends is 
 echoed back (a client's `_meta` is dropped before it reaches the pipeline). It is the id the call's
 audit and telemetry rows carry."""
 
-META_NAMESPACE = "io.aox.ai-gateway/"
-"""Keys under this prefix belong to the gateway. An upstream's own `_meta` is passed through as it
-was in v0.1.0, except that keys in this namespace are dropped, so nothing an upstream returns can
-pass for gateway metadata. The rest of an upstream's `_meta` is not examined."""
-
 _UPSTREAM_FAILURE_MESSAGES = {
     UpstreamStatus.TIMEOUT: "The '{namespace}' service did not answer in time.",
     UpstreamStatus.UNAVAILABLE: "The '{namespace}' service is unavailable.",
@@ -192,12 +187,11 @@ def _pending_result(deny: Deny) -> CallToolResult:
 
 
 def _with_request_id(result: CallToolResult, request_id: UUID) -> CallToolResult:
-    """The result with the gateway's request id in its `_meta`, whatever the call came to: a
-    success, a tool's own error, a pending write, a failed upstream. Keys an upstream put in the
-    gateway's namespace are dropped, so the value under ours is always the gateway's."""
-    kept = {k: v for k, v in (result.meta or {}).items() if not k.startswith(META_NAMESPACE)}
-    meta = {**kept, REQUEST_ID_META_KEY: str(request_id)}
-    return result.model_copy(update={"meta": meta})
+    """The result with a `_meta` that is the gateway's alone: its request id, whatever the call came
+    to (a success, a tool's own error, a pending write, a failed upstream). Whatever `_meta` an
+    upstream returned is dropped, so nothing an upstream says can reach a client as metadata, or
+    pass for the gateway's."""
+    return result.model_copy(update={"meta": {REQUEST_ID_META_KEY: str(request_id)}})
 
 
 def _error_data(request_id: UUID) -> dict[str, Any]:
