@@ -314,3 +314,33 @@ def test_a_check_with_no_committed_scorecard_fails_before_any_stack_is_started(
         run.require_committed(tmp_path / "scorecard.json")
 
     assert "make scorecard" in str(stopped.value)
+
+
+def test_a_stack_command_is_locked_where_the_shared_lock_exists_and_runs_without_it_elsewhere(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On a CI runner there is no `~/portfolio-projects/.locks`: the first run of the scorecard job
+    on main failed there with `flock: cannot open lock file`, before it ran an attack."""
+    from redteam import stack
+
+    monkeypatch.setattr(stack, "LOCK", tmp_path / "no-such-directory" / "docker")
+    assert stack.lock_prefix() == []
+
+    lock = tmp_path / "locks" / "docker"
+    lock.parent.mkdir()
+    monkeypatch.setattr(stack, "LOCK", lock)
+    assert stack.lock_prefix() == ["flock", str(lock)]
+
+
+@pytest.mark.anyio
+async def test_a_locked_command_runs_whether_or_not_there_is_a_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from redteam import stack
+
+    monkeypatch.setattr(stack, "LOCK", tmp_path / "absent" / "docker")
+    assert (await stack.run(["echo", "ran"], {}, tmp_path, locked=True)).strip() == "ran"
+
+    (tmp_path / "present").mkdir()
+    monkeypatch.setattr(stack, "LOCK", tmp_path / "present" / "docker")
+    assert (await stack.run(["echo", "ran"], {}, tmp_path, locked=True)).strip() == "ran"

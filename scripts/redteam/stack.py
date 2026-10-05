@@ -1,6 +1,8 @@
-"""Docker Compose for the scorecard: every command under the shared lock, one command at a time.
+"""Docker Compose for the scorecard: every command under the shared lock where there is one, one
+command at a time.
 
-`flock ~/portfolio-projects/.locks/docker docker compose ...`: the lock is held for one stack
+`flock ~/portfolio-projects/.locks/docker docker compose ...` (a CI runner has no such lock and
+takes none): the lock is held for one stack
 command and released before the next, never across a whole run, so another project's stack run waits
 for a command and not for the scorecard. Commands print nothing of the environment they are given
 (it holds the lab credential), and a failure shows the tail of the command's own output with any
@@ -26,7 +28,11 @@ def approver_ready_line(decision: str) -> str:
     return f"{APPROVER_READY} lab-approver will {decision} every pending write"
 
 
-LOCK = Path.home() / "portfolio-projects" / ".locks" / "docker"
+LOCK = Path(
+    os.environ.get("DOCKER_LOCK") or Path.home() / "portfolio-projects" / ".locks" / "docker"
+)
+"""The workstation's shared Docker lock (the same file `release_smoke.sh` takes, and `DOCKER_LOCK`
+moves it). Where there is none, as on a CI runner, no one else shares Docker: nothing is locked."""
 _TOKEN = re.compile(r"aig_[a-z0-9]+_[A-Za-z0-9_-]{20,}")
 
 
@@ -39,6 +45,11 @@ class StackError(RuntimeError):
     pass
 
 
+def lock_prefix() -> list[str]:
+    """`flock <lock>` where the shared lock's directory exists, and nothing where it does not."""
+    return ["flock", str(LOCK)] if LOCK.parent.is_dir() else []
+
+
 async def run(
     command: Sequence[str],
     env: Mapping[str, str],
@@ -49,7 +60,7 @@ async def run(
 ) -> str:
     """Run a command and return its output; a non-zero exit is a StackError naming the command and
     the redacted tail of its output. `locked` runs it under the shared Docker lock."""
-    full = ["flock", str(LOCK), *command] if locked else list(command)
+    full = [*lock_prefix(), *command] if locked else list(command)
     result = await anyio.run_process(
         full, env=dict(env), cwd=cwd, check=False, input=stdin, stderr=-2
     )
