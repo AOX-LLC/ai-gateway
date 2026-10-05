@@ -1,0 +1,16 @@
+{
+  "eyebrow": "04 / AI Gateway",
+  "title": "AI Gateway",
+  "subtitle": "A zero-trust gateway between AI clients and the tools they call",
+  "sampleLabel": "Sample data \u00b7 Harborline Supply Co. is fictional",
+  "repoUrl": "github.com/AOX-LLC/ai-gateway",
+  "logos": {
+    "light": "../dashboard/public/brand/aox-logo-black.png",
+    "dark": "../dashboard/public/brand/aox-logo-white.png"
+  },
+  "check": {
+    "allowedRepoPattern": "^(?:https?:\\/\\/)?github\\.com\\/aox-llc\\/ai-gateway",
+    "requiredText": "sample data",
+    "requiredTextPattern": "^(dashboard|social|overview)"
+  }
+}

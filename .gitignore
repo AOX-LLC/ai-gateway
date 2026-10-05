@@ -80,3 +80,6 @@ dashboard/CLAUDE.md
 
 # Browser captures the Playwright tooling writes into the working directory
 .playwright-mcp/
+
+# Private list of internal names the media check refuses to see on screen (demo/check-frames.ts)
+.denylist.local
