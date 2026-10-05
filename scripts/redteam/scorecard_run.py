@@ -18,6 +18,7 @@ Harborline Supply Co. is fictional.
 
 import argparse
 import json
+import os
 import secrets
 import sys
 from collections import Counter
@@ -311,7 +312,20 @@ async def _wait_for_gateway(ctx: Context) -> None:
     raise StackError(f"the lab gateway never offered the lab tools ({last})")
 
 
+def require_switches(env: Mapping[str, str]) -> None:
+    """The two lab switches are the caller's to turn on, as for every lab script: this refuses to
+    start unless both are exactly `yes` in its environment, and sets neither."""
+    if env.get("LAB_AUTO_APPROVE") != "yes" or env.get("LAB_MUTABLE_UPSTREAM") != "yes":
+        sys.exit(
+            "scorecard_run: this starts the lab approver and the lab upstream, test tooling that"
+            " defeats or abuses a control on purpose, on a fictional stack. Run it with"
+            " LAB_AUTO_APPROVE=yes and LAB_MUTABLE_UPSTREAM=yes in front, e.g."
+            " `LAB_AUTO_APPROVE=yes LAB_MUTABLE_UPSTREAM=yes make scorecard`."
+        )
+
+
 async def main_async(args: argparse.Namespace) -> int:
+    require_switches(os.environ)
     attacks = load_attacks(args.attacks)
     columns = [c for c in COLUMNS if not args.columns or c.id in args.columns]
     full = not args.attacks and not args.columns
@@ -319,8 +333,6 @@ async def main_async(args: argparse.Namespace) -> int:
     base = clean_environment()
     base.update(
         {
-            "LAB_AUTO_APPROVE": "yes",
-            "LAB_MUTABLE_UPSTREAM": "yes",
             "LAB_UPSTREAM_TOKEN": secrets.token_urlsafe(40),
             "POLICY_LAB_APPROVER_DB_PASSWORD": secrets.token_urlsafe(30),
             "GATEWAY_MIGRATE_DATABASE_URL": env_file["GATEWAY_MIGRATE_DATABASE_URL"],

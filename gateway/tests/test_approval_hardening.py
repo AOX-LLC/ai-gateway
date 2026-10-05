@@ -352,8 +352,32 @@ def test_the_default_environment_and_the_workflow_do_not_switch_it_on_globally()
         )
     ]
     assert len(named) == 1
-    assert paths == [f"ci.yml:jobs.e2e.steps[{named[0]}].env.LAB_AUTO_APPROVE"]
+    scorecard = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())["jobs"][
+        "scorecard"
+    ]["steps"]
+    regenerate = [
+        index
+        for index, step in enumerate(scorecard)
+        if step.get("name") == "Regenerate the scorecard and compare it with the committed one"
+    ]
+    assert len(regenerate) == 1
+    # Exactly two places, both named steps on the fictional stack: the acceptance attack, and the
+    # scorecard's regeneration (which also needs LAB_MUTABLE_UPSTREAM, turned on beside it).
+    assert paths == [
+        f"ci.yml:jobs.e2e.steps[{named[0]}].env.LAB_AUTO_APPROVE",
+        f"ci.yml:jobs.scorecard.steps[{regenerate[0]}].env.LAB_AUTO_APPROVE",
+    ]
     assert steps[named[0]]["env"]["LAB_AUTO_APPROVE"] == "yes"
+    assert scorecard[regenerate[0]]["env"] == {
+        "LAB_AUTO_APPROVE": "yes",
+        "LAB_MUTABLE_UPSTREAM": "yes",
+    }
+    assert (
+        "pull_request"
+        in yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())["jobs"][
+            "scorecard"
+        ]["if"]
+    ), "never on a pull request"
 
 
 def test_no_script_sets_the_switch_and_nothing_writes_the_workflow_environment() -> None:

@@ -221,3 +221,37 @@ def test_the_lab_effect_count_for_a_clone_sums_the_landing_tools_it_called() -> 
 def test_a_token_in_the_output_of_a_command_is_never_what_the_runner_prints() -> None:
     assert redact("Bearer aig_abcd1234_" + "x" * 40 + " and more") == "Bearer [token] and more"
     assert redact("plain text") == "plain text"
+
+
+@pytest.mark.parametrize(
+    "env",
+    [
+        {},
+        {"LAB_AUTO_APPROVE": "yes"},
+        {"LAB_MUTABLE_UPSTREAM": "yes"},
+        {"LAB_AUTO_APPROVE": "true", "LAB_MUTABLE_UPSTREAM": "yes"},
+        {"LAB_AUTO_APPROVE": "yes", "LAB_MUTABLE_UPSTREAM": "YES"},
+        {"LAB_AUTO_APPROVE": "yes ", "LAB_MUTABLE_UPSTREAM": "yes"},
+    ],
+)
+def test_the_runner_refuses_to_start_unless_the_caller_switched_both_lab_tools_on(
+    env: dict[str, str],
+) -> None:
+    """The switches are the caller's to turn on, as for every lab script: nothing here sets them."""
+    with pytest.raises(SystemExit) as stopped:
+        run.require_switches(env)
+
+    assert "LAB_AUTO_APPROVE=yes" in str(stopped.value)
+    assert "LAB_MUTABLE_UPSTREAM=yes" in str(stopped.value)
+
+
+def test_both_switches_exactly_yes_let_the_runner_start() -> None:
+    run.require_switches({"LAB_AUTO_APPROVE": "yes", "LAB_MUTABLE_UPSTREAM": "yes"})
+
+
+def test_the_runner_never_sets_either_switch_itself() -> None:
+    text = (ROOT / "scripts" / "redteam" / "scorecard_run.py").read_text(encoding="utf-8")
+    code = "\n".join(line.split("#", 1)[0] for line in text.splitlines())
+
+    assert '"LAB_AUTO_APPROVE":' not in code
+    assert '"LAB_MUTABLE_UPSTREAM":' not in code
