@@ -4,6 +4,8 @@
 #
 #   scripts/run_dashboard_demo.sh up        # build and start the stack (compose.yaml + compose.demo.yaml)
 #   scripts/run_dashboard_demo.sh seed      # two demo approvers, a week of telemetry, the approval queue
+#   scripts/run_dashboard_demo.sh traffic [simulate_traffic.py options]
+#                                           # live, read-only simulated traffic as the fictional bots (default: 120 calls over 60 s)
 #   scripts/run_dashboard_demo.sh shots     # sign in, exercise the dashboard, save docs/images/*.png
 #   scripts/run_dashboard_demo.sh memory    # measure the dashboard container's memory under load
 #   scripts/run_dashboard_demo.sh down      # remove the stack and its data
@@ -92,9 +94,20 @@ seed() {
   nice -n 19 uv run scripts/seed_dashboard_demo.py --tokens-file "$STATE/tokens.json"
 }
 
+# Live traffic on the seeded stack, for the clips. Read-only, because a write waits for a person and
+# the simulator only sends one with an approver. It issues new demo tokens (and so revokes the old ones).
+traffic() {
+  local options=("$@")
+  [ ${#options[@]} -gt 0 ] || options=(--calls 120 --duration 60)
+  demo_password
+  (umask 077; dc run --rm -T admin seed-demo > "$STATE/tokens.json")
+  nice -n 19 uv run scripts/simulate_traffic.py --tokens-file "$STATE/tokens.json" --no-writes "${options[@]}"
+}
+
 case "${1:-}" in
   up) up ;;
   seed) seed ;;
+  traffic) shift; traffic "$@" ;;
   shots) demo_password; nice -n 19 uv run --group demo scripts/screenshots.py --out docs/images ;;
   memory) demo_password; nice -n 19 python3 scripts/measure_dashboard_memory.py ;;
   down)
