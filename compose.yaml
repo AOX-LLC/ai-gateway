@@ -452,6 +452,8 @@ services:
     volumes:
       - ./scripts/auto_approver.py:/lab/auto_approver.py:ro
       - ./scripts/lab_approver.py:/lab/lab_approver.py:ro
+      # The lab roles file (the lab upstream's write), for the scorecard: read-only, lab config only.
+      - ./config/lab:/app/config/lab:ro
     depends_on:
       policy-setup:
         condition: service_completed_successfully

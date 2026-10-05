@@ -81,12 +81,14 @@ class Stack:
 
     async def wait_for_approver(self, attempts: int = 60) -> None:
         """Wait until the lab approver says it is connected and approving."""
+        logs = ""
         for _ in range(attempts):
             logs = await self.compose("logs", "--no-color", "lab-approver")
             if APPROVER_READY in logs:
                 return
             await anyio.sleep(2)
-        raise StackError("the lab approver never said it was ready")
+        tail = redact("\n".join(logs.splitlines()[-6:]))
+        raise StackError(f"the lab approver never said it was ready; its last output:\n{tail}")
 
 
 def read_env_file(path: Path) -> dict[str, str]:

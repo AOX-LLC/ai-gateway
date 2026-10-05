@@ -194,9 +194,12 @@ def test_the_test_approver_exists_in_compose_only_as_the_lab_service_behind_both
         lab["environment"]["POLICY_APPROVER_DATABASE_URL"]
     ), "the lab role's password, empty unless set"
     assert lab["restart"] == "no"
+    # The two scripts, and the lab config directory read-only (the lab roles file: the lab
+    # upstream's write, for the scorecard). Nothing of the product's config, nothing writable.
     assert lab["volumes"] == [
         "./scripts/auto_approver.py:/lab/auto_approver.py:ro",
         "./scripts/lab_approver.py:/lab/lab_approver.py:ro",
+        "./config/lab:/app/config/lab:ro",
     ]
     # The profile holds the two lab-only services: the approver, and the lab upstream of the
     # scorecard (fenced in test_lab_upstream.py). A third needs its own fence and a line here.
