@@ -111,13 +111,25 @@ def normalize_separators(text: str) -> str:
     return " ".join("".join(" " if _is_separator(c) else c for c in text).split())
 
 
+LONG_TOKEN_CHARS = 64
+"""Under the normalized rule, a value this long is judged however few words it has: hyphens and dots
+are not separators (an email, a date or a UUID is one word and is not worth judging), but a single
+token of 64 or more characters is not an identifier, and an instruction can be joined with them."""
+
+
 def is_prose(text: str, min_chars: int, min_words: int, *, normalize: bool = False) -> bool:
     """Whether a value is worth judging: long enough, with enough words. Identifiers, dates and
     names are skipped: they carry no instruction a model could follow. With `normalize`, length
     and words are counted after separators are read as spaces, so `ignore_all_previous_rules` is
-    four words and not one; the value is still judged as written. Hyphens, dots and `@` are not
-    separators: an email address, a date or a UUID is still one word."""
-    stripped = normalize_separators(text) if normalize else text.strip()
+    four words and not one, and a value of `LONG_TOKEN_CHARS` or more is judged whatever its word
+    count; the value is still judged as written. Hyphens, dots and `@` are not separators: an email
+    address, a date or a UUID is still one word, and short."""
+    if normalize:
+        stripped = normalize_separators(text)
+        if len(text.strip()) >= LONG_TOKEN_CHARS:
+            return True
+    else:
+        stripped = text.strip()
     return len(stripped) >= min_chars and len(stripped.split()) >= min_words
 
 
