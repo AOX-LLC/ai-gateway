@@ -115,6 +115,15 @@ async def test_it_registers_the_upstream_the_policies_and_the_clients_and_revoke
                 "SELECT tool, effect FROM tool_policies WHERE namespace = 'lab'"
             )
         ).fetchall()
+    async with await psycopg.AsyncConnection.connect(test_database_url) as connection:
+        never = await (
+            await connection.execute(
+                "SELECT count(*) FROM client_tokens t JOIN clients c ON c.id = t.client_id"
+                " WHERE c.name LIKE '%--%' AND t.revoked_at IS NULL"
+                " AND (t.expires_at IS NULL OR t.expires_at > now() + interval '25 hours')"
+            )
+        ).fetchone()
+    assert never == (0,), "a lab client's token expires within a day, so a stray one cannot linger"
     assert upstream == ("http://lab-upstream:4413/mcp", "LAB_UPSTREAM_SERVICE_TOKEN")
     assert live == (1,), "the first run's tokens were revoked"
     assert {row[0]: row[1] for row in effects}["forward_note"] == "write"

@@ -624,6 +624,8 @@ async def _seed_demo(database_url: str, args: argparse.Namespace) -> None:
 
 
 LAB_NAMESPACE = "lab"
+LAB_TOKEN_LIFETIME = timedelta(days=1)
+"""A lab client's token lives a day: a clone left behind by an interrupted run cannot linger."""
 _LAB_CLIENT_NAME = re.compile(r"[a-z][a-z0-9-]{1,62}")
 
 
@@ -697,7 +699,9 @@ async def _seed_lab(database_url: str, args: argparse.Namespace) -> None:
             )
             await registry.set_scopes(client_id, list(client.scopes))
             await registry.revoke_all_tokens(client_id)
-            token = await _issue(registry, client_id, "seed-lab", expires_at=None)
+            token = await _issue(
+                registry, client_id, "seed-lab", expires_at=datetime.now(UTC) + LAB_TOKEN_LIFETIME
+            )
             tokens[client.name] = token.plaintext
     print(json.dumps(tokens, indent=2))
 
