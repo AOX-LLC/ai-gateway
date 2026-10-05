@@ -57,6 +57,9 @@ class Observation:
     """Calls a layer in monitor mode recorded that it would have refused."""
     unclassified: int
     """Calls the classifier let on because it had no recording of the text (never counted as clean)."""
+    incomplete: bool = False
+    """The attack stopped before its last step (a template it could not fill, because a read it
+    depended on was refused): its outcome is that of the steps it did make."""
 
 
 def _percentile(samples: Sequence[float], q: float) -> float:
@@ -145,6 +148,12 @@ def build(
         for a in attacks
         if results[column.id][a.id].success != results[column.id][a.id].predicted
     ]
+    incomplete = [
+        {"column": column.id, "attack": a.id}
+        for column in columns
+        for a in attacks
+        if results[column.id][a.id].incomplete
+    ]
     before_after = {
         column: {
             "changed": [
@@ -209,6 +218,7 @@ def build(
                     "blocked_by": dict(sorted(results[column.id][a.id].blocked_by.items())),
                     "would_block": dict(sorted(results[column.id][a.id].would_block.items())),
                     "unclassified": results[column.id][a.id].unclassified,
+                    "incomplete": results[column.id][a.id].incomplete,
                 }
                 for a in attacks
             }
@@ -221,6 +231,7 @@ def build(
             "gaps": gaps,
             "undeclared_successes": undeclared,
             "mismatches": mismatches,
+            "incomplete": incomplete,
             "before_after": before_after,
             "long_boundary": long_boundary,
         },
@@ -358,6 +369,13 @@ def render_markdown(card: Mapping[str, Any]) -> str:
         ]
     else:
         out += ["", "No differences."]
+    if s["incomplete"]:
+        out += [
+            "",
+            "**Attacks that could not finish** (a read they depended on was refused, so a later step "
+            "could not be filled in; the outcome is that of the steps made): "
+            + ", ".join(f"`{i['attack']}` in `{i['column']}`" for i in s["incomplete"]),
+        ]
     out += [
         "",
         "## Before and after the three 6a changes",

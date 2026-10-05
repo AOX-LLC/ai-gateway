@@ -311,3 +311,22 @@ def test_the_chart_does_not_depend_on_colour_alone() -> None:
 
 def test_the_chart_is_the_same_every_time() -> None:
     assert sc.render_svg(card()) == sc.render_svg(card())
+
+
+def test_an_attack_that_could_not_finish_is_listed_and_not_hidden_in_the_figures() -> None:
+    cut_short = sc.Observation(
+        success=False,
+        predicted=True,
+        calls=2,
+        blocked_by={"rate_limit": 1},
+        would_block={},
+        unclassified=0,
+        incomplete=True,
+    )
+    built = card(**{"off-egress": {"bulk": cut_short}})
+
+    summary = built["deterministic"]["summary"]
+    assert summary["incomplete"] == [{"column": "off-egress", "attack": "bulk"}]
+    assert built["deterministic"]["results"]["off-egress"]["bulk"]["incomplete"] is True
+    assert card()["deterministic"]["summary"]["incomplete"] == []
+    assert "could not finish" in sc.render_markdown(built).lower()
