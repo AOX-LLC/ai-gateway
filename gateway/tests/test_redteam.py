@@ -224,6 +224,37 @@ async def test_the_oracle_sees_values_and_canaries_that_landed_and_nothing_else(
 
 @pytest.mark.integration
 @pytest.mark.anyio
+async def test_an_attack_never_reads_or_removes_the_tickets_of_one_whose_marker_it_prefixes(
+    test_database_url: str, ticketing_data: Any
+) -> None:
+    contacts = ["ana.cruz@harborline.example", "bo.lin@harborline.example"]
+    since = datetime.now(UTC) - timedelta(minutes=1)
+
+    def make(subject: str, description: str) -> None:
+        with psycopg.connect(test_database_url) as connection:
+            connection.execute(
+                "INSERT INTO ticketing.tickets (account_id, subject, description, requested_by)"
+                " VALUES ('ACC-00001', %s, %s, 'c')",
+                (subject, description),
+            )
+
+    make("RT-canary plain", "an ordinary note")
+    make("RT-canary-base64 encoded", TICKETING_CANARY)
+    make("RT-canary-hex encoded", " ".join(contacts))
+
+    mine = read_landed(test_database_url, since, "", "RT-canary")
+    assert mine.subjects == ("RT-canary plain",)
+    assert mine.canaries == 0, "the canary in another attack's ticket is not mine"
+    assert clean_up(test_database_url, since, "", "RT-canary") == 1
+    theirs = read_landed(test_database_url, since, "", "RT-canary-base64")
+    assert theirs.subjects == ("RT-canary-base64 encoded",)
+    assert theirs.canaries == 1
+    clean_up(test_database_url, since, "", "RT-canary-base64")
+    clean_up(test_database_url, since, "", "RT-canary-hex")
+
+
+@pytest.mark.integration
+@pytest.mark.anyio
 async def test_a_snapshot_sees_unauthorized_writes_and_restores_the_data_after_them(
     test_database_url: str, ticketing_data: Any
 ) -> None:

@@ -144,3 +144,31 @@ def test_evidence_the_oracle_needs_but_does_not_have_is_an_error_never_a_quiet_n
 
     with pytest.raises(ValueError, match="changes"):
         attack_succeeded(expect, Evidence(Landed((), 0, 0)))
+
+
+# -- an attack's tickets are its own: a marker is a prefix of another marker, never a match -------
+
+
+def test_a_ticket_belongs_to_the_marker_it_names_and_not_to_one_it_merely_starts_with() -> None:
+    from redteam.oracle import subject_belongs
+
+    assert subject_belongs("RT-canary write", "RT-canary")
+    assert subject_belongs("RT-canary", "RT-canary")
+    assert not subject_belongs("RT-canary-base64 write", "RT-canary"), "another attack's ticket"
+    assert not subject_belongs("RT-zwi bulk", "RT-zw")
+    assert not subject_belongs("RT-boundary-split read", "RT-boundary")
+    assert not subject_belongs("Order question", "RT-canary")
+    assert subject_belongs("RT-canary-base64 write", "RT-canary-base64")
+
+
+def test_every_ticket_subject_an_attack_writes_starts_with_its_marker_and_a_space() -> None:
+    """The oracle finds an attack's tickets by `<marker> `: a subject that did not would never be
+    seen, and a marker that is another's prefix would see that attack's tickets without it."""
+    from redteam.attack_format import load_attack
+
+    for path in sorted((ROOT / "scripts" / "redteam" / "attacks").glob("*.toml")):
+        attack = load_attack(path)
+        for step in attack.steps:
+            if step.tool == "tickets__create_ticket":
+                subject = str(step.arguments["subject"])
+                assert subject.startswith("{marker} "), (attack.id, subject)

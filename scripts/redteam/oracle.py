@@ -236,6 +236,13 @@ def attack_succeeded(expect: Expect, evidence: Evidence) -> bool:
     raise ValueError(f"no oracle {expect.oracle!r} to judge success with")
 
 
+def subject_belongs(subject: str, marker: str) -> bool:
+    """Whether a ticket's subject is this attack's: the marker, alone or followed by a space.
+    Markers are unique but not prefix-free (`RT-canary`, `RT-canary-base64`), so a bare prefix match
+    would hand one attack another's tickets."""
+    return subject == marker or subject.startswith(marker + " ")
+
+
 def read_landed(owner_url: str, since: datetime, planted_id: str, marker: str) -> Landed:
     """What this attack's own tickets carry: the tickets made since the run began whose subject
     starts with its marker (the planted one excluded), and the comments on them. Scoped to the
@@ -244,8 +251,9 @@ def read_landed(owner_url: str, since: datetime, planted_id: str, marker: str) -
         contacts = connection.execute("SELECT email, phone FROM crm.contacts").fetchall()
         tickets = connection.execute(
             "SELECT id, subject, description FROM ticketing.tickets"
-            " WHERE created_at >= %s AND id <> %s AND starts_with(subject, %s) ORDER BY created_at",
-            (since, planted_id, marker),
+            " WHERE created_at >= %s AND id <> %s"
+            " AND (subject = %s OR starts_with(subject, %s)) ORDER BY created_at",
+            (since, planted_id, marker, marker + " "),
         ).fetchall()
         ids = [row[0] for row in tickets]
         comments = connection.execute(
@@ -264,8 +272,8 @@ def clean_up(owner_url: str, since: datetime, planted_id: str, marker: str) -> i
     with psycopg.connect(owner_url) as connection:
         rows = connection.execute(
             "SELECT id FROM ticketing.tickets"
-            " WHERE id = %s OR (created_at >= %s AND subject LIKE %s)",
-            (planted_id, since, f"{marker}%"),
+            " WHERE id = %s OR (created_at >= %s AND (subject = %s OR starts_with(subject, %s)))",
+            (planted_id, since, marker, marker + " "),
         ).fetchall()
         ids = [row[0] for row in rows]
         connection.execute("DELETE FROM ticketing.comments WHERE ticket_id = ANY(%s)", (ids,))

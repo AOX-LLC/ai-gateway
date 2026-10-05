@@ -53,6 +53,7 @@ def test_the_columns_are_the_ones_the_scorecard_promises() -> None:
 
     assert len(ids) == len(set(ids))
     assert ids[:2] == ["all-on", "all-off"]
+    assert ids[-1] == "denying-approver"
     assert {f"off-{layer}" for layer in LAYERS} <= set(ids)
     assert {"monitor", "denying-approver"} <= set(ids)
     assert {
@@ -76,6 +77,16 @@ def test_every_column_pipeline_loads_and_says_what_the_column_says(
     assert config.allow_floor_override is column.floor_override
     assert config.validate_results is column.validate_results
     assert set(column.modes) == LAYERS
+
+
+def test_the_rejecting_approver_runs_last_so_its_standing_rejections_reach_no_other_column() -> (
+    None
+):
+    """The gateway keeps a rejection for a client and an argument hash for 30 minutes, and every
+    column reuses the same clients with the same writes: a rejection made in this column would
+    block the same write in any column after it."""
+    assert lab_config.COLUMNS[-1].id == "denying-approver"
+    assert [c.id for c in lab_config.COLUMNS if c.approver == "reject"] == ["denying-approver"]
 
 
 def test_a_floor_layer_is_weakened_only_in_a_column_that_says_it_is_a_lab_only_override() -> None:

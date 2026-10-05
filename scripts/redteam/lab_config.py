@@ -93,14 +93,6 @@ def _columns() -> list[Column]:
             _modes(**{layer: "monitor" for layer in LAYER_ORDER if layer not in FLOOR}),
         ),
         Column(
-            "denying-approver",
-            "All layers on, an approver who rejects every write (idealised: assumes a person "
-            "always spots the attack)",
-            "idealised",
-            _modes(),
-            approver="reject",
-        ),
-        Column(
             "before-all-flags",
             "All on, with the three 6a changes turned back to v0.1.0",
             "before-after",
@@ -128,6 +120,14 @@ def _columns() -> list[Column]:
             "before-after",
             _modes(),
             validate_results=False,
+        ),
+        Column(
+            "denying-approver",
+            "All layers on, an approver who rejects every write (idealised: assumes a person "
+            "always spots the attack)",
+            "idealised",
+            _modes(),
+            approver="reject",
         ),
     ]
     return columns
