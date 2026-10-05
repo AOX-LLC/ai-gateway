@@ -330,3 +330,55 @@ def test_an_attack_that_could_not_finish_is_listed_and_not_hidden_in_the_figures
     assert built["deterministic"]["results"]["off-egress"]["bulk"]["incomplete"] is True
     assert card()["deterministic"]["summary"]["incomplete"] == []
     assert "could not finish" in sc.render_markdown(built).lower()
+
+
+# -- the prose says only what the data and the code say -------------------------------------------
+
+
+def test_the_floor_override_is_described_as_the_product_accepts_it() -> None:
+    text = sc.render_markdown(card())
+
+    assert "the product refuses that configuration" not in text
+    assert "LAB_FLOOR_OVERRIDE=yes" in text
+    assert "allow_floor_override" in text
+
+
+def test_the_oracle_is_described_by_the_kinds_of_evidence_the_attacks_actually_use() -> None:
+    text = sc.render_markdown(card())
+
+    assert "independent oracle that reads the databases and shares" not in text, "not true of every"
+    assert "3 judged by what landed in the databases" in text
+
+
+def test_the_known_gaps_paragraph_lists_the_gaps_in_the_data_and_none_that_are_not() -> None:
+    with_gap = sc.render_markdown(card())
+    none = sc.render_markdown(card(**{"all-on": {"drip": obs(False, predicted=True)}}))
+
+    section = with_gap.split("## What this does and does not show")[1]
+    assert "`drip`" in section
+    assert "ROT13" not in section, "a gap is named only if it is in the data"
+    other = none.split("## What this does and does not show")[1]
+    assert "`drip`" not in other
+    assert "no attack succeeds with every layer on" in other.lower()
+
+
+def test_the_long_boundary_paragraph_reports_what_was_observed_not_what_was_expected() -> None:
+    attacks = [
+        *ATTACKS,
+        attack("obfuscated-long-boundary", "obfuscated-instruction"),
+        attack("obfuscated-long-boundary-split", "obfuscated-instruction"),
+    ]
+    results_ = results()
+    for column in COLUMN_IDS:
+        results_[column]["obfuscated-long-boundary"] = obs(False)
+        results_[column]["obfuscated-long-boundary-split"] = obs(False)
+    results_["before-overlap"]["obfuscated-long-boundary-split"] = obs(True)
+
+    text = sc.render_markdown(sc.build(COLUMNS, attacks, results_))
+
+    part = text.split("## Both long-boundary attacks")[1].split("## ")[0]
+    assert "flagged both fragments" not in part
+    first = "`obfuscated-long-boundary`: stopped with overlap, stopped without it: "
+    second = "`obfuscated-long-boundary-split`: stopped with overlap, succeeds without it: "
+    assert first + "overlap makes no difference" in part
+    assert second + "overlap makes a difference" in part
