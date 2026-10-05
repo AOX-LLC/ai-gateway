@@ -443,7 +443,8 @@ services:
     mem_limit: 96m
     environment:
       POLICY_APPROVER_DATABASE_URL: postgresql://policy_lab_approver:${POLICY_LAB_APPROVER_DB_PASSWORD:-}@postgres:5432/${POSTGRES_DB}
-      APPROVAL_ROLES_FILE: /app/config/approval_roles.toml
+      # The product's roles by default; the scorecard points it at the lab roles (the lab upstream's write).
+      APPROVAL_ROLES_FILE: ${LAB_APPROVAL_ROLES_FILE_IN_CONTAINER:-/app/config/approval_roles.toml}
       LAB_AUTO_APPROVE: ${LAB_AUTO_APPROVE:-}
       LAB_APPROVER_ID: ${LAB_APPROVER_ID:-lab-approver}
       # approve (the worst case) or reject (the scorecard's idealised approver).

@@ -99,3 +99,18 @@ def test_changing_the_approver_never_re_runs_the_policy_setup_it_depends_on() ->
 
     assert naming, "the runner no longer starts the approver: update this test"
     assert all('"--no-deps"' in call for call in naming)
+
+
+def test_the_lab_approver_reads_the_lab_roles_when_a_scorecard_run_says_so() -> None:
+    """The approver decides a write only if its role file names the tool: the lab upstream's write
+    is in the lab roles file, not the product's, so a run that does not point the approver there
+    leaves every lab write pending (a benign lab write was blocked by approval in a first run)."""
+    from redteam.scorecard_run import approver_env
+
+    value = LAB_APPROVER["APPROVAL_ROLES_FILE"]
+
+    assert value == "${LAB_APPROVAL_ROLES_FILE_IN_CONTAINER:-/app/config/approval_roles.toml}"
+    env = approver_env()
+    assert env["LAB_APPROVAL_ROLES_FILE_IN_CONTAINER"] == "/app/config/lab/approval_roles.lab.toml"
+    assert (ROOT / "config" / "lab" / "approval_roles.lab.toml").is_file()
+    assert "lab__forward_note" in (ROOT / "config" / "lab" / "approval_roles.lab.toml").read_text()

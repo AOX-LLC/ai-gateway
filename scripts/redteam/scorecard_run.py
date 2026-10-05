@@ -82,6 +82,12 @@ def column_env(column: Column) -> dict[str, str]:
     }
 
 
+def approver_env() -> dict[str, str]:
+    """What the lab approver needs for the whole run: the lab roles file, so it can decide the lab
+    upstream's write as well as the product's."""
+    return {"LAB_APPROVAL_ROLES_FILE_IN_CONTAINER": f"{LAB_CONFIG}/approval_roles.lab.toml"}
+
+
 # -- which attacks may run at the same time -------------------------------------------------------
 
 
@@ -336,6 +342,7 @@ async def main_async(args: argparse.Namespace) -> int:
             "LAB_UPSTREAM_TOKEN": secrets.token_urlsafe(40),
             "POLICY_LAB_APPROVER_DB_PASSWORD": secrets.token_urlsafe(30),
             "GATEWAY_MIGRATE_DATABASE_URL": env_file["GATEWAY_MIGRATE_DATABASE_URL"],
+            **approver_env(),
         }
     )
     stack = Stack(ROOT, PROJECT, base)
