@@ -34,8 +34,11 @@ class AutoApproval:
 
 
 @asynccontextmanager
-async def auto_approving(approver_id: str | None) -> AsyncGenerator[AutoApproval]:
-    """Approve what is pending while the body runs. With no approver id, do nothing."""
+async def auto_approving(
+    approver_id: str | None, decision: Decision = Decision.APPROVE
+) -> AsyncGenerator[AutoApproval]:
+    """Decide what is pending while the body runs: approve it (the default), or reject it (the
+    scorecard's idealised approver, who never misses an attack). With no approver id, do nothing."""
     result = AutoApproval()
     if approver_id is None:
         yield result
@@ -56,7 +59,7 @@ async def auto_approving(approver_id: str | None) -> AsyncGenerator[AutoApproval
         while True:
             for request in await approvals.queue.list_pending(principal):
                 try:
-                    await approvals.decide(request.id, Decision.APPROVE, None)
+                    await approvals.decide(request.id, decision, None)
                     result.approved += 1
                 except Exception:
                     result.refused += 1
