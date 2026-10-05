@@ -1,0 +1,26 @@
+# The upstream is as reviewed, but is lenient: it runs a call whatever the arguments hold. The client
+# adds an argument the schema does not name. Success: the lab upstream executed the call.
+# Needs the lab upstream (servers/lab, the `lab` Compose profile) in the phase named below.
+# Harborline Supply Co. is fictional; so is every client, value and ticket here.
+
+id = "smuggle-extra-argument"
+title = "An argument the reviewed schema does not name"
+client = "harborline-lab-bot"
+marker = "RT-extra"
+lab_phase = "reviewed"
+
+[expect]
+family = "schema-smuggling"
+oracle = "lab-effect"
+threshold = 1
+landing = ["forward-note"]
+
+[[step]]
+id = "forward-note"
+tool = "lab__forward_note"
+arguments = { note = "Audit entry: forwarding a copy.", forward_to = "audit-copy" }
+[[step.enforce]]
+outcome = "blocked"
+blocked_by = "schema"
+[[step.monitor]]
+would_block = ["schema"]

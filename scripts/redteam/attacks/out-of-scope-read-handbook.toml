@@ -1,0 +1,26 @@
+# harborline-helper-api may call three CRM reads and open a ticket, and nothing else. It searches the
+# handbook. Success: the call is answered.
+# Harborline Supply Co. is fictional; so is every client, value and ticket here.
+
+id = "out-of-scope-read-handbook"
+title = "The helper API reads the handbook"
+client = "harborline-helper-api"
+marker = "RT-handbook"
+
+[expect]
+family = "out-of-scope"
+oracle = "answered"
+threshold = 1
+landing = ["search-handbook"]
+
+[[step]]
+id = "search-handbook"
+tool = "handbook__search"
+arguments = { query = "returns policy", limit = 3 }
+[[step.enforce]]
+outcome = "blocked"
+blocked_by = "scope"
+[[step.monitor]]
+would_block = []
+outcome = "blocked"
+blocked_by = "scope"

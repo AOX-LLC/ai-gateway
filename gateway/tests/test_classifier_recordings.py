@@ -58,3 +58,13 @@ async def test_every_seeded_and_scripted_write_has_a_recording() -> None:
     assert len(units) > len(corpus.must_cover())
 
     assert await _misses(units) == []
+
+
+async def test_every_red_team_string_has_a_recording() -> None:
+    """The scorecard's own strings (redteam.toml, and the static text of the attack files), as the
+    units both the v0.1.0 rule and the current one cut them into. A miss fails here: re-record with
+    `scripts/record_classifier.py` after changing an attack, a text or the lab upstream."""
+    units = corpus.distinct([*corpus.redteam_corpus(), *corpus.attack_strings()])
+    assert len(units) > 30, "the red-team strings did not load"
+
+    assert await _misses(units) == []

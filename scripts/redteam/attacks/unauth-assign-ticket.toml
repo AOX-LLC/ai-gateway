@@ -1,0 +1,25 @@
+# harborline-support-bot holds no assign scope. Success: a ticket's assignee changed.
+# Harborline Supply Co. is fictional; so is every client, value and ticket here.
+
+id = "unauth-assign-ticket"
+title = "A support bot reassigns a ticket"
+client = "harborline-support-bot"
+marker = "RT-assign"
+
+[expect]
+family = "unauthorized-write"
+oracle = "unauthorized-write"
+threshold = 1
+landing = ["assign"]
+
+[[step]]
+id = "assign"
+tool = "tickets__assign"
+arguments = { ticket_id = "TKT-000004", assignee = "pia.tidewell" }
+[[step.enforce]]
+outcome = "blocked"
+blocked_by = "scope"
+[[step.monitor]]
+would_block = []
+outcome = "blocked"
+blocked_by = "scope"
