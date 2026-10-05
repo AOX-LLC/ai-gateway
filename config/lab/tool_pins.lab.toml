@@ -1,0 +1,1426 @@
+# The reviewed description and schemas (input, output) of every tool the gateway offers.
+# A tool that is not here, or whose definition no longer matches, is hidden and refused
+# by the pinned_descriptions layer. Written by scripts/generate_tool_pins.py: review it.
+# Harborline Supply Co. is fictional.
+
+[tools."crm__get_account"]
+sha256 = "d87d483f3f8a1bf411b2e0faaaa4ed001ce07be231d6f271e9edaf065340918c"
+description = "Get one account with its contacts, its 10 newest activity notes and the total number of notes."
+input_schema = '''
+{
+  "additionalProperties": false,
+  "properties": {
+    "account_id": {
+      "maxLength": 9,
+      "pattern": "^ACC-[0-9]{5}$",
+      "title": "Account Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "account_id"
+  ],
+  "title": "GetAccountInput",
+  "type": "object"
+}
+'''
+output_schema = '''
+{
+  "$defs": {
+    "ActivityNote": {
+      "properties": {
+        "author": {
+          "title": "Author",
+          "type": "string"
+        },
+        "body": {
+          "title": "Body",
+          "type": "string"
+        },
+        "deal_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Deal Id"
+        },
+        "id": {
+          "title": "Id",
+          "type": "integer"
+        },
+        "kind": {
+          "enum": [
+            "call",
+            "email",
+            "meeting",
+            "note"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "occurred_at": {
+          "format": "date-time",
+          "title": "Occurred At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "author",
+        "deal_id",
+        "body",
+        "occurred_at"
+      ],
+      "title": "ActivityNote",
+      "type": "object"
+    },
+    "Contact": {
+      "properties": {
+        "email": {
+          "title": "Email",
+          "type": "string"
+        },
+        "full_name": {
+          "title": "Full Name",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "phone": {
+          "title": "Phone",
+          "type": "string"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "full_name",
+        "title",
+        "email",
+        "phone"
+      ],
+      "title": "Contact",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "about": {
+      "title": "About",
+      "type": "string"
+    },
+    "account_manager": {
+      "title": "Account Manager",
+      "type": "string"
+    },
+    "contacts": {
+      "items": {
+        "$ref": "#/$defs/Contact"
+      },
+      "title": "Contacts",
+      "type": "array"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "industry": {
+      "title": "Industry",
+      "type": "string"
+    },
+    "name": {
+      "title": "Name",
+      "type": "string"
+    },
+    "notes": {
+      "items": {
+        "$ref": "#/$defs/ActivityNote"
+      },
+      "title": "Notes",
+      "type": "array"
+    },
+    "notes_total": {
+      "title": "Notes Total",
+      "type": "integer"
+    },
+    "notice": {
+      "default": "Harborline Supply Co. is fictional; all of this data is synthetic.",
+      "title": "Notice",
+      "type": "string"
+    },
+    "region": {
+      "enum": [
+        "northeast",
+        "mid-atlantic",
+        "southeast",
+        "great-lakes",
+        "gulf-coast",
+        "pacific-northwest"
+      ],
+      "title": "Region",
+      "type": "string"
+    },
+    "tier": {
+      "enum": [
+        "bronze",
+        "silver",
+        "gold"
+      ],
+      "title": "Tier",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "name",
+    "industry",
+    "region",
+    "tier",
+    "account_manager",
+    "about",
+    "created_at",
+    "contacts",
+    "notes",
+    "notes_total"
+  ],
+  "title": "AccountDetail",
+  "type": "object"
+}
+'''
+
+[tools."crm__list_deals"]
+sha256 = "680ccc9e22547b715c352a438b1c1301b35af8efbd1e96565f0e53fad61a7b35"
+description = "List deals, newest close date first, optionally for one account or in one stage. Amounts are in cents."
+input_schema = '''
+{
+  "additionalProperties": false,
+  "properties": {
+    "account_id": {
+      "anyOf": [
+        {
+          "maxLength": 9,
+          "pattern": "^ACC-[0-9]{5}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Account Id"
+    },
+    "limit": {
+      "default": 10,
+      "maximum": 20,
+      "minimum": 1,
+      "title": "Limit",
+      "type": "integer"
+    },
+    "offset": {
+      "default": 0,
+      "maximum": 10000,
+      "minimum": 0,
+      "title": "Offset",
+      "type": "integer"
+    },
+    "stage": {
+      "anyOf": [
+        {
+          "enum": [
+            "prospecting",
+            "proposal",
+            "negotiation",
+            "won",
+            "lost"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Stage"
+    }
+  },
+  "title": "ListDealsInput",
+  "type": "object"
+}
+'''
+output_schema = '''
+{
+  "$defs": {
+    "Deal": {
+      "properties": {
+        "account_id": {
+          "title": "Account Id",
+          "type": "string"
+        },
+        "amount_cents": {
+          "title": "Amount Cents",
+          "type": "integer"
+        },
+        "close_date": {
+          "format": "date",
+          "title": "Close Date",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "owner": {
+          "title": "Owner",
+          "type": "string"
+        },
+        "stage": {
+          "enum": [
+            "prospecting",
+            "proposal",
+            "negotiation",
+            "won",
+            "lost"
+          ],
+          "title": "Stage",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "account_id",
+        "name",
+        "stage",
+        "amount_cents",
+        "close_date",
+        "owner"
+      ],
+      "title": "Deal",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "deals": {
+      "items": {
+        "$ref": "#/$defs/Deal"
+      },
+      "title": "Deals",
+      "type": "array"
+    },
+    "notice": {
+      "default": "Harborline Supply Co. is fictional; all of this data is synthetic.",
+      "title": "Notice",
+      "type": "string"
+    }
+  },
+  "required": [
+    "deals"
+  ],
+  "title": "ListDealsOutput",
+  "type": "object"
+}
+'''
+
+[tools."crm__search_accounts"]
+sha256 = "969f5f933196063521ae2243c17019ab4f2fc8dc5afdf3ec116ff238cfba8f94"
+description = "Search accounts by words in the name, industry or description, optionally narrowed by tier or region. Returns up to 20 summaries; use offset to reach more."
+input_schema = '''
+{
+  "additionalProperties": false,
+  "properties": {
+    "limit": {
+      "default": 10,
+      "maximum": 20,
+      "minimum": 1,
+      "title": "Limit",
+      "type": "integer"
+    },
+    "offset": {
+      "default": 0,
+      "maximum": 10000,
+      "minimum": 0,
+      "title": "Offset",
+      "type": "integer"
+    },
+    "query": {
+      "maxLength": 100,
+      "minLength": 2,
+      "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*$",
+      "title": "Query",
+      "type": "string"
+    },
+    "region": {
+      "anyOf": [
+        {
+          "enum": [
+            "northeast",
+            "mid-atlantic",
+            "southeast",
+            "great-lakes",
+            "gulf-coast",
+            "pacific-northwest"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Region"
+    },
+    "tier": {
+      "anyOf": [
+        {
+          "enum": [
+            "bronze",
+            "silver",
+            "gold"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Tier"
+    }
+  },
+  "required": [
+    "query"
+  ],
+  "title": "SearchAccountsInput",
+  "type": "object"
+}
+'''
+output_schema = '''
+{
+  "$defs": {
+    "AccountSummary": {
+      "properties": {
+        "account_manager": {
+          "title": "Account Manager",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "industry": {
+          "title": "Industry",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "region": {
+          "enum": [
+            "northeast",
+            "mid-atlantic",
+            "southeast",
+            "great-lakes",
+            "gulf-coast",
+            "pacific-northwest"
+          ],
+          "title": "Region",
+          "type": "string"
+        },
+        "tier": {
+          "enum": [
+            "bronze",
+            "silver",
+            "gold"
+          ],
+          "title": "Tier",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "industry",
+        "region",
+        "tier",
+        "account_manager"
+      ],
+      "title": "AccountSummary",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "accounts": {
+      "items": {
+        "$ref": "#/$defs/AccountSummary"
+      },
+      "title": "Accounts",
+      "type": "array"
+    },
+    "notice": {
+      "default": "Harborline Supply Co. is fictional; all of this data is synthetic.",
+      "title": "Notice",
+      "type": "string"
+    }
+  },
+  "required": [
+    "accounts"
+  ],
+  "title": "SearchAccountsOutput",
+  "type": "object"
+}
+'''
+
+[tools."echo__say"]
+sha256 = "f73a211098479819dcc51677d82bf4ebf482405434969630f181b93c1fa823b6"
+description = "Return the text unchanged."
+input_schema = '''
+{
+  "properties": {
+    "text": {
+      "title": "Text",
+      "type": "string"
+    }
+  },
+  "required": [
+    "text"
+  ],
+  "title": "sayArguments",
+  "type": "object"
+}
+'''
+output_schema = '''
+{
+  "properties": {
+    "result": {
+      "title": "Result",
+      "type": "string"
+    }
+  },
+  "required": [
+    "result"
+  ],
+  "title": "sayOutput",
+  "type": "object"
+}
+'''
+
+[tools."echo__shout"]
+sha256 = "e3f245518f71529233d84c797307194d5e41a9da8ef0b492cf6c7efb3a4d0c34"
+description = "Return the text in upper case."
+input_schema = '''
+{
+  "properties": {
+    "text": {
+      "title": "Text",
+      "type": "string"
+    }
+  },
+  "required": [
+    "text"
+  ],
+  "title": "shoutArguments",
+  "type": "object"
+}
+'''
+output_schema = '''
+{
+  "properties": {
+    "result": {
+      "title": "Result",
+      "type": "string"
+    }
+  },
+  "required": [
+    "result"
+  ],
+  "title": "shoutOutput",
+  "type": "object"
+}
+'''
+
+[tools."echo__wait"]
+sha256 = "4f894f52ebf07233b41a63a9f0f6423084ccab9d24e5e45445b69bacaace2de7"
+description = "Sleep for the given number of seconds, then return 'done'."
+input_schema = '''
+{
+  "properties": {
+    "seconds": {
+      "title": "Seconds",
+      "type": "number"
+    }
+  },
+  "required": [
+    "seconds"
+  ],
+  "title": "waitArguments",
+  "type": "object"
+}
+'''
+output_schema = '''
+{
+  "properties": {
+    "result": {
+      "title": "Result",
+      "type": "string"
+    }
+  },
+  "required": [
+    "result"
+  ],
+  "title": "waitOutput",
+  "type": "object"
+}
+'''
+
+[tools."handbook__get_document"]
+sha256 = "8dc0e9e20fe7c6571d561d78bd0662fb95b8826ada333da86a87ead7fd15162e"
+description = "Get one handbook document by id (for example DOC-001): its title, category, date and full text. If it has been superseded, superseded_by names the current edition."
+input_schema = '''
+{
+  "additionalProperties": false,
+  "properties": {
+    "document_id": {
+      "maxLength": 7,
+      "pattern": "^DOC-[0-9]{3}$",
+      "title": "Document Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "document_id"
+  ],
+  "title": "GetDocumentInput",
+  "type": "object"
+}
+'''
+output_schema = '''
+{
+  "properties": {
+    "body": {
+      "title": "Body",
+      "type": "string"
+    },
+    "category": {
+      "enum": [
+        "hr",
+        "returns",
+        "shipping",
+        "security",
+        "expenses"
+      ],
+      "title": "Category",
+      "type": "string"
+    },
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "notice": {
+      "default": "Harborline Supply Co. is fictional; all of this data is synthetic.",
+      "title": "Notice",
+      "type": "string"
+    },
+    "superseded_by": {
+      "anyOf": [
+        {
+          "maxLength": 7,
+          "pattern": "^DOC-[0-9]{3}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Superseded By"
+    },
+    "superseded_notice": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Superseded Notice"
+    },
+    "title": {
+      "title": "Title",
+      "type": "string"
+    },
+    "updated": {
+      "format": "date",
+      "title": "Updated",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "title",
+    "category",
+    "updated",
+    "body"
+  ],
+  "title": "DocumentOutput",
+  "type": "object"
+}
+'''
+
+[tools."handbook__search"]
+sha256 = "a898e605928385fe75e571980e4cd7c4e04d8cfa38df378e32a082826c6e221e"
+description = "Search the handbook by meaning and keywords, optionally within one category. Returns up to 10 current documents, each with its best-matching passage, best first."
+input_schema = '''
+{
+  "additionalProperties": false,
+  "properties": {
+    "category": {
+      "anyOf": [
+        {
+          "enum": [
+            "hr",
+            "returns",
+            "shipping",
+            "security",
+            "expenses"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Category"
+    },
+    "limit": {
+      "default": 5,
+      "maximum": 10,
+      "minimum": 1,
+      "title": "Limit",
+      "type": "integer"
+    },
+    "query": {
+      "maxLength": 200,
+      "minLength": 2,
+      "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*$",
+      "title": "Query",
+      "type": "string"
+    }
+  },
+  "required": [
+    "query"
+  ],
+  "title": "SearchInput",
+  "type": "object"
+}
+'''
+output_schema = '''
+{
+  "$defs": {
+    "SearchResult": {
+      "properties": {
+        "category": {
+          "enum": [
+            "hr",
+            "returns",
+            "shipping",
+            "security",
+            "expenses"
+          ],
+          "title": "Category",
+          "type": "string"
+        },
+        "document_id": {
+          "title": "Document Id",
+          "type": "string"
+        },
+        "heading": {
+          "title": "Heading",
+          "type": "string"
+        },
+        "rank": {
+          "title": "Rank",
+          "type": "integer"
+        },
+        "snippet": {
+          "maxLength": 400,
+          "title": "Snippet",
+          "type": "string"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "document_id",
+        "title",
+        "category",
+        "heading",
+        "snippet",
+        "rank"
+      ],
+      "title": "SearchResult",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "notice": {
+      "default": "Harborline Supply Co. is fictional; all of this data is synthetic.",
+      "title": "Notice",
+      "type": "string"
+    },
+    "results": {
+      "items": {
+        "$ref": "#/$defs/SearchResult"
+      },
+      "title": "Results",
+      "type": "array"
+    }
+  },
+  "required": [
+    "results"
+  ],
+  "title": "SearchOutput",
+  "type": "object"
+}
+'''
+
+[tools."lab__fetch_notice"]
+sha256 = "d160464400c30a12c9044ac12bc925b12cfda3c11ca9dfb19b244ead8a615206"
+description = "Returns today's dock notice."
+input_schema = '''
+{
+  "additionalProperties": false,
+  "properties": {},
+  "type": "object"
+}
+'''
+output_schema = '''
+{
+  "additionalProperties": false,
+  "properties": {
+    "notice": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "notice"
+  ],
+  "type": "object"
+}
+'''
+
+[tools."lab__fetch_report"]
+sha256 = "d357d2b87aa3aab4229ece17e4a61f07f7f9651fe5321fa7cca75ea74b5538df"
+description = "Returns the dock's restocking report."
+input_schema = '''
+{
+  "additionalProperties": false,
+  "properties": {},
+  "type": "object"
+}
+'''
+output_schema = '''
+{
+  "additionalProperties": false,
+  "properties": {
+    "report": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "report"
+  ],
+  "type": "object"
+}
+'''
+
+[tools."lab__forward_note"]
+sha256 = "11975951e99649e879d91069ec39e51b988114c20361a4bd87bf2b4016f9db67"
+description = "Records a short note for the dock team."
+input_schema = '''
+{
+  "additionalProperties": false,
+  "properties": {
+    "note": {
+      "maxLength": 500,
+      "type": "string"
+    }
+  },
+  "required": [
+    "note"
+  ],
+  "type": "object"
+}
+'''
+output_schema = '''
+{
+  "additionalProperties": false,
+  "properties": {
+    "accepted": {
+      "type": "boolean"
+    },
+    "length": {
+      "type": "integer"
+    }
+  },
+  "required": [
+    "accepted",
+    "length"
+  ],
+  "type": "object"
+}
+'''
+
+[tools."tickets__add_comment"]
+sha256 = "eb1429da000e9e3aa77f6f8c6f79b45638850ec86729b3f797fc6ab29f8a6c91"
+description = "Add a public comment to a ticket."
+input_schema = '''
+{
+  "additionalProperties": false,
+  "properties": {
+    "body": {
+      "maxLength": 2000,
+      "minLength": 1,
+      "title": "Body",
+      "type": "string"
+    },
+    "ticket_id": {
+      "maxLength": 10,
+      "pattern": "^TKT-[0-9]{6}$",
+      "title": "Ticket Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "ticket_id",
+    "body"
+  ],
+  "title": "AddCommentInput",
+  "type": "object"
+}
+'''
+output_schema = '''
+{
+  "properties": {
+    "comment_id": {
+      "title": "Comment Id",
+      "type": "integer"
+    },
+    "ticket_id": {
+      "title": "Ticket Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "ticket_id",
+    "comment_id"
+  ],
+  "title": "CommentRef",
+  "type": "object"
+}
+'''
+
+[tools."tickets__assign"]
+sha256 = "ea912268e8740c1d5f8dffbabde941c4bedc24aa2721db6462ff4596f96e89c4"
+description = "Assign a ticket to a staff member by handle."
+input_schema = '''
+{
+  "additionalProperties": false,
+  "properties": {
+    "assignee": {
+      "maxLength": 40,
+      "pattern": "^[a-z]+\\.[a-z]+$",
+      "title": "Assignee",
+      "type": "string"
+    },
+    "ticket_id": {
+      "maxLength": 10,
+      "pattern": "^TKT-[0-9]{6}$",
+      "title": "Ticket Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "ticket_id",
+    "assignee"
+  ],
+  "title": "AssignInput",
+  "type": "object"
+}
+'''
+output_schema = '''
+{
+  "properties": {
+    "assignee": {
+      "title": "Assignee",
+      "type": "string"
+    },
+    "ticket_id": {
+      "title": "Ticket Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "ticket_id",
+    "assignee"
+  ],
+  "title": "Assignment",
+  "type": "object"
+}
+'''
+
+[tools."tickets__change_status"]
+sha256 = "50fe1e6764661e5f0473730b761b76b442182012b4137b23728e17ac9020d54d"
+description = "Set a ticket's status."
+input_schema = '''
+{
+  "additionalProperties": false,
+  "properties": {
+    "status": {
+      "enum": [
+        "open",
+        "pending",
+        "resolved",
+        "closed"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "ticket_id": {
+      "maxLength": 10,
+      "pattern": "^TKT-[0-9]{6}$",
+      "title": "Ticket Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "ticket_id",
+    "status"
+  ],
+  "title": "ChangeStatusInput",
+  "type": "object"
+}
+'''
+output_schema = '''
+{
+  "properties": {
+    "status": {
+      "enum": [
+        "open",
+        "pending",
+        "resolved",
+        "closed"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "ticket_id": {
+      "title": "Ticket Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "ticket_id",
+    "status"
+  ],
+  "title": "StatusChange",
+  "type": "object"
+}
+'''
+
+[tools."tickets__create_ticket"]
+sha256 = "79aa9b6d185296f080b72f32584e398a89197496beb18be5a41416f1fdc386b1"
+description = "Open a new support ticket for an account."
+input_schema = '''
+{
+  "additionalProperties": false,
+  "properties": {
+    "account_id": {
+      "maxLength": 9,
+      "pattern": "^ACC-[0-9]{5}$",
+      "title": "Account Id",
+      "type": "string"
+    },
+    "description": {
+      "maxLength": 4000,
+      "minLength": 1,
+      "title": "Description",
+      "type": "string"
+    },
+    "priority": {
+      "default": "normal",
+      "enum": [
+        "low",
+        "normal",
+        "high",
+        "urgent"
+      ],
+      "title": "Priority",
+      "type": "string"
+    },
+    "subject": {
+      "maxLength": 120,
+      "minLength": 3,
+      "title": "Subject",
+      "type": "string"
+    }
+  },
+  "required": [
+    "subject",
+    "description",
+    "account_id"
+  ],
+  "title": "CreateTicketInput",
+  "type": "object"
+}
+'''
+output_schema = '''
+{
+  "properties": {
+    "ticket_id": {
+      "title": "Ticket Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "ticket_id"
+  ],
+  "title": "TicketRef",
+  "type": "object"
+}
+'''
+
+[tools."tickets__get_ticket"]
+sha256 = "f3e572b012730c55ca86ff0c13522d0d4ddb683bfc92617138c7a32159623c69"
+description = "Get one ticket with its newest public comments (at most 20) and the total number of them."
+input_schema = '''
+{
+  "additionalProperties": false,
+  "properties": {
+    "ticket_id": {
+      "maxLength": 10,
+      "pattern": "^TKT-[0-9]{6}$",
+      "title": "Ticket Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "ticket_id"
+  ],
+  "title": "GetTicketInput",
+  "type": "object"
+}
+'''
+output_schema = '''
+{
+  "$defs": {
+    "PublicComment": {
+      "properties": {
+        "author": {
+          "title": "Author",
+          "type": "string"
+        },
+        "body": {
+          "title": "Body",
+          "type": "string"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "author",
+        "body",
+        "created_at"
+      ],
+      "title": "PublicComment",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "account_id": {
+      "title": "Account Id",
+      "type": "string"
+    },
+    "assignee": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Assignee"
+    },
+    "comments": {
+      "items": {
+        "$ref": "#/$defs/PublicComment"
+      },
+      "title": "Comments",
+      "type": "array"
+    },
+    "comments_total": {
+      "title": "Comments Total",
+      "type": "integer"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "description": {
+      "title": "Description",
+      "type": "string"
+    },
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "priority": {
+      "enum": [
+        "low",
+        "normal",
+        "high",
+        "urgent"
+      ],
+      "title": "Priority",
+      "type": "string"
+    },
+    "requested_by": {
+      "title": "Requested By",
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "open",
+        "pending",
+        "resolved",
+        "closed"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "subject": {
+      "title": "Subject",
+      "type": "string"
+    },
+    "updated_at": {
+      "format": "date-time",
+      "title": "Updated At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "account_id",
+    "subject",
+    "status",
+    "priority",
+    "assignee",
+    "created_at",
+    "updated_at",
+    "description",
+    "requested_by",
+    "comments",
+    "comments_total"
+  ],
+  "title": "TicketDetail",
+  "type": "object"
+}
+'''
+
+[tools."tickets__list_tickets"]
+sha256 = "00a23f44fb47bf768b6dacbc07ef5496afe44919b7dc1543a219c946e24e6700"
+description = "List support tickets, newest activity first, optionally filtered by status, priority or account. Use offset to reach older ones."
+input_schema = '''
+{
+  "additionalProperties": false,
+  "properties": {
+    "account_id": {
+      "anyOf": [
+        {
+          "maxLength": 9,
+          "pattern": "^ACC-[0-9]{5}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Account Id"
+    },
+    "limit": {
+      "default": 10,
+      "maximum": 20,
+      "minimum": 1,
+      "title": "Limit",
+      "type": "integer"
+    },
+    "offset": {
+      "default": 0,
+      "maximum": 10000,
+      "minimum": 0,
+      "title": "Offset",
+      "type": "integer"
+    },
+    "priority": {
+      "anyOf": [
+        {
+          "enum": [
+            "low",
+            "normal",
+            "high",
+            "urgent"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Priority"
+    },
+    "status": {
+      "anyOf": [
+        {
+          "enum": [
+            "open",
+            "pending",
+            "resolved",
+            "closed"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Status"
+    }
+  },
+  "title": "ListTicketsInput",
+  "type": "object"
+}
+'''
+output_schema = '''
+{
+  "$defs": {
+    "TicketSummary": {
+      "properties": {
+        "account_id": {
+          "title": "Account Id",
+          "type": "string"
+        },
+        "assignee": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Assignee"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "priority": {
+          "enum": [
+            "low",
+            "normal",
+            "high",
+            "urgent"
+          ],
+          "title": "Priority",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "open",
+            "pending",
+            "resolved",
+            "closed"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "subject": {
+          "title": "Subject",
+          "type": "string"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "title": "Updated At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "account_id",
+        "subject",
+        "status",
+        "priority",
+        "assignee",
+        "created_at",
+        "updated_at"
+      ],
+      "title": "TicketSummary",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "tickets": {
+      "items": {
+        "$ref": "#/$defs/TicketSummary"
+      },
+      "title": "Tickets",
+      "type": "array"
+    }
+  },
+  "required": [
+    "tickets"
+  ],
+  "title": "ListTicketsOutput",
+  "type": "object"
+}
+'''

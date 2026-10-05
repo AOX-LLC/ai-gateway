@@ -125,3 +125,51 @@ def test_every_tool_of_the_three_servers_is_pinned_and_nothing_else() -> None:
         "handbook__search", "handbook__get_document",
         "echo__say", "echo__shout", "echo__wait",
     }  # fmt: skip
+
+
+# -- the lab's pins: the product's, plus the lab upstream's tools as they were reviewed ----------
+
+LAB_PINS_FILE = ROOT / "config" / "lab" / "tool_pins.lab.toml"
+
+
+def test_the_lab_pins_file_is_what_the_product_and_the_lab_upstream_define() -> None:
+    generator = _generator()
+
+    assert LAB_PINS_FILE.read_text(encoding="utf-8") == generator.current_lab_pins_text()
+
+
+def test_the_default_pins_hold_no_lab_tool_and_the_lab_pins_hold_the_reviewed_ones_only() -> None:
+    default = tomllib.loads(PINS_FILE.read_text(encoding="utf-8"))["tools"]
+    lab = tomllib.loads(LAB_PINS_FILE.read_text(encoding="utf-8"))["tools"]
+
+    assert not [name for name in default if name.startswith("lab__")]
+    assert {name for name in lab if name.startswith("lab__")} == {
+        "lab__fetch_notice",
+        "lab__fetch_report",
+        "lab__forward_note",
+    }
+    assert {name for name in lab if not name.startswith("lab__")} == set(default)
+
+
+def test_against_the_lab_pins_a_rug_pull_is_drift_and_a_poisoned_tool_is_unpinned() -> None:
+    from lab_upstream.tools import definitions
+
+    pins = load_tool_pins(LAB_PINS_FILE)
+
+    def digest(tool: Any) -> str:
+        return definition_sha256(
+            f"lab__{tool.name}", tool.description, tool.input_schema, tool.output_schema
+        )
+
+    for tool in definitions("reviewed"):
+        pin = pins.get(f"lab__{tool.name}")
+        assert pin is not None
+        assert pin.sha256 == digest(tool), "as reviewed, nothing has drifted"
+    pulled = {tool.name: tool for tool in definitions("rugpulled")}
+    for name in ("fetch_notice", "forward_note"):
+        pin = pins.get(f"lab__{name}")
+        assert pin is not None
+        assert pin.sha256 != digest(pulled[name]), name
+    for tool in definitions("poisoned"):
+        if tool.name in ("summarize_account", "lookup_record"):
+            assert pins.get(f"lab__{tool.name}") is None
