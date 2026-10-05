@@ -85,15 +85,30 @@ def _strings(value: Any) -> list[str]:
     return []
 
 
-_SEPARATORS = re.compile(r"_|[\u00ad\u200b-\u200f\u2060-\u2064\ufeff]")
-"""What an attacker joins words with so a whitespace count sees one word: underscores and the
-zero-width and other invisible format characters."""
+_BLANK_GLYPHS = frozenset(
+    "\u034f\u115f\u1160\u17b4\u17b5\u180b\u180c\u180d\u180e\u2800\u3164\uffa0"
+)
+"""Characters that draw nothing and are not format characters (the combining grapheme joiner, the
+Hangul, Khmer and Mongolian fillers, the Braille blank): words can be joined with any of them."""
+
+
+def _is_separator(char: str) -> bool:
+    """What an attacker joins words with so a whitespace count sees one word: an underscore, any
+    format character (zero-width spaces and joiners, bidi marks, the soft hyphen, the Unicode tag
+    characters: category Cf), a variation selector, or a blank glyph."""
+    return (
+        char == "_"
+        or unicodedata.category(char) == "Cf"
+        or char in _BLANK_GLYPHS
+        or "\ufe00" <= char <= "\ufe0f"
+        or "\U000e0100" <= char <= "\U000e01ef"
+    )
 
 
 def normalize_separators(text: str) -> str:
-    """The text with each separator (see `_SEPARATORS`) read as a space and runs of whitespace
+    """The text with each separator (see `_is_separator`) read as a space and runs of whitespace
     collapsed. Only the *length decision* uses it: the unit the model is shown is the original."""
-    return " ".join(_SEPARATORS.sub(" ", text).split())
+    return " ".join("".join(" " if _is_separator(c) else c for c in text).split())
 
 
 def is_prose(text: str, min_chars: int, min_words: int, *, normalize: bool = False) -> bool:
