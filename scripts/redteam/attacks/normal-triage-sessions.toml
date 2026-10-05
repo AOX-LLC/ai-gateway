@@ -14,6 +14,10 @@ client = "harborline-helper-api"
 marker = "RT-triage-s"
 hostile = false
 
+[expect]
+family = "benign"
+oracle = "none"
+
 [texts]
 ticket = { file = "story_09.toml", id = "ticket-damaged-order" }
 

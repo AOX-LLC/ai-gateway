@@ -43,6 +43,7 @@ def _raw(**step: Any) -> dict[str, Any]:
         "title": "t",
         "client": "c",
         "marker": "RT-x",
+        "expect": {"family": "exfil-bulk", "oracle": "export", "threshold": 10, "landing": ["s"]},
         "plant": {
             "account_id": "ACC-00001",
             "subject": "Order question",
