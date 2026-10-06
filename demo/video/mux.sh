@@ -4,7 +4,8 @@
 # The voice file is whatever the recorder made (WAV, M4A, MP3 ...), recorded while watching the teleprompter
 # cut, starting when the video starts. The picture is copied, never re-encoded. The loudness is normalised in
 # two passes (EBU R128: -16 LUFS integrated, -1.5 dB true peak, the usual target for online video): the first
-# pass measures, the second applies those measurements linearly, so the voice is not squashed. A voice more
+# pass measures, the second applies those measurements linearly where the true-peak target allows it (loudnorm
+# falls back to its dynamic mode otherwise), and the result is measured and printed. A voice more
 # than HALF_SECOND longer than the picture is refused (the recording ran over its script); a shorter one is
 # padded with silence to the picture's length. --embed-captions adds docs/video/captions-<cut>.srt as a soft
 # subtitle track (YouTube takes the .srt or .vtt separately too).
@@ -17,11 +18,13 @@ TARGET_I=-16
 TARGET_TP=-1.5
 TARGET_LRA=11
 
-[ $# -ge 1 ] || { sed -n '2,12p' "$0" >&2; exit 2; }
+usage() { awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0" >&2; exit 2; }
+[ $# -ge 1 ] || usage
 VOICE=$1
 CUT=${2:-core}
 EMBED=${3:-}
 case "$CUT" in core|extended) ;; *) echo "the cut must be core or extended, got: $CUT" >&2; exit 2 ;; esac
+case "$EMBED" in ""|--embed-captions) ;; *) echo "unknown option: $EMBED (the only one is --embed-captions)" >&2; exit 2 ;; esac
 SILENT="$DEMO/out/video/silent-$CUT.mp4"
 CAPTIONS="$REPO/docs/video/captions-$CUT.srt"
 OUT="$DEMO/out/final/ai-gateway-$CUT.mp4"
@@ -78,3 +81,5 @@ ffmpeg -hide_banner -loglevel error -y "${INPUTS[@]}" \
   -filter_complex "[1:a]${FILTER},aresample=48000,apad[voice]" "${MAPS[@]}" \
   -c:v copy -c:a aac -b:a 192k "${SUBTITLES[@]}" -t "$VIDEO_S" -movflags +faststart "$OUT"
 echo "wrote $OUT ($(duration "$OUT") s)"
+echo "result, measured:"
+ffmpeg -hide_banner -nostats -i "$OUT" -vn -af ebur128=peak=true -f null - 2>&1 | grep -E "^\s+(I|Peak):" | tail -2

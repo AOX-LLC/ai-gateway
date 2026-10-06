@@ -74,7 +74,11 @@ export function parseScript(markdown: string): ScriptScene[] {
   if (names.join(",") !== COLUMNS.join(",")) throw new Error(`the table's columns must be ${COLUMNS.join(", ")}`);
   const ids = new Set<string>();
   return body.map((row) => {
-    const [id, cut, seconds, source, narration] = cells(row);
+    const fields = cells(row);
+    if (fields.length !== COLUMNS.length) {
+      throw new Error(`a row has ${fields.length} cells, not ${COLUMNS.length} (a "|" in a cell?): ${row.slice(0, 60)}`);
+    }
+    const [id, cut, seconds, source, narration] = fields;
     if (cut !== "core" && cut !== "ext") throw new Error(`scene ${id}: cut must be core or ext`);
     if (ids.has(id)) throw new Error(`scene ${id} appears twice`);
     ids.add(id);

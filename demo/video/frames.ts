@@ -84,7 +84,10 @@ export async function renderFrames(sources: string[], facts: Record<string, stri
         body: bodyFor(source, facts),
         footer: FOOTER,
       };
-      const html = template.replace(/\{\{(\w+)\}\}/g, (_, key: string) => values[key] ?? "");
+      const html = template.replace(/\{\{(\w+)\}\}/g, (_, key: string) => {
+        if (!(key in values)) throw new Error(`frame.html uses an unknown placeholder: ${key}`);
+        return values[key];
+      });
       // Written beside the PNG because file:// fonts and images do not load into an about:blank page.
       const htmlPath = join(VIDEO_OUT, `_frame-${index}.html`);
       writeFileSync(htmlPath, html);

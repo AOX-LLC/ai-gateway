@@ -7,23 +7,23 @@ AI assistants read text that strangers write.
 This gateway sits between an assistant and its tools, and checks every call.
 
 3
-00:00:09,400 --> 00:00:13,975
+00:00:09,400 --> 00:00:13,700
 Here is Claude Code, a real client, connected through the gateway.
 
 4
-00:00:14,075 --> 00:00:19,500
-It is offered nine tools; two that change a ticket are held back.
+00:00:13,800 --> 00:00:20,500
+It is offered nine tools; the two that change a ticket's status or owner are held back.
 
 5
-00:00:20,400 --> 00:00:24,019
+00:00:21,400 --> 00:00:24,803
 I ask it to triage the open tickets.
 
 6
-00:00:24,119 --> 00:00:29,132
+00:00:24,903 --> 00:00:29,619
 One ticket, planted by me, tells assistants to export every customer.
 
 7
-00:00:29,232 --> 00:00:37,500
+00:00:29,719 --> 00:00:37,500
 When Claude opens it, the gateway refuses the call, and Claude tells me it could not read it.
 
 8
@@ -47,31 +47,31 @@ With every layer off, 31 succeed.
 With every layer on, 5 do.
 
 13
-00:01:00,400 --> 00:01:04,196
+00:01:00,400 --> 00:01:03,500
 Every call passes a fixed chain of layers.
 
 14
-00:01:04,296 --> 00:01:09,065
+00:01:03,600 --> 00:01:07,500
 Scope, allowlist, rate limit, schema, pinned descriptions, egress, canary, classifier.
 
 15
-00:01:09,165 --> 00:01:11,500
+00:01:07,600 --> 00:01:09,500
 Writes wait for a person.
 
 16
-00:01:12,400 --> 00:01:14,248
+00:01:10,400 --> 00:01:12,003
 The gaps are real.
 
 17
-00:01:14,348 --> 00:01:18,143
+00:01:12,103 --> 00:01:15,410
 The attacker is a script, not a model.
 
 18
-00:01:18,243 --> 00:01:20,091
-The classifier replays recordings.
+00:01:15,510 --> 00:01:20,519
+The classifier replays recordings, including the one that caught my planted ticket.
 
 19
-00:01:20,191 --> 00:01:23,500
+00:01:20,619 --> 00:01:23,500
 Slow drips still leak a few values.
 
 20

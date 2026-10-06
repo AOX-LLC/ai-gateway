@@ -6,7 +6,7 @@
 // rebuilt from the repository alone.
 import { mkdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import { FPS, HEIGHT, MEDIA_DIR, REPO_DIR, WIDTH, ffmpeg, kilobytes, probeDurationSeconds, readJson } from "../lib.ts";
+import { FPS, HEIGHT, MEDIA_DIR, REPO_DIR, WIDTH, ffmpeg, kilobytes, probeDurationSeconds, readJson, run } from "../lib.ts";
 import { VIDEO_OUT, renderFrames } from "./frames.ts";
 import {
   WORDS_PER_SECOND_MAX, WORDS_PER_SECOND_WARN, cuesFor, loadFacts, loadScript, scenesOf, totalSeconds,
@@ -28,7 +28,8 @@ const FIT = `scale=${WIDTH}:${HEIGHT}:flags=lanczos,fps=${FPS}`;
 /** Teleprompter: the cut on top, a bar under it, each line shown LEAD_S before it is spoken. */
 const BAR_HEIGHT = 300;
 const LEAD_S = 1.2;
-const PROMPT_FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf";
+/** The best installed bold sans, wherever the distribution keeps it (fontconfig knows; a path would not travel). */
+const PROMPT_FONT = run("fc-match", ["-f", "%{file}", "DejaVu Sans:bold"]).trim();
 const PROMPT_CHARS_PER_LINE = 44;
 const PROMPT_SIZE = 46;
 const NEXT_SIZE = 26;

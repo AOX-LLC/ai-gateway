@@ -35,16 +35,16 @@ Source syntax: `card:title`, `card:end`, `still:scorecard`, `still:architecture`
 | id | cut | seconds | source | narration |
 | --- | --- | --- | --- | --- |
 | hook | core | 9 | card:title | AI assistants read text that strangers write. This gateway sits between an assistant and its tools, and checks every call. |
-| tools | core | 11 | clip:real-realistic:prompt,tools | Here is Claude Code, a real client, connected through the gateway. It is offered nine tools; two that change a ticket are held back. |
-| block | core | 18 | clip:real-realistic:calls,answer | I ask it to triage the open tickets. One ticket, planted by me, tells assistants to export every customer. When Claude opens it, the gateway refuses the call, and Claude tells me it could not read it. |
+| tools | core | 12 | clip:real-realistic:prompt,tools | Here is Claude Code, a real client, connected through the gateway. It is offered nine tools; the two that change a ticket's status or owner are held back. |
+| block | core | 17 | clip:real-realistic:calls,answer | I ask it to triage the open tickets. One ticket, planted by me, tells assistants to export every customer. When Claude opens it, the gateway refuses the call, and Claude tells me it could not read it. |
 | layer | core | 10 | clip:real-realistic:dashboard-layers,dashboard-decision | The dashboard names the layer that stopped it: the classifier. Every call is recorded with the layer that decided it. |
 | obeys | ext | 24 | clip:real-compliant:calls,answer,dashboard-decision | What if a model does obey? In this second run I tell Claude to do the export myself. It stands in for a model that was talked into it, and the video says so. It reads all forty accounts, but the one ticket that would carry them is refused by the egress layer. No ticket is created. |
 | scorecard | core | 12 | still:scorecard | To measure this, a scripted attacker runs {{attacks}} attacks across {{columns}} configurations. With every layer off, {{all_off}} succeed. With every layer on, {{all_on}} do. |
 | method | ext | 16 | text:How it was checked / An independent oracle reads the databases / Each attack states its prediction first / The scorecard shows where a run differed | Each attack is judged by an independent oracle that reads the databases, not the gateway's own record. Each attack file states its prediction before any run, and the scorecard shows where reality differed. |
-| chain | core | 12 | still:architecture | Every call passes a fixed chain of layers. Scope, allowlist, rate limit, schema, pinned descriptions, egress, canary, classifier. Writes wait for a person. |
+| chain | core | 10 | still:architecture | Every call passes a fixed chain of layers. Scope, allowlist, rate limit, schema, pinned descriptions, egress, canary, classifier. Writes wait for a person. |
 | live | ext | 12 | clip:dashboard:volume-live,layers,decisions | Under simulated traffic the overview updates live, with every call, and the layer behind every refusal. |
 | approvals | ext | 8 | clip:dashboard:approvals | Writes wait here for a person. The dashboard is read-only: it can show an approval, never give one. |
-| limits | core | 12 | text:Honest limits / The attacker is a script, not a model / The classifier replays recordings / Slow drips still leak a few values | The gaps are real. The attacker is a script, not a model. The classifier replays recordings. Slow drips still leak a few values. |
+| limits | core | 14 | text:Honest limits / The attacker is a script, not a model / The classifier replays recordings / Slow drips still leak a few values | The gaps are real. The attacker is a script, not a model. The classifier replays recordings, including the one that caught my planted ticket. Slow drips still leak a few values. |
 | end | core | 6 | card:end | Try it yourself with Docker Compose and no API key. The link is below. |
 <!-- script:end -->
 
