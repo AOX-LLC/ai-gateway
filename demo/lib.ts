@@ -44,8 +44,9 @@ export const WIDTH = 1440;
 export const HEIGHT = 900;
 export const FPS = 30;
 
-export function themeDir(theme: Theme): string {
-  return join(OUT_DIR, theme);
+/** Where a theme's recording lives; a named take (the real-client clips) has a directory of its own. */
+export function themeDir(theme: Theme, take = ""): string {
+  return join(OUT_DIR, theme, take);
 }
 
 export function parseTheme(value: string | undefined): Theme {
@@ -61,8 +62,8 @@ export function readConfig(): Config {
   return readJson<Config>(join(DEMO_DIR, "config.json"));
 }
 
-export function readTimeline(theme: Theme): Timeline {
-  const timeline = readJson<Timeline>(join(themeDir(theme), "timeline.json"));
+export function readTimeline(theme: Theme, take = ""): Timeline {
+  const timeline = readJson<Timeline>(join(themeDir(theme, take), "timeline.json"));
   for (const scene of timeline.scenes) {
     if (!(scene.endMs > scene.startMs)) throw new Error(`scene ${scene.id}: endMs must be after startMs`);
     if (!(scene.speed >= 1)) throw new Error(`scene ${scene.id}: speed must be 1 or more`);

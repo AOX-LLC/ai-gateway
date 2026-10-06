@@ -27,6 +27,8 @@ const APPROVALS_HOLD_MS = 6_000;
 
 const themeName: Theme = parseTheme(process.env.THEME ?? "dark");
 const outDir = themeDir(themeName);
+/** What a dashboard take leaves in its directory (the real-client takes are in directories below it). */
+const OWN_FILES = ["raw.webm", "timeline.json", "state.json", "video-tmp"];
 const timeline = new Timeline();
 const consoleErrors: string[] = [];
 
@@ -85,7 +87,8 @@ async function recordTake(browser: Browser, statePath: string): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  rmSync(outDir, { recursive: true, force: true });
+  // Only this recording's own files: the real-client takes live in directories below this one.
+  for (const name of OWN_FILES) rmSync(join(outDir, name), { recursive: true, force: true });
   mkdirSync(outDir, { recursive: true });
   const browser = await chromium.launch();
   try {

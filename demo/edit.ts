@@ -1,6 +1,7 @@
 // Edits out/<theme>/raw.webm into the README media, driven by out/<theme>/timeline.json.
-// Usage: node edit.ts <light|dark>
-// Outputs (under out/<theme>/): dashboard.gif, dashboard.mp4, dashboard.webm
+// Usage: node edit.ts <light|dark> [take]
+// Outputs (under out/<theme>/[take/]): <name>.gif, <name>.mp4, <name>.webm, where <name> is the take's name
+// ("dashboard" for the live-traffic clip, which has no take).
 import { mkdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { FPS, HEIGHT, WIDTH, ffmpeg, kilobytes, parseTheme, probeDurationSeconds, readTimeline, themeDir } from "./lib.ts";
@@ -89,21 +90,29 @@ function makeVideos(source: string, mp4: string, webm: string): void {
 
 function main(): void {
   const theme = parseTheme(process.argv[2]);
-  const dir = themeDir(theme);
+  const take = process.argv[3] ?? "";
+  const name = take === "" ? "dashboard" : take;
+  const dir = themeDir(theme, take);
   const work = join(dir, ".work");
   rmSync(work, { recursive: true, force: true });
   mkdirSync(work, { recursive: true });
-  const { scenes } = readTimeline(theme);
+  const { scenes } = readTimeline(theme, take);
   if (scenes.length === 0) throw new Error("the timeline has no scenes");
   const raw = join(dir, "raw.webm");
   const source = join(work, "source.mp4");
   const clips = scenes.map((scene) => ({ scene, path: buildSceneClip(raw, work, scene) }));
   concatClips(clips.map((clip) => clip.path), source, work);
-  const gifSource = join(work, "gif-source.mp4");
-  concatClips(clips.filter((clip) => clip.scene.gif).map((clip) => clip.path), gifSource, work);
-  console.log(`${theme}: ${scenes.length} scenes, ${probeDurationSeconds(source).toFixed(1)} s (gif ${probeDurationSeconds(gifSource).toFixed(1)} s)`);
-  makeGif(gifSource, work, join(dir, "dashboard.gif"));
-  makeVideos(source, join(dir, "dashboard.mp4"), join(dir, "dashboard.webm"));
+  const gifClips = clips.filter((clip) => clip.scene.gif);
+  console.log(`${theme}: ${scenes.length} scenes, ${probeDurationSeconds(source).toFixed(1)} s`);
+  if (gifClips.length > 0) {
+    const gifSource = join(work, "gif-source.mp4");
+    concatClips(gifClips.map((clip) => clip.path), gifSource, work);
+    console.log(`gif source: ${probeDurationSeconds(gifSource).toFixed(1)} s`);
+    makeGif(gifSource, work, join(dir, `${name}.gif`));
+  } else {
+    console.log("no scene is flagged for a gif: skipped");
+  }
+  makeVideos(source, join(dir, `${name}.mp4`), join(dir, `${name}.webm`));
   rmSync(work, { recursive: true, force: true });
 }
 
