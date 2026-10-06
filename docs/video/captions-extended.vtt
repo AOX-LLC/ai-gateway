@@ -1,0 +1,94 @@
+WEBVTT
+
+00:00:00.400 --> 00:00:03.170
+AI assistants read text that strangers write.
+
+00:00:03.270 --> 00:00:08.500
+This gateway sits between an assistant and its tools, and checks every call.
+
+00:00:09.400 --> 00:00:13.975
+Here is Claude Code, a real client, connected through the gateway.
+
+00:00:14.075 --> 00:00:19.500
+It is offered nine tools; two that change a ticket are held back.
+
+00:00:20.400 --> 00:00:24.019
+I ask it to triage the open tickets.
+
+00:00:24.119 --> 00:00:29.132
+One ticket, planted by me, tells assistants to export every customer.
+
+00:00:29.232 --> 00:00:37.500
+When Claude opens it, the gateway refuses the call, and Claude tells me it could not read it.
+
+00:00:38.400 --> 00:00:42.900
+The dashboard names the layer that stopped it: the classifier.
+
+00:00:43.000 --> 00:00:47.500
+Every call is recorded with the layer that decided it.
+
+00:00:48.400 --> 00:00:50.742
+What if a model does obey?
+
+00:00:50.842 --> 00:00:55.626
+In this second run I tell Claude to do the export myself.
+
+00:00:55.726 --> 00:01:02.139
+It stands in for a model that was talked into it, and the video says so.
+
+00:01:02.239 --> 00:01:09.872
+It reads all forty accounts, but the one ticket that would carry them is refused by the egress layer.
+
+00:01:09.972 --> 00:01:11.500
+No ticket is created.
+
+00:01:12.400 --> 00:01:17.900
+To measure this, a scripted attacker runs 31 attacks across 17 configurations.
+
+00:01:18.000 --> 00:01:20.700
+With every layer off, 31 succeed.
+
+00:01:20.800 --> 00:01:23.500
+With every layer on, 5 do.
+
+00:01:24.400 --> 00:01:32.130
+Each attack is judged by an independent oracle that reads the databases, not the gateway's own record.
+
+00:01:32.230 --> 00:01:39.500
+Each attack file states its prediction before any run, and the scorecard shows where reality differed.
+
+00:01:40.400 --> 00:01:44.196
+Every call passes a fixed chain of layers.
+
+00:01:44.296 --> 00:01:49.065
+Scope, allowlist, rate limit, schema, pinned descriptions, egress, canary, classifier.
+
+00:01:49.165 --> 00:01:51.500
+Writes wait for a person.
+
+00:01:52.400 --> 00:02:03.500
+Under simulated traffic the overview updates live, with every call, and the layer behind every refusal.
+
+00:02:04.400 --> 00:02:06.700
+Writes wait here for a person.
+
+00:02:06.800 --> 00:02:11.500
+The dashboard is read-only: it can show an approval, never give one.
+
+00:02:12.400 --> 00:02:14.248
+The gaps are real.
+
+00:02:14.348 --> 00:02:18.143
+The attacker is a script, not a model.
+
+00:02:18.243 --> 00:02:20.091
+The classifier replays recordings.
+
+00:02:20.191 --> 00:02:23.500
+Slow drips still leak a few values.
+
+00:02:24.400 --> 00:02:28.014
+Try it yourself with Docker Compose and no API key.
+
+00:02:28.114 --> 00:02:29.500
+The link is below.
