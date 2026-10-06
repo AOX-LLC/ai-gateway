@@ -1032,7 +1032,7 @@ attack is predicted to succeed when a landing call goes through. It is the indep
 and layers are not independent (a refused egress attempt still counts), so where a run differs from
 the prediction the scorecard reports it as a finding.
 
-**The corpus** is 31 new attacks (35 files with 4d's four) and the benign workload: families for
+**The corpus** is 31 new attacks (36 files with 4d's four) and the benign workload: families for
 exfiltration (bulk, drip, cross-session), unauthorized writes, out-of-scope calls, tool poisoning,
 rug pulls, schema smuggling, canary leakage, encoded exfiltration and obfuscated instructions, and
 five honest runs whose texts are recorded corpus strings. `gateway/tests/test_redteam_corpus.py`
@@ -1108,10 +1108,12 @@ seventeen *columns*, in replay mode with no API key, and writes `docs/scorecard.
   to `main` and nightly rather than on a pull request.
 - **Honesty.** The attacker is a script that does what a planted text says (a compliant model); the
   classifier answers from recordings, so the figures are those of the recorded judgements; the known
-  gaps (the drip of up to nine values per egress window, a ROT13 canary, values written backwards,
-  an instruction split into pieces too short to be judged) are shown as successes; the floor-layer
-  columns are lab-only; the corpus is small, so a rate is a count; and the original long-boundary
-  attack and the second one, whose halves are innocent alone, are reported side by side.
+  gaps (the drip of up to nine values per egress window, a ROT13 canary, an instruction split into
+  pieces too short to be judged) are shown as successes, and a reversed export, which egress and
+  canary do not match, is shown stopped by the classifier's one recorded judgement and listed as a
+  mismatch; the floor-layer columns are lab-only; the corpus is small, so a rate is a count; and the
+  original long-boundary attack and the second one, whose halves are innocent alone, are reported
+  side by side.
 
 ### Idle transactions (Phase 3c)
 
