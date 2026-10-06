@@ -11,6 +11,6 @@
   "check": {
     "allowedRepoPattern": "^(?:https?:\\/\\/)?github\\.com\\/aox-llc\\/ai-gateway(?![\\w.-])",
     "requiredText": "sample data",
-    "requiredTextPattern": "^(dashboard|social|overview)"
+    "requiredTextPattern": "^(dashboard|social|overview|real-)"
   }
 }

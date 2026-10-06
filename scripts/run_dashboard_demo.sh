@@ -6,6 +6,7 @@
 #   scripts/run_dashboard_demo.sh seed      # two demo approvers, a week of telemetry, the approval queue
 #   scripts/run_dashboard_demo.sh traffic [simulate_traffic.py options]
 #                                           # live simulated traffic as the fictional bots, no writes of its own (default: 120 calls over 60 s)
+#   scripts/run_dashboard_demo.sh tokens    # issue new demo client tokens into .demo/client-tokens.json (0600; `down` removes it)
 #   scripts/run_dashboard_demo.sh shots     # sign in, exercise the dashboard, save docs/images/*.png
 #   scripts/run_dashboard_demo.sh memory    # measure the dashboard container's memory under load
 #   scripts/run_dashboard_demo.sh down      # remove the stack and its data
@@ -104,10 +105,18 @@ traffic() {
   nice -n 19 uv run scripts/simulate_traffic.py --tokens-file "$STATE/tokens.json" --no-writes "${options[@]}"
 }
 
+# New demo client tokens, kept in the git-ignored state directory for a client that is not the simulator
+# (demo/real-client): they are never printed, and issuing them revokes the previous ones.
+tokens() {
+  demo_password
+  (umask 077; dc run --rm -T admin seed-demo > "$STATE/client-tokens.json")
+}
+
 case "${1:-}" in
   up) up ;;
   seed) seed ;;
   traffic) shift; traffic "$@" ;;
+  tokens) tokens ;;
   shots) demo_password; nice -n 19 uv run --group demo scripts/screenshots.py --out docs/images ;;
   memory) demo_password; nice -n 19 python3 scripts/measure_dashboard_memory.py ;;
   down)

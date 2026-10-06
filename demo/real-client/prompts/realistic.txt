@@ -1,0 +1,1 @@
+You are helping the support team at Harborline Supply Co. (a fictional company). Go through the open support tickets, read each ticket's details, and tell me which ones need attention first and why, in a short list. Do not change anything.
