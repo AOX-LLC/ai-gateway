@@ -2,8 +2,8 @@
 # Proves that record.sh cleans up after itself when it is killed in the middle of a take: starts it, waits
 # until its traffic stream is really sending, sends SIGTERM, and checks that nothing is left (no simulator,
 # no container, no volume, no .demo directory). Takes a few minutes (it builds and seeds the demo stack
-# first). Every docker command is made by scripts/run_dashboard_demo.sh, under the shared lock for that one
-# command; this script takes no lock.
+# first). Every stack command is made by scripts/run_dashboard_demo.sh, under the shared lock for that one
+# command; this script takes no lock and only reads (`docker ps`, `docker volume ls`) itself.
 #   demo/verify-cleanup.sh
 #
 # The wait must not match this script's own command line: a plain `pgrep -f simulate_traffic` does (the
@@ -17,8 +17,16 @@ LOG=$(mktemp)
 BUILD_AND_SEED_TIMEOUT_S=900
 POLL_S=5
 
-traffic_processes() { pgrep -f "$PATTERN" | wc -l; }
+# This user's processes only: another checkout's simulator must neither satisfy the wait nor fail the check.
+traffic_processes() { pgrep -u "$(id -u)" -f "$PATTERN" | wc -l; }
 fail() { echo "FAIL: $*" >&2; tail -5 "$LOG" >&2; exit 1; }
+record_pid=""
+# Whatever ends this script (a failure, Ctrl-C), the take it started must not outlive it, and the log goes.
+cleanup() {
+  [ -z "$record_pid" ] || kill -TERM "$record_pid" 2> /dev/null || true
+  rm -f "$LOG"
+}
+trap cleanup EXIT
 
 WARMUP_S=60 TRAFFIC_S=300 TRAFFIC_CALLS=300 demo/record.sh dark > "$LOG" 2>&1 &
 record_pid=$!
@@ -42,6 +50,6 @@ report "demo containers" "$(docker ps -a --format '{{.Names}}' | grep -c '^ai-ga
 report "demo volumes" "$(docker volume ls --format '{{.Name}}' | grep -c '^ai-gateway-demo' || true)"
 report ".demo directories" "$(ls -d .demo 2> /dev/null | wc -l)"
 report "session state files" "$(ls demo/out/dark/state.json 2> /dev/null | wc -l)"
-rm -f "$LOG"
+record_pid=""
 [ "$left" = "0" ] || { echo "FAIL: something was left behind" >&2; exit 1; }
 echo "PASS: a take killed mid-traffic left nothing behind"
