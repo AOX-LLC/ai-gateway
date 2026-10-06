@@ -35,11 +35,12 @@ AI client ──HTTPS──► bearer auth ──► protocol version guard ─�
                                          (unknown: same answer as out of scope)
                                                                      ▼
               ┌──────────────── pipeline, one run per request ────────────────┐
-  tools/list  │ filter_tools:  scope → … → pinned descriptions                │
+  tools/list  │ filter_tools:  scope → pinned descriptions                    │
   tools/call  │ before_call:   scope → allowlist → rate limit → schema →      │
-              │                egress → canary → classifier → approval        │
+              │                pinned descriptions → egress → canary →        │
+              │                classifier → approval                          │
               │ ── forward exactly the checked arguments to the upstream ──   │
-              │ after_call:    egress → canary → classifier (on results)      │
+              │ after_call:    schema → egress → classifier (on results)      │
               └───────────────────────────────────────────────────────────────┘
                  every layer's verdict → one decision record → event sink + span
 ```
@@ -1491,7 +1492,11 @@ telemetry with `scripts/seed_dashboard_demo.py` (a daily rhythm and four attack 
 gives the same counts), puts four approvals pending and one each approved, rejected and expired through
 the real path with two demo approver logins, and takes the screenshots in `docs/images/` with
 `scripts/screenshots.py`. The demo admin password is made for the run and kept only in a git-ignored
-`.demo/`; `DASHBOARD_DEMO=1` pins "now" to the newest seeded row so the week is always in range.
+`.demo/`; `DASHBOARD_DEMO=1` pins "now" to the newest recorded request, so the seeded week is always
+in range and new traffic still moves the clock forward. `scripts/run_dashboard_demo.sh traffic`
+sends live traffic as the two bots, with no writes of its own (a write waits for a person, so the
+simulator sends one only with an approver; the refused attempts stay), and `demo/record.sh` records the README's clips under it (see
+`demo/README.md`).
 
 The memory limit is measured, not guessed: `scripts/measure_dashboard_memory.py` samples the container
 once a second through a first load, ten concurrent loads in both themes, the 7- and 30-day ranges and a
