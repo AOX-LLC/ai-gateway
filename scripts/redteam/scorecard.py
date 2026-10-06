@@ -675,8 +675,10 @@ def render_readme_section(card: Mapping[str, Any]) -> str:
         f"oracle. With every layer on, **{on['succeeded']} of {n}** succeed; with every layer off, "
         f"**{off['succeeded']} of {n}**. The ones that still succeed with every layer on are the known "
         f"gaps, shown as successes: {gaps}. What each layer alone stops (the attacks that succeed only "
-        f"when it is off): {layers}. The approval layer is a lab approver that rubber-stamps every "
-        "write (the worst case). The classifier answers from recordings, and the corpus is small, so a "
+        f"when it is off): {layers}. A 0 means every attack that layer stops is also stopped by "
+        "another layer, so switching it off alone changes nothing (redundancy); `approval`'s 0 is "
+        "because the scorecard's approver is a lab approver that rubber-stamps every write (the worst "
+        "case). The classifier answers from recordings, and the corpus is small, so a "
         "rate is a count. Everything, including the before and after of the three v0.1.0 limits and "
         "both long-boundary attacks, is in [`docs/scorecard.md`](docs/scorecard.md).",
         "",
