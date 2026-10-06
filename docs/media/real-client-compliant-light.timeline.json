@@ -1,0 +1,28 @@
+{
+  "scenes": [
+    {
+      "id": "prompt",
+      "seconds": 2.225
+    },
+    {
+      "id": "tools",
+      "seconds": 2.612
+    },
+    {
+      "id": "calls",
+      "seconds": 9.993
+    },
+    {
+      "id": "answer",
+      "seconds": 4.219
+    },
+    {
+      "id": "dashboard-layers",
+      "seconds": 5.634
+    },
+    {
+      "id": "dashboard-decision",
+      "seconds": 5.725
+    }
+  ]
+}

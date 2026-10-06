@@ -288,7 +288,8 @@ jobs:
 
   scorecard-static:
     # On every pull request: the committed scorecard, its rendered files and the generated lab
-    # configuration agree with the attack files and with each other. No stack, a few seconds.
+    # configuration agree with the attack files and with each other, and the case study is what its
+    # template and the scorecard render to. No stack, a few seconds.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -300,6 +301,7 @@ jobs:
           enable-cache: true
       - run: uv sync --frozen
       - run: make scorecard-check
+      - run: make case-study-check
 
   scorecard:
     # The full regeneration: every attack against a fresh lab stack, once for each of the seventeen

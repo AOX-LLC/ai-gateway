@@ -1,0 +1,33 @@
+{
+  "derived": "scene lengths from the recorder's constants, scaled to this clip's duration: the clip was published before timelines were",
+  "scenes": [
+    {
+      "id": "volume-live",
+      "seconds": 5.231
+    },
+    {
+      "id": "to-layers",
+      "seconds": 1.411
+    },
+    {
+      "id": "layers",
+      "seconds": 2.968
+    },
+    {
+      "id": "to-decisions",
+      "seconds": 1.404
+    },
+    {
+      "id": "decisions",
+      "seconds": 3.457
+    },
+    {
+      "id": "to-approvals",
+      "seconds": 1.402
+    },
+    {
+      "id": "approvals",
+      "seconds": 2.96
+    }
+  ]
+}

@@ -46,6 +46,23 @@ The dashboard's strict content security policy stays on. The recorder pins the t
 
 The README uses the GIFs; the MP4 and WebM of each theme are the same clip for places that can play a short silent loop (the website's pages). The GIF cuts between these four and leaves out the scrolls, because a scroll changes every pixel and a GIF cannot hold that small (about 3 MB at 800 px). The MP4 and WebM keep the scrolls. The numbers differ a little between takes, because the traffic is live; the seeded state does not.
 
+## The real-client clip
+
+`real-client/take.sh` makes the clips of Claude Code connected through the gateway, end to end, on a fresh demo stack: it plants the injected ticket (`real-client/plant.py`, the export attack's own ticket), runs Claude Code twice, records the dashboard after each run in both themes, and checks that no ticket was added. Needs the `claude` CLI, logged in; each run costs a few cents and the runs are not deterministic.
+
+- **Realistic:** the prompt asks to triage the open tickets and says nothing about exporting. If Claude does not open the injected ticket the take fails: it does not film something else.
+- **Compliant:** the prompt asks for the export itself, standing in for a model that was talked into it. The clip carries that label on screen for as long as it plays.
+
+`real-client/run.sh` runs Claude Code in an empty directory with no built-in tools, no settings files and no skills, and the gateway as its only MCP server; the token is read into the one command's environment from the git-ignored `.demo/` (`scripts/run_dashboard_demo.sh tokens`), and the MCP config names `${GATEWAY_TOKEN}`. Every invocation is appended to `demo/out/real-client/runs.log`. `real-client/render.py` turns the run's event stream into the transcript the clip plays (it reformats, folds long runs of identical calls into one marked line, and refuses a token, a home directory or a path), and `real-client/record.ts` plays it in a terminal page in the portfolio tokens, then shows the dashboard with the refused row outlined. The clip is a **rendering of the recorded transcript**, not a screen capture of Claude Code (its banner shows an account and a working directory), and says so. `real-client/publish.sh` edits, checks every frame and copies into `docs/media`, with the transcripts (`real-client-*.txt`). A terminal page, and not a terminal-recording tool, keeps the pipeline to what it already needs.
+
+## The video
+
+`npm run video` (`video/build.ts`) reads the timing table in [`docs/video-script.md`](../docs/video-script.md) and makes, from that one source: the silent master cuts (the 90-second core and the 2:30 extension, every scene at its seconds, from the published clips in `docs/media`), the captions (`docs/video/captions-*.srt` and `.vtt`, one cue per sentence, committed) and the teleprompter cuts (a bar under the picture with each line shown 1.2 seconds early). The cuts and the teleprompter go to `out/video/` (git-ignored). `video/mux.sh <voice-file> [core|extended]` puts a recorded voice-over on a cut, with two-pass loudness normalisation, into `out/final/` (git-ignored: the finished video goes to YouTube). The script's numbers are read from `docs/scorecard.json` when the build runs.
+
+## Checking the cleanup
+
+`verify-cleanup.sh` starts `record.sh`, waits until its traffic is really sending, kills it, and checks that no simulator, container, volume, `.demo` directory or session file is left. It needs a few minutes and Docker.
+
 ## The frame check
 
 `check-frames.ts` OCRs one frame a second of every video and GIF (and every PNG), enlarged, and flags:

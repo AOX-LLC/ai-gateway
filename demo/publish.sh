@@ -25,5 +25,8 @@ for theme in "${THEMES[@]}"; do
     cp "out/$theme/dashboard.$extension" "../docs/media/dashboard-$theme.$extension"
   done
 done
+for theme in "${THEMES[@]}"; do
+  node timeline-json.ts "$theme" "" "../docs/media/dashboard-$theme.timeline.json"
+done
 cp out/social-dark.png ../docs/media/social-preview.png
 echo "published to docs/media"

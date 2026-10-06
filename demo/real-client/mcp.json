@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "harborline": {
+      "type": "http",
+      "url": "http://127.0.0.1:4401/mcp",
+      "headers": { "Authorization": "Bearer ${GATEWAY_TOKEN}" }
+    }
+  }
+}

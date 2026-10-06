@@ -11,12 +11,17 @@
 #   LAB_AUTO_APPROVE=yes LAB_MUTABLE_UPSTREAM=yes LAB_FLOOR_OVERRIDE=yes make scorecard-verify
 #                          regenerate on a stack and fail if the committed deterministic part differs.
 #   make lab-config        rewrite the generated lab configuration (config/lab/).
+#   make case-study        re-render docs/case-study.md from docs/case-study.template.md and the
+#                          committed docs/scorecard.json (no stack): for a change to the prose, or
+#                          after `make scorecard` has changed a figure.
+#   make case-study-check  the static check (no stack): docs/case-study.md is what its template and
+#                          the committed scorecard render to. Runs on every pull request.
 #
 # The lab approver and the lab upstream are test tooling that defeat or abuse a control on purpose.
 # The two switches are the caller's to turn on (nothing here sets them): the runner refuses to start
 # without them, and starts the tools only in the `lab` Compose profile, never against anything real.
 
-.PHONY: scorecard scorecard-render scorecard-check scorecard-verify lab-config
+.PHONY: scorecard scorecard-render scorecard-check scorecard-verify lab-config case-study case-study-check
 
 scorecard:
 	nice -n 19 uv run scripts/redteam/scorecard_run.py
@@ -33,3 +38,9 @@ scorecard-check:
 
 lab-config:
 	uv run scripts/generate_lab_config.py
+
+case-study:
+	uv run scripts/case_study.py
+
+case-study-check:
+	uv run scripts/case_study.py --check

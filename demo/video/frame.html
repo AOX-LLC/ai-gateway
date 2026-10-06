@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<title>{{title}}</title>
+<style>
+@font-face { font-family: "Space Grotesk"; font-weight: 600; src: url("{{fonts}}/space-grotesk/space-grotesk-latin-600-normal.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Sans"; font-weight: 400; src: url("{{fonts}}/ibm-plex-sans/IBMPlexSans-Regular-Latin1.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Sans"; font-weight: 600; src: url("{{fonts}}/ibm-plex-sans/IBMPlexSans-SemiBold-Latin1.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Mono"; font-weight: 500; src: url("{{fonts}}/ibm-plex-mono/IBMPlexMono-Medium-Latin1.woff2") format("woff2"); }
+:root {
+  --bg: #0E1012; --surface: #15181B; --border: #2A2F35;
+  --text: #E6E8EA; --text-secondary: #C3C8CD; --text-muted: #9AA1A9;
+  --accent: #3FC1B0; --danger: #F2707F;
+}
+* { box-sizing: border-box; margin: 0; }
+html, body { width: 1440px; height: 900px; }
+body { background: var(--bg); color: var(--text); font-family: "IBM Plex Sans", sans-serif; display: grid; grid-template-rows: auto 1fr auto; padding: 56px 72px 44px; }
+.logo { height: 28px; width: auto; justify-self: start; }
+main { display: flex; flex-direction: column; justify-content: center; gap: 26px; min-height: 0; }
+.eyebrow { font-family: "IBM Plex Mono", monospace; font-weight: 500; font-size: 17px; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
+h1 { font-family: "Space Grotesk", sans-serif; font-weight: 600; font-size: 96px; line-height: 1.02; letter-spacing: -.02em; }
+h2 { font-family: "Space Grotesk", sans-serif; font-weight: 600; font-size: 64px; line-height: 1.08; letter-spacing: -.015em; }
+.subtitle { font-size: 32px; line-height: 1.35; color: var(--text-secondary); max-width: 24em; }
+.stats { display: flex; gap: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 4px; width: max-content; }
+.stat { padding: 20px 36px 24px; display: flex; flex-direction: column; gap: 8px; }
+.stat + .stat { border-left: 1px solid var(--border); }
+.stat-figure { font-family: "Space Grotesk", sans-serif; font-weight: 600; font-size: 64px; line-height: 1; }
+.stat-figure.bad { color: var(--danger); }
+.stat-figure.good { color: var(--accent); }
+.stat-label { font-size: 20px; color: var(--text-secondary); }
+ul { list-style: none; padding: 0; display: flex; flex-direction: column; gap: 22px; }
+li { font-size: 36px; line-height: 1.3; color: var(--text); padding-left: 28px; border-left: 4px solid var(--accent); max-width: 30em; }
+pre { font-family: "IBM Plex Mono", monospace; font-weight: 500; font-size: 30px; line-height: 1.7; background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 24px 32px; width: max-content; }
+.repo { font-family: "IBM Plex Mono", monospace; font-weight: 500; font-size: 28px; color: var(--accent); }
+.figure { display: flex; align-items: center; justify-content: center; min-height: 0; }
+.figure img { max-width: 100%; max-height: 700px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg); }
+footer { font-family: "IBM Plex Mono", monospace; font-weight: 500; font-size: 15px; letter-spacing: .06em; text-transform: uppercase; color: var(--text-muted); }
+</style>
+</head>
+<body>
+  <img class="logo" src="{{logo}}" alt="AOX">
+  <main>{{body}}</main>
+  <footer>{{footer}}</footer>
+</body>
+</html>

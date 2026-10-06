@@ -9,7 +9,8 @@
     "record": "node record.ts",
     "edit": "node edit.ts",
     "cards": "node cards.ts",
-    "check": "node check-frames.ts"
+    "check": "node check-frames.ts",
+    "video": "node video/build.ts"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

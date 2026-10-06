@@ -1,0 +1,64 @@
+WEBVTT
+
+00:00:00.400 --> 00:00:03.170
+AI assistants read text that strangers write.
+
+00:00:03.270 --> 00:00:08.500
+This gateway sits between an assistant and its tools, and checks every call.
+
+00:00:09.400 --> 00:00:13.700
+Here is Claude Code, a real client, connected through the gateway.
+
+00:00:13.800 --> 00:00:20.500
+It is offered nine tools; the two that change a ticket's status or owner are held back.
+
+00:00:21.400 --> 00:00:24.803
+I ask it to triage the open tickets.
+
+00:00:24.903 --> 00:00:29.619
+One ticket, planted by me, tells assistants to export every customer.
+
+00:00:29.719 --> 00:00:37.500
+When Claude opens it, the gateway refuses the call, and Claude tells me it could not read it.
+
+00:00:38.400 --> 00:00:42.900
+The dashboard names the layer that stopped it: the classifier.
+
+00:00:43.000 --> 00:00:47.500
+Every call is recorded with the layer that decided it.
+
+00:00:48.400 --> 00:00:53.900
+To measure this, a scripted attacker runs 31 attacks across 17 configurations.
+
+00:00:54.000 --> 00:00:56.700
+With every layer off, 31 succeed.
+
+00:00:56.800 --> 00:00:59.500
+With every layer on, 5 do.
+
+00:01:00.400 --> 00:01:03.500
+Every call passes a fixed chain of layers.
+
+00:01:03.600 --> 00:01:07.500
+Scope, allowlist, rate limit, schema, pinned descriptions, egress, canary, classifier.
+
+00:01:07.600 --> 00:01:09.500
+Writes wait for a person.
+
+00:01:10.400 --> 00:01:12.003
+The gaps are real.
+
+00:01:12.103 --> 00:01:15.410
+The attacker is a script, not a model.
+
+00:01:15.510 --> 00:01:20.519
+The classifier replays recordings, including the one that caught my planted ticket.
+
+00:01:20.619 --> 00:01:23.500
+Slow drips still leak a few values.
+
+00:01:24.400 --> 00:01:28.014
+Try it yourself with Docker Compose and no API key.
+
+00:01:28.114 --> 00:01:29.500
+The link is below.
