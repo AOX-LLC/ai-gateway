@@ -26,7 +26,7 @@ Approval is last, so a person approves exactly the call that runs. The gateway a
 
 ## How it was verified
 
-The attacker is a script that does what a planted text says: a compliant model, one already talked into it. It runs {{ hostile_attacks }} hostile attacks under {{ columns }} columns: every layer on, every layer off, each layer off in turn, and the layers that may be weakened only watching.
+The attacker is a script that does what a planted text says: a compliant model, one already talked into it. It runs {{ hostile_attacks }} hostile attacks under {{ columns }} columns: every layer on, every layer off, each layer off in turn, the layers that may be weakened only watching, the limits of the first release turned back on (separately, and all together), and an approver who rejects every write.
 
 An independent oracle judges each attack, not the gateway's record: {{ oracle_databases }} by what landed in the databases, {{ oracle_ticket_diff }} by a diff of the ticketing data, {{ oracle_client_observation }} by what the client was handed, {{ oracle_lab_count }} by the lab upstream's count of the calls it ran. Each attack file states beforehand its purpose, success threshold and expected stopping layers. The scorecard reports where a run differed. {{ honest_runs }} honest runs make {{ honest_calls }} calls in each column, to measure false positives.
 
@@ -36,7 +36,7 @@ With every layer on, {{ all_on_succeeded }} of {{ hostile_attacks }} attacks suc
 
 {{ layer_table }}
 
-The first column counts the attacks that succeed only when that layer alone is off. A zero means another layer also stops them: redundancy. `approval` shows {{ approval_alone }} because the scorecard's approver is a lab approver that approves every write, so a person's judgement is not measured.
+The first column counts the attacks that succeed only when that layer alone is off. A zero means another layer also stops them: redundancy. The scorecard's approver is a lab approver that approves every write, so a person's judgement is not measured, and `approval` stands at {{ approval_alone }}.
 
 The `denying-approver` column rejects every write, so no attack that depends on a write can succeed. {{ denying_succeeded }} of {{ hostile_attacks }} attacks succeed there, but {{ denying_honest_blocked }} of {{ honest_calls }} honest calls are blocked ({{ denying_honest_rate }}): false positives. It bounds what a perfect reviewer could add. It is not a policy. Still succeeding: {{ denying_survivors }}. Reads never wait for an approver.
 

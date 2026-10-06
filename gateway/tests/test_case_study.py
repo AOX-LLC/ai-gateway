@@ -24,10 +24,12 @@ DOCS = ROOT / "docs"
 TEMPLATE = DOCS / case_study.TEMPLATE_NAME
 
 # What the template may spell with a digit, because it is not a figure from the scorecard: a date,
-# a version, one of the project's own ports, and two names that happen to contain digits.
+# a version (a leading v or three parts, so a figure like 58.0 is not one), one of the project's own
+# ports, and two names that happen to contain digits.
 ALLOWED_DIGIT_PATTERNS = (
     r"\b\d{4}-\d{2}-\d{2}\b",
-    r"\bv?\d+\.\d+(?:\.\d+)?\b",
+    r"\bv\d+\.\d+(?:\.\d+)?\b",
+    r"\b\d+\.\d+\.\d+\b",
     r"\b44(?:0\d|1[0-3])\b",
     r"\bROT13\b",
     r"\bbase64\b",
@@ -183,7 +185,8 @@ def test_a_changed_gap_or_a_changed_denying_column_reaches_the_rendered_text(
     )
 
     assert "a gap sentence that only this test writes" in rendered
-    assert "7 of 19 honest calls" in rendered
+    honest = summary["per_column"]["denying-approver"]["benign_calls"]
+    assert f"7 of {honest} honest calls" in rendered
 
 
 def test_the_template_hard_codes_no_number() -> None:

@@ -26,7 +26,7 @@ Approval is last, so a person approves exactly the call that runs. The gateway a
 
 ## How it was verified
 
-The attacker is a script that does what a planted text says: a compliant model, one already talked into it. It runs 31 hostile attacks under 17 columns: every layer on, every layer off, each layer off in turn, and the layers that may be weakened only watching.
+The attacker is a script that does what a planted text says: a compliant model, one already talked into it. It runs 31 hostile attacks under 17 columns: every layer on, every layer off, each layer off in turn, the layers that may be weakened only watching, the limits of the first release turned back on (separately, and all together), and an approver who rejects every write.
 
 An independent oracle judges each attack, not the gateway's record: 14 by what landed in the databases, 4 by a diff of the ticketing data, 7 by what the client was handed, 6 by the lab upstream's count of the calls it ran. Each attack file states beforehand its purpose, success threshold and expected stopping layers. The scorecard reports where a run differed. 5 honest runs make 19 calls in each column, to measure false positives.
 
@@ -46,7 +46,7 @@ With every layer on, 5 of 31 attacks succeed (16%). With every layer off, 31 do.
 | `classifier` | 6 | 2 |
 | `approval` | 0 | 0 |
 
-The first column counts the attacks that succeed only when that layer alone is off. A zero means another layer also stops them: redundancy. `approval` shows 0 because the scorecard's approver is a lab approver that approves every write, so a person's judgement is not measured.
+The first column counts the attacks that succeed only when that layer alone is off. A zero means another layer also stops them: redundancy. The scorecard's approver is a lab approver that approves every write, so a person's judgement is not measured, and `approval` stands at 0.
 
 The `denying-approver` column rejects every write, so no attack that depends on a write can succeed. 1 of 31 attacks succeed there, but 11 of 19 honest calls are blocked (58%): false positives. It bounds what a perfect reviewer could add. It is not a policy. Still succeeding: `obfuscated-split-short-fields`. Reads never wait for an approver.
 
