@@ -83,10 +83,10 @@ def content_text(content: Any) -> str:
     return " ".join(block.get("text", "") for block in content if isinstance(block, dict))
 
 
-def read_events(path: Path) -> tuple[list[dict[str, Any]], int]:
-    """The run's events, and how many times its temporary directory's path was replaced."""
-    text, replaced = TEMP_DIR.subn(TEMP_DIR_SHOWN, path.read_text(encoding="utf-8"))
-    return [json.loads(line) for line in text.splitlines() if line], replaced
+def read_events(path: Path) -> list[dict[str, Any]]:
+    """The run's events, with the path of its throwaway working directory replaced."""
+    text = TEMP_DIR.sub(TEMP_DIR_SHOWN, path.read_text(encoding="utf-8"))
+    return [json.loads(line) for line in text.splitlines() if line]
 
 
 def collect(events: list[dict[str, Any]]) -> tuple[dict[str, Any], list[Any]]:
@@ -121,8 +121,12 @@ def collect(events: list[dict[str, Any]]) -> tuple[dict[str, Any], list[Any]]:
     return meta, items
 
 
+GATEWAY_REFUSAL = "Request blocked by gateway policy"
+
+
 def is_blocked(step: Step) -> bool:
-    return step.error and "blocked" in step.text.lower()
+    """The gateway's own refusal, by its own words: other errors are not."""
+    return step.error and step.text.startswith(GATEWAY_REFUSAL)
 
 
 def result_kind(step: Step) -> str:
@@ -192,6 +196,10 @@ def full_text(meta: dict[str, Any], prompt: str, kind: str, items: list[Any]) ->
     return "\n".join(out).rstrip() + "\n"
 
 
+# What a take must show: the refusal it is about. A run that never reached it (it did not open
+# the injected ticket, or stopped early) is not filmed as if it had.
+EXPECTED_REFUSAL = {"realistic": "tickets__get_ticket", "compliant": "tickets__create_ticket"}
+
 KIND_LABELS = {
     "realistic": "a realistic task: the prompt says nothing about exporting anything",
     "compliant": (
@@ -218,8 +226,11 @@ def main() -> None:
     if len(sys.argv) != 4 or sys.argv[2] not in KIND_LABELS:
         sys.exit(__doc__)
     run, kind, prefix = Path(sys.argv[1]), sys.argv[2], Path(sys.argv[3])
-    events, replaced = read_events(run)
+    events = read_events(run)
     meta, items = collect(events)
+    refused = [i.name for i in items if isinstance(i, Step) and is_blocked(i)]
+    if EXPECTED_REFUSAL[kind] not in refused:
+        sys.exit(f"render: the {kind} run has no refused {EXPECTED_REFUSAL[kind]} call: not a take")
     prompt = (Path(__file__).parent / "prompts" / f"{kind}.txt").read_text(encoding="utf-8").strip()
     final = next((item for item in reversed(items) if isinstance(item, str)), "")
     answer = wrap(final)
@@ -228,6 +239,7 @@ def main() -> None:
         "header": header_text(meta, kind),
         "label": KIND_LABELS[kind],
         "tools": meta["tools"],
+        "blocked_tool": EXPECTED_REFUSAL[kind],
         "withheld": [tool for tool in DEMO_SCOPES_OPS if tool not in meta["tools"]],
         "prompt": prompt,
         "lines": fold(items[: items.index(final)] if final in items else items),
@@ -237,7 +249,7 @@ def main() -> None:
         "turns": meta.get("turns"),
     }
     text = full_text(meta, prompt, kind, items)
-    if replaced:
+    if TEMP_DIR_SHOWN in text:
         text += f"\n(The run's temporary working directory is shown as {TEMP_DIR_SHOWN}.)\n"
     for what in (json.dumps(document), text):
         found = FORBIDDEN.search(what)

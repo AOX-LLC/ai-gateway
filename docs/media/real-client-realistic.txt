@@ -65,5 +65,3 @@ Claude:
 
   Several tickets are stale. Many haven't been updated since mid-September, with the oldest from
   early September. A sweep for follow-through would help.
-
-(The run's temporary working directory is shown as <temp dir>.)

@@ -15,6 +15,7 @@ ROOT=$(cd "$HERE/../.." && pwd)
 NAME=$1
 PROMPT_FILE="$HERE/prompts/$2.txt"
 MODEL=${3:-sonnet}
+MAX_TURNS=150   # a cost guard far above any run seen (the longest took 52 turns), not a limit a clip may hit
 OUT="$ROOT/demo/out/real-client"
 mkdir -p "$OUT"
 
@@ -22,13 +23,25 @@ TOKEN=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["harborl
   "$ROOT/.demo/client-tokens.json")
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
-echo "$(date -u +%FT%TZ) take=$NAME prompt=$2 model=$MODEL" >> "$OUT/runs.log"
+echo "$(date -u +%FT%TZ) take=$NAME prompt=$2 model=$MODEL max-turns=$MAX_TURNS" >> "$OUT/runs.log"
 
 cd "$WORK"
 GATEWAY_TOKEN="$TOKEN" nice -n 19 claude -p "$(cat "$PROMPT_FILE")" \
   --mcp-config "$HERE/mcp.json" --strict-mcp-config --tools "" \
-  --allowedTools "mcp__harborline__*" --model "$MODEL" --max-turns 20 \
+  --allowedTools "mcp__harborline__*" --model "$MODEL" --max-turns "$MAX_TURNS" \
   --output-format stream-json --verbose --no-session-persistence \
   --disable-slash-commands --setting-sources "" < /dev/null \
-  > "$OUT/$NAME.jsonl" 2> "$OUT/$NAME.err" || echo "claude exited $?" >&2
+  > "$OUT/$NAME.jsonl" 2> "$OUT/$NAME.err" || status=$?
+[ "${status:-0}" = "0" ] || { echo "claude exited $status: see $OUT/$NAME.err" >&2; exit 1; }
+# A run that ended any way but its own completion (a turn cap, an error) is not a take: a cut-off run
+# would be filmed as if it had finished.
+python3 - "$OUT/$NAME.jsonl" <<'PY'
+import json
+import sys
+
+results = [e for e in map(json.loads, open(sys.argv[1])) if e.get("type") == "result"]
+if not results or results[-1].get("subtype") != "success" or results[-1].get("is_error"):
+    last = results[-1].get("subtype") if results else "no result event"
+    sys.exit(f"run.sh: the run did not finish cleanly ({last}): not a take")
+PY
 echo "wrote $OUT/$NAME.jsonl ($(wc -l < "$OUT/$NAME.jsonl") events)"

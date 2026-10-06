@@ -12,6 +12,7 @@ recording for it. Fictional data only. The database owner's login comes from .en
 printed; this talks to 127.0.0.1:4402 only.
 """
 
+import subprocess
 import sys
 import tomllib
 from datetime import UTC, datetime
@@ -29,16 +30,38 @@ SUBJECT = "Order question"
 CORPUS_ID = "email-injection"
 MARKER = "RT-export"
 DATABASE_PORT = 4402
+DEMO_PROJECT = "ai-gateway-demo"
 EPOCH = datetime(2000, 1, 1, tzinfo=UTC)
 
 
 def env_file() -> dict[str, str]:
+    """The .env values, as Compose reads them: no `export` prefix, no quotes around a value."""
     values: dict[str, str] = {}
     for line in (ROOT / ".env").read_text(encoding="utf-8").splitlines():
         key, separator, value = line.partition("=")
-        if separator and not key.startswith("#"):
-            values[key.strip()] = value.strip()
+        if separator and not key.strip().startswith("#"):
+            values[key.strip().removeprefix("export ").strip()] = value.strip().strip("\"'")
     return values
+
+
+def require_demo_stack() -> None:
+    """Refuse any database but the demo stack's: the real stack uses this port and login too."""
+    owner = subprocess.run(  # noqa: S603 - fixed command, no input
+        [  # noqa: S607 - docker on PATH, as everywhere else here
+            "docker",
+            "ps",
+            "--filter",
+            f"publish={DATABASE_PORT}",
+            "--format",
+            '{{.Label "com.docker.compose.project"}}',
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout.split()
+    if owner != [DEMO_PROJECT]:
+        found = owner or "nothing"
+        sys.exit(f"plant: port {DATABASE_PORT} is not the {DEMO_PROJECT} stack's (found {found})")
 
 
 def owner_url() -> str:
@@ -55,6 +78,8 @@ def injected_text() -> str:
 
 def main() -> None:
     command = sys.argv[1] if len(sys.argv) > 1 else ""
+    if command in {"plant", "clean", "count"}:
+        require_demo_stack()
     if command == "plant":
         ticket_id, _ = oracle.plant_ticket(owner_url(), ACCOUNT_ID, SUBJECT, injected_text())
         print(ticket_id)

@@ -27,6 +27,7 @@ interface Transcript {
   label: string;
   tools: string[];
   withheld: string[];
+  blocked_tool: string;
   prompt: string;
   lines: { kind: string; text: string }[];
   answer: string[];
@@ -34,17 +35,22 @@ interface Transcript {
   counts: { calls: number; blocked: number; answered: number };
 }
 
+/** How each kind of transcript line is shown: its class, the arrow before it and how long it holds. */
+const LINE_STYLES: Record<string, { className: string; prefix: string; pauseMs: number }> = {
+  call: { className: "call", prefix: "-> ", pauseMs: 420 },
+  result: { className: "result", prefix: "<- ", pauseMs: 380 },
+  error: { className: "error", prefix: "<- ", pauseMs: 380 },
+  blocked: { className: "blocked", prefix: "<- ", pauseMs: 2200 },
+  folded: { className: "folded", prefix: "<- ", pauseMs: 700 },
+  claude: { className: "claude", prefix: "", pauseMs: 900 },
+};
+
 const KIND_TITLES: Record<Kind, string> = { realistic: "Realistic task", compliant: "Compliant-model run" };
 const TOKEN = /gw[\s_.-]?[A-Za-z0-9]{8,}/;
 
-/** Pacing of the typed-out transcript, in recorded time. */
+/** Pacing of the typed-out transcript, in recorded time (the lines' own holds are in LINE_STYLES). */
 const HEADER_HOLD_MS = 2200;
 const TOOLS_HOLD_MS = 2600;
-const CALL_MS = 420;
-const RESULT_MS = 380;
-const BLOCKED_HOLD_MS = 2200;
-const FOLDED_MS = 700;
-const CLAUDE_MS = 900;
 const ANSWER_HOLD_MS = 4200;
 const DASHBOARD_PANEL_HOLD_MS = 4200;
 const ROW_OUTLINE = "2px solid var(--pui-danger)";
@@ -132,9 +138,9 @@ async function playTranscript(page: Page, transcript: Transcript): Promise<void>
     async () => {
       await addLine(page, "dim", "");
       for (const line of transcript.lines) {
-        await addLine(page, line.kind === "call" ? "call" : line.kind, line.kind === "call" ? `-> ${line.text}` : line.kind === "claude" ? line.text : `<- ${line.text}`);
-        const pause = { call: CALL_MS, result: RESULT_MS, error: RESULT_MS, folded: FOLDED_MS, claude: CLAUDE_MS, blocked: BLOCKED_HOLD_MS }[line.kind] ?? CALL_MS;
-        await page.waitForTimeout(pause);
+        const style = LINE_STYLES[line.kind] ?? LINE_STYLES.call;
+        await addLine(page, style.className, `${style.prefix}${line.text}`);
+        await page.waitForTimeout(style.pauseMs);
       }
     },
     assertTerminalOnScreen,
@@ -162,15 +168,16 @@ async function playTranscript(page: Page, transcript: Transcript): Promise<void>
   );
 }
 
-/** The newest row the gateway refused, outlined and tinted so the eye finds the layer's name in its row. */
-async function outlineBlockedRow(page: Page): Promise<void> {
-  const rows = page.locator("#decisions tbody tr", { hasText: "Blocked" });
+/** The newest row the gateway refused for the tool the transcript shows refused (the stack also holds the
+ * other run's refusal), outlined and tinted so the eye finds the layer's name in its row. */
+async function outlineBlockedRow(page: Page, tool: string): Promise<void> {
+  const rows = page.locator("#decisions tbody tr", { hasText: "Blocked" }).filter({ hasText: tool });
   for (let pageNumber = 0; pageNumber < 3 && (await rows.count()) === 0; pageNumber++) {
     await page.getByRole("button", { name: "Older" }).click();
     await page.waitForLoadState("networkidle");
   }
   const row = rows.first();
-  if ((await row.count()) === 0) throw new Error("no blocked decision is on the first pages: did the run reach the gateway?");
+  if ((await row.count()) === 0) throw new Error(`no refused ${tool} is on the first pages: did the run reach the gateway?`);
   await row.evaluate(
     (element, [outline, tint]) => {
       Object.assign((element as HTMLElement).style, { outline, outlineOffset: "-2px", backgroundColor: tint });
@@ -180,7 +187,7 @@ async function outlineBlockedRow(page: Page): Promise<void> {
   );
 }
 
-async function playDashboard(page: Page): Promise<void> {
+async function playDashboard(page: Page, transcript: Transcript): Promise<void> {
   await timeline.scene(page, { id: "dashboard-layers", gif: false, caption: "The dashboard names the layer that stopped it" }, async () => {
     await page.goto(`${BASE_URL}/?range=1h`);
     await page.waitForSelector("#layers svg");
@@ -190,7 +197,7 @@ async function playDashboard(page: Page): Promise<void> {
   });
   await timeline.scene(page, { id: "dashboard-decision", gif: gifRun, caption: "The refused call, with its layer and code" }, async () => {
     await scrollTo(page, "#decisions");
-    await outlineBlockedRow(page);
+    await outlineBlockedRow(page, transcript.blocked_tool);
     await page.waitForTimeout(DASHBOARD_PANEL_HOLD_MS);
   });
 }
@@ -214,7 +221,7 @@ async function recordTake(browser: Browser, statePath: string, transcript: Trans
   await page.evaluate(() => document.fonts.ready);
   timeline.startClock();
   await playTranscript(page, transcript);
-  await playDashboard(page);
+  await playDashboard(page, transcript);
   if (consoleErrors.length > 0) throw new Error(`the browser console shows errors: ${consoleErrors.slice(0, 3).join("; ")}`);
   const video = page.video();
   await context.close();
@@ -229,7 +236,8 @@ async function main(): Promise<void> {
   try {
     await recordTake(browser, await signInOffCamera(browser, theme, outDir), transcript);
   } finally {
-    // The session cookie, the scratch video and the page file go whether or not the take worked.
+    // The session cookie and the scratch video go whether or not the take worked (the page file stays: it
+    // is a git-ignored scratch file in out/).
     rmSync(join(outDir, "state.json"), { force: true });
     rmSync(join(outDir, "video-tmp"), { recursive: true, force: true });
     await browser.close();

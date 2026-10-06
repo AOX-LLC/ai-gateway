@@ -129,5 +129,3 @@ Claude:
   numbers. You could then pull the details from the CRM.
 
   Which would you like?
-
-(The run's temporary working directory is shown as <temp dir>.)
